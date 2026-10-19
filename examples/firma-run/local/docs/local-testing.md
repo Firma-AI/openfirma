@@ -30,7 +30,7 @@ Overall verdict: READY
 
 ## Why this guide
 
-`firma run` local testing needs a sidecar config, mapping rules, and an audit signing key. Those are machine-local artifacts and should not be committed.
+`firma run` local testing needs a Firma config, mapping rules, and an audit signing key. Those are machine-local artifacts and should not be committed.
 
 The repo now reserves `/.local/` for this purpose and ignores it in git.
 
@@ -118,23 +118,32 @@ When a sidecar MITM CA certificate is detected, `firma run` automatically export
 
 This prevents `UnknownCA` failures for managed HTTPS MITM targets.
 
-## Run sidecar + codex
+## Run the Authority + codex
+
+Complete the local Authority configuration once. `firma config` generates the
+Authority key and TLS material and lists `mapping-rules.toml` plus the
+profile's shipped mappings in `[authority].mapping_rules_paths`:
+
+```bash
+cargo run -p firma -- config --yes --mode agent-local --profile codex \
+  --agent-id agt_01j0000000e008000000000001 --output-dir .local
+```
 
 Terminal A:
 
 ```bash
-cargo run -p firma -- sidecar -c .local/firma.toml
+cargo run -p firma -- authority --config .local/firma.toml
 ```
-
-When sidecar starts in `http_proxy` mode, it now prints an explicit routing
-hint. If you run clients outside `firma run`, ensure proxy env vars point to
-the sidecar listener (`127.0.0.1:8080` by default).
 
 Terminal B:
 
 ```bash
-cargo run -p firma -- run --profile codex -- codex
+cargo run -p firma -- run --config .local/firma.toml --profile codex \
+  --authority https://127.0.0.1:50051 --sidecar local -- codex
 ```
+
+The per-session Sidecar becomes ready only after the Authority publishes its
+policy and mapping snapshot.
 
 Startup should include:
 
@@ -282,8 +291,7 @@ examples/firma-run/e2e/run.sh --claude-acceptance
 
 This suite currently validates:
 
-- shell-originated network attempts are intercepted and denied when policy is protected-by-default,
-- child-process shellouts (`wget`) are intercepted under the same path,
+- shell-originated network attempts are intercepted and denied by a forbid-all Cedar policy,
 - `claude-code` profile filesystem hardening blocks writes outside the working directory,
 - masked sensitive paths (for example `~/.ssh`) are not readable inside sandbox.
 
@@ -324,10 +332,15 @@ pwsh ./examples/firma-run/local/preflight.ps1
 
 Sidecar supports both HTTPS modes:
 
-1. TLS MITM mode (default for configured `intercept_hosts`): sidecar decrypts,
-   normalizes, and enforces HTTPS requests at L7 (method/path/action class).
-2. CONNECT tunnel mode (fallback for hosts outside `intercept_hosts` or explicit
-   `bypass_hosts`): sidecar enforces/audits on `host:port`.
+1. TLS MITM mode (the default, for every host): sidecar decrypts, normalizes,
+   and enforces HTTPS requests at L7 (method/path/action class).
+2. CONNECT tunnel mode (hosts listed in `bypass_hosts`, or any host left out by
+   a config that pins `intercept_hosts`): sidecar enforces/audits on
+   `host:port`.
+
+A host that is neither bypassed nor interceptable is denied rather than
+tunnelled, because `strict_hosts` also defaults to every host. That covers a
+tunnel carrying something other than TLS, which is refused on the same rule.
 
 Important operational note:
 

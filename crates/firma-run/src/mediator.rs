@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint, CommandMediatorHitlMode};
 use crate::error::RunError;
+use firma_config_utils::NonZeroDuration;
 use firma_identifiers::SandboxId;
 
 use crate::identity::RunIdentity;
@@ -77,7 +78,7 @@ pub fn enforce_local_command_governance(
         &identity.sandbox_id,
         agent_id.as_deref(),
     );
-    let deadline = std::time::Instant::now() + mediator.hitl_max_wait;
+    let deadline = std::time::Instant::now() + mediator.hitl_max_wait.duration();
 
     let mut approval_token: Option<String> = None;
     loop {
@@ -205,7 +206,7 @@ fn handle_pending_hitl(
         return Err(RunError::Governance(format!(
             "governance denied execution: HITL approval wait exceeded \
              hitl_max_wait={:?} (fail-closed)",
-            mediator.hitl_max_wait
+            mediator.hitl_max_wait.duration()
         )));
     }
     tracing::info!(
@@ -221,8 +222,9 @@ fn handle_pending_hitl(
 fn request_over_tcp(
     addr: SocketAddr,
     request_json: &str,
-    timeout: Duration,
+    timeout: NonZeroDuration,
 ) -> Result<String, RunError> {
+    let timeout = timeout.duration();
     let stream = TcpStream::connect_timeout(&addr, timeout).map_err(|error| {
         RunError::Governance(format!(
             "local-exec governance endpoint unavailable (tcp://{addr}) in fail-closed mode: {error}"
@@ -244,7 +246,7 @@ fn request_over_tcp(
 fn request_over_unix(
     path: &std::path::Path,
     request_json: &str,
-    timeout: Duration,
+    timeout: NonZeroDuration,
 ) -> Result<String, RunError> {
     #[cfg(not(target_family = "unix"))]
     {
@@ -255,6 +257,7 @@ fn request_over_unix(
     }
     #[cfg(target_family = "unix")]
     {
+        let timeout = timeout.duration();
         let stream = UnixStream::connect(path).map_err(|error| {
             RunError::Governance(format!(
                 "local-exec governance endpoint unavailable (unix://{}) in fail-closed mode: {error}",
@@ -387,9 +390,9 @@ mod tests {
     fn mediator_config(addr: SocketAddr) -> CommandMediatorConfig {
         CommandMediatorConfig {
             endpoint: CommandMediatorEndpoint::Tcp { addr },
-            timeout: Duration::from_millis(500),
+            timeout: NonZeroDuration::from_static(Duration::from_millis(500)),
             hitl_mode: CommandMediatorHitlMode::SyncWait,
-            hitl_max_wait: Duration::from_secs(5),
+            hitl_max_wait: NonZeroDuration::from_static(Duration::from_secs(5)),
             enforce_known_executables: false,
             allowed_executables: BTreeSet::default(),
         }
@@ -503,7 +506,7 @@ mod tests {
 
         let mut cfg = mediator_config(addr);
         cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
-        cfg.hitl_max_wait = Duration::from_secs(5);
+        cfg.hitl_max_wait = NonZeroDuration::from_static(Duration::from_secs(5));
 
         let result = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[]);
         assert!(result.is_ok(), "unexpected: {result:?}");
@@ -551,7 +554,7 @@ mod tests {
         let mut cfg = mediator_config(addr);
         cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
         // Expires after the first 50ms retry would push past the deadline.
-        cfg.hitl_max_wait = Duration::from_millis(60);
+        cfg.hitl_max_wait = NonZeroDuration::from_static(Duration::from_millis(60));
 
         let err = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[])
             .expect_err("expected timeout fail-closed");

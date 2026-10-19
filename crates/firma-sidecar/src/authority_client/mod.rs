@@ -3,8 +3,9 @@
 //! Spawns the background streams that keep policy bundles and revocations
 //! current without putting the Authority on the request hot path.
 
-mod backoff;
 pub mod channel;
+mod enforcement_publisher;
+mod freshness;
 pub mod policy_bundle;
 pub mod readiness;
 pub mod revocation;
@@ -16,6 +17,7 @@ mod integration_tests;
 use std::sync::Arc;
 
 use firma_core::RevocationStore;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
@@ -23,11 +25,12 @@ use tonic::transport::Channel;
 use crate::authority_credentials::ResolvedSidecarCredentials;
 use crate::config::AuthorityConfig;
 
-use self::backoff::ExponentialBackoff;
+use self::freshness::FreshnessWatcher;
 use self::policy_bundle::{BundleParser, PolicyBundleTask};
 use self::readiness::ReadinessFlag;
 use self::revocation::RevocationTask;
 use self::swappable_policy::SwappablePolicyEvaluation;
+use crate::backoff::ExponentialBackoff;
 
 /// Dependencies required to spawn Authority stream clients.
 pub(crate) struct AuthorityDeps {
@@ -45,8 +48,12 @@ pub(crate) struct AuthorityDeps {
     pub(crate) config: AuthorityConfig,
     /// Credentials presented on each Authority RPC.
     pub(crate) credentials: Option<ResolvedSidecarCredentials>,
+    /// File where each accepted bundle is published for status readers.
+    pub(crate) enforcement_state: Option<std::path::PathBuf>,
     /// Policy bundle parser implementation.
     pub(crate) bundle_parser: Arc<dyn BundleParser + Send + Sync>,
+    /// Local HTTPS interception gaps reported when accepted rules govern Composio.
+    pub(crate) composio_coverage_warnings: Vec<String>,
 }
 
 /// Join handles for the spawned stream tasks.
@@ -63,14 +70,29 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
     let min = deps.config.reconnect_min_backoff;
     let max = deps.config.reconnect_max_backoff;
 
+    let swapped = Arc::new(Notify::new());
+    let (enforcement_state, publisher) = deps
+        .enforcement_state
+        .map(|path| enforcement_publisher::writer(path, deps.cancel.clone()))
+        .unzip();
+    let freshness = FreshnessWatcher {
+        swappable: Arc::clone(&deps.swappable_policy),
+        readiness: Arc::clone(&deps.readiness),
+        swapped: Arc::clone(&swapped),
+        cancel: deps.cancel.clone(),
+    };
     let policy_task = PolicyBundleTask {
         channel: deps.channel.clone(),
         swappable: deps.swappable_policy,
         readiness: Arc::clone(&deps.readiness),
+        swapped,
+        enforcement_state,
         backoff: ExponentialBackoff::new(min, max),
         cancel: deps.cancel.clone(),
         bundle_parser: deps.bundle_parser,
         credentials: deps.credentials.clone(),
+        composio_coverage_warnings: deps.composio_coverage_warnings,
+        composio_coverage_active: false,
     };
     let revocation_task = RevocationTask {
         channel: deps.channel,
@@ -85,7 +107,16 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
     };
 
     AuthorityClientHandle {
-        policy_task: tokio::spawn(policy_task.run()),
+        // The watcher shares the policy task's lifetime so the handle's
+        // shape stays the same.
+        policy_task: tokio::spawn(async move {
+            let publisher = async move {
+                if let Some(publisher) = publisher {
+                    publisher.await;
+                }
+            };
+            tokio::join!(policy_task.run(), freshness.run(), publisher);
+        }),
         revocation_task: tokio::spawn(revocation_task.run()),
     }
 }

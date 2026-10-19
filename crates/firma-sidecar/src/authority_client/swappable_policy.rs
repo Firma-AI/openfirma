@@ -1,52 +1,150 @@
-//! Hot-swappable policy evaluator.
+//! Atomic publication of compiled enforcement state.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use arc_swap::{ArcSwap, ArcSwapOption};
+use arc_swap::ArcSwap;
 use firma_identifiers::AgentId;
+use tokio::time::Instant;
 
 use crate::enforcement::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
+use crate::normalizer::IntentNormalizer;
 
-/// Policy evaluator backed by an atomically swappable snapshot.
-pub struct SwappablePolicyEvaluation {
-    inner: ArcSwap<Box<dyn PolicyEvaluation + Send + Sync>>,
-    deadline_unix_ms: AtomicI64,
-    ttl_seconds: AtomicU32,
-    version: ArcSwapOption<String>,
+/// A complete compiled enforcement generation.
+///
+/// The evaluator owns its compiled entity schema, and the normalizer owns the
+/// mapping table and protection posture. Producers must compile both from the
+/// same generation before publication. Freshness starts when published, not
+/// when compilation completes.
+pub struct RuntimeSnapshot {
+    policy: Arc<dyn PolicyEvaluation + Send + Sync>,
+    normalizer: Arc<IntentNormalizer>,
+    ttl_seconds: u32,
+    version: Option<String>,
 }
 
-impl SwappablePolicyEvaluation {
-    /// Create a new swappable evaluator with the supplied initial snapshot.
+impl RuntimeSnapshot {
+    /// Assemble already compiled components for one generation.
     #[must_use]
-    pub(crate) fn new(initial: Box<dyn PolicyEvaluation + Send + Sync>) -> Self {
+    pub fn new(
+        normalizer: IntentNormalizer,
+        policy: Arc<dyn PolicyEvaluation + Send + Sync>,
+        ttl_seconds: u32,
+        version: Option<String>,
+    ) -> Self {
         Self {
-            inner: ArcSwap::from_pointee(initial),
-            deadline_unix_ms: AtomicI64::new(0),
-            ttl_seconds: AtomicU32::new(0),
-            version: ArcSwapOption::empty(),
+            policy,
+            normalizer: Arc::new(normalizer),
+            ttl_seconds,
+            version,
         }
     }
 
-    /// Swap in a new policy evaluator and refresh its TTL deadline.
-    pub(crate) fn swap(
+    fn into_published(self) -> PublishedSnapshot {
+        PublishedSnapshot {
+            policy: self.policy,
+            normalizer: self.normalizer,
+            deadline: deadline(self.ttl_seconds),
+            ttl_seconds: self.ttl_seconds,
+            version: self.version,
+        }
+    }
+}
+
+/// Immutable reader pin for one complete generation.
+pub(crate) struct PublishedSnapshot {
+    policy: Arc<dyn PolicyEvaluation + Send + Sync>,
+    normalizer: Arc<IntentNormalizer>,
+    deadline: Instant,
+    ttl_seconds: u32,
+    version: Option<String>,
+}
+
+impl PublishedSnapshot {
+    pub(crate) fn normalizer(&self) -> &IntentNormalizer {
+        &self.normalizer
+    }
+
+    /// Instant after which this generation is stale.
+    pub(crate) const fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    /// TTL this generation was published with.
+    pub(crate) const fn ttl_seconds(&self) -> u32 {
+        self.ttl_seconds
+    }
+}
+
+impl PolicyEvaluation for PublishedSnapshot {
+    fn evaluate(
         &self,
-        new_eval: Box<dyn PolicyEvaluation + Send + Sync>,
-        ttl_seconds: u32,
-        version: Option<String>,
-    ) {
-        self.inner.store(Arc::new(new_eval));
-        self.ttl_seconds.store(ttl_seconds, Ordering::Relaxed);
-        self.deadline_unix_ms.store(
-            now_ms().saturating_add(i64::from(ttl_seconds) * 1000),
-            Ordering::Relaxed,
-        );
-        self.version.store(version.map(Arc::new));
+        principal: &AgentId,
+        action: &str,
+        resource: &str,
+        context: serde_json::Value,
+    ) -> Result<bool, String> {
+        self.policy.evaluate(principal, action, resource, context)
+    }
+
+    fn evaluate_verdict(
+        &self,
+        principal: &AgentId,
+        action: &str,
+        resource: &str,
+        context: serde_json::Value,
+    ) -> Result<PolicyVerdict, String> {
+        self.policy
+            .evaluate_verdict(principal, action, resource, context)
+    }
+
+    fn is_available(&self) -> bool {
+        self.policy.is_available()
+    }
+
+    fn is_fresh(&self) -> bool {
+        Instant::now() < self.deadline
+    }
+
+    fn version(&self) -> Option<String> {
+        self.version.clone()
+    }
+}
+
+/// Policy evaluator backed by an atomically swappable snapshot.
+pub struct SwappablePolicyEvaluation {
+    inner: ArcSwap<PublishedSnapshot>,
+}
+
+impl SwappablePolicyEvaluation {
+    /// Publish an initial complete generation.
+    #[must_use]
+    pub fn from_snapshot(snapshot: RuntimeSnapshot) -> Self {
+        Self {
+            inner: ArcSwap::from_pointee(snapshot.into_published()),
+        }
+    }
+
+    /// Replace all compiled components and freshness metadata in one store.
+    /// Existing reader pins retain their original generation and deadline.
+    pub fn swap_snapshot(&self, snapshot: RuntimeSnapshot) {
+        self.inner.store(Arc::new(snapshot.into_published()));
+    }
+
+    pub(crate) fn load(&self) -> Arc<PublishedSnapshot> {
+        self.inner.load_full()
     }
 }
 
 impl PolicyEvaluation for SwappablePolicyEvaluation {
+    /// Evaluate against the currently published generation.
+    ///
+    /// Each method pins one generation for its own call. Multi-step
+    /// evaluations (freshness check, then verdict, then version) must pin
+    /// once via [`SwappablePolicyEvaluation::load`] and reuse that pin;
+    /// the pipeline does this through its per-call snapshot. Calling these
+    /// methods one by one across a concurrent publication can otherwise
+    /// observe different generations per step.
     fn evaluate(
         &self,
         principal: &AgentId,
@@ -76,22 +174,20 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
     }
 
     fn is_fresh(&self) -> bool {
-        now_ms() < self.deadline_unix_ms.load(Ordering::Relaxed)
+        self.inner.load().is_fresh()
+    }
+
+    fn is_available(&self) -> bool {
+        self.inner.load().is_available()
     }
 
     fn version(&self) -> Option<String> {
-        self.version.load().as_ref().map(|v| v.as_ref().clone())
+        self.inner.load().version()
     }
 }
 
-fn now_ms() -> i64 {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "current UNIX milliseconds fit i64"
-    )]
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as i64)
+fn deadline(ttl_seconds: u32) -> Instant {
+    Instant::now() + Duration::from_secs(u64::from(ttl_seconds))
 }
 
 /// Sentinel evaluator installed as the initial snapshot of

@@ -64,8 +64,12 @@ allow_insecure_remote_authority = false
 ```
 
 The Authority TLS fields must be set together or neither. When set, the gRPC
-listener becomes TLS-only. `sidecar.authority.ca_cert_path` is required when
-`sidecar.authority.url` uses `https://`.
+listener becomes TLS-only. When neither is set, the Authority serves the pair
+`firma config` generated in the state directory
+(`<state_dir>/tls/authority.crt` and `authority.key`) and refuses to start if it
+is absent: plaintext is a decision, taken with `firma authority --no-tls`, not
+what a missing certificate means. `sidecar.authority.ca_cert_path` is required
+when `sidecar.authority.url` uses `https://`.
 For `http://`, sidecar permits loopback (`localhost`, `127.0.0.1`, `::1`) by
 default for local dev. Non-loopback `http://` is rejected unless
 `sidecar.authority.allow_insecure_remote_authority = true`. When

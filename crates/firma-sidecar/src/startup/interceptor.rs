@@ -101,14 +101,39 @@ fn spawn_grpc_interceptor(
     })
 }
 
+/// Directory a hand-written config's CA used to default to, relative to the
+/// working directory the Sidecar was started from.
+const LEGACY_CA_DIR_NAME: &str = "firma-ca";
+
+/// Warn when a CA generated under the old working-directory default is about
+/// to be superseded by one in the state directory.
+///
+/// Both are plausible-looking CA directories, and nothing in the config file
+/// distinguishes them. Without this, an operator who upgrades keeps their old
+/// `firma.toml` and silently gets a second CA that no already-provisioned
+/// client trusts.
+fn warn_on_superseded_legacy_ca(resolved_dir: &std::path::Path) {
+    let legacy = std::path::Path::new(LEGACY_CA_DIR_NAME)
+        .join(firma_runtime_state::runtime_paths::CA_CERT_FILE_NAME);
+    if resolved_dir.ends_with(LEGACY_CA_DIR_NAME) || !legacy.is_file() {
+        return;
+    }
+    tracing::warn!(
+        legacy_ca = %legacy.display(),
+        ca_dir = %resolved_dir.display(),
+        "a CA exists at the previous working-directory default but the state directory's CA is in use; \
+        set sidecar.ca.dir to the old path to keep minting from it"
+    );
+}
+
 /// Spawn the configured interceptor as a background tokio task.
 ///
 /// # Errors
 ///
 /// Returns an error when a TCP listener cannot be bound or converted for Tokio.
 /// TCP binding completes synchronously before the server task is spawned.
-/// Unix-socket mode derives its path from `runtime_layout` when the
-/// configuration does not provide an explicit override.
+/// On Unix, `runtime_layout` supplies the socket path when the configuration
+/// leaves it unset.
 pub fn spawn_interceptor(
     #[cfg_attr(
         windows,
@@ -140,6 +165,9 @@ pub fn spawn_interceptor(
 
     match ic.mode {
         InterceptorMode::HttpProxy => {
+            if ic.https_mitm.is_active() {
+                warn_on_superseded_legacy_ca(&config.ca.dir);
+            }
             let interceptor = interceptor::http::HttpInterceptor::new(ic.listen_addr)
                 .with_https_mitm(ic.https_mitm.clone(), config.ca.dir.clone())
                 .with_max_request_body_bytes(ic.max_request_body_bytes)

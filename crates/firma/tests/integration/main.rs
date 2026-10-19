@@ -5,13 +5,25 @@
 
 pub use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 
+fn firma_bin() -> std::path::PathBuf {
+    // CARGO_BIN_EXE_<name> is set by cargo for the [[bin]] under test.
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
+}
+
+mod authority_client_cert;
+mod authority_fixture;
 mod authority_keygen;
+mod authority_mapping_watch;
 mod cli_help;
 mod cli_parsing;
+mod config_fixture;
 mod config_selection;
 mod doctor;
-mod e2e_startup;
 mod firma_config;
+mod login;
+mod logout;
+mod managed_configuration;
+mod mapping_compatibility;
 mod monitor_audit_stream;
 mod monitor_decoupled;
 mod policy_cli;

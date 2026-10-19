@@ -16,7 +16,14 @@ use tempfile::TempDir;
 fn host_bin_with_code(tmpdir: &TempDir) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let host_bin = tmpdir.path().join("host-bin");
     fs::create_dir(&host_bin)?;
-    fs::write(host_bin.join("code"), "#!/bin/sh\nexit 0\n")?;
+    let code = host_bin.join("code");
+    fs::write(&code, "#!/bin/sh\nexit 0\n")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(code, std::fs::Permissions::from_mode(0o700))?;
+    }
     Ok(host_bin)
 }
 
@@ -37,7 +44,6 @@ fn vscode_run_input() -> RunInput {
         authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
         user_config_path: None,
         allow_non_structural: true,
-        monitor_mode: false,
     }
 }
 
@@ -221,6 +227,12 @@ fn executable_resolution_accepts_existing_explicit_path() -> Result<(), Box<dyn 
     let tmpdir = tempfile::tempdir()?;
     let executable = tmpdir.path().join("code");
     fs::write(&executable, "#!/bin/sh\nexit 0\n")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+    }
 
     let resolved = testing::resolve_host_executable(&executable.display().to_string(), None)?;
 

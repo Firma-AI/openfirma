@@ -214,7 +214,7 @@ mod tests {
     fn one_shot_reads_existing_lines_from_start() {
         // `firma monitor --no-follow` (one-shot, no `--since`) must dump the
         // records already in the file. Previously it seeked to EOF and showed
-        // nothing even when the audit log was full (FIR-193).
+        // nothing even when the audit log was full.
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("audit.jsonl");
         std::fs::write(&path, "first\nsecond\n").expect("seed");

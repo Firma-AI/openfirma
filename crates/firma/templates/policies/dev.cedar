@@ -143,9 +143,8 @@ permit (
     resource
 );
 
-// Outbound HTTP — only hosts classified by the mapping TOML reach Cedar.
-// default_protected = true in [sidecar.mapping] ensures unclassified hosts are
-// denied before this rule fires.
+// Outbound HTTP — only hosts classified by the Authority's mapping files reach
+// Cedar. Unclassified hosts are always denied before this rule fires.
 permit (
     principal,
     action == Firma::Action::"communication.external.send",

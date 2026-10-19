@@ -9,11 +9,12 @@
 
 use std::io::Write as _;
 use std::net::IpAddr;
+use std::time::Duration;
 
 use firma_authority::{AuthorityConfigBuilder, Server};
 use firma_config_schema::authority as authority_schema;
-use firma_protobuf::v1::WatchPolicyBundleRequest;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
+use firma_protobuf::v1::{PolicyBundleUpdate, WatchPolicyBundleRequest};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use rcgen::{
@@ -23,6 +24,10 @@ use tempfile::TempDir;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
+
+use firma_test_helpers::bounded::{self as support, step};
+
+const STEP_LIMIT: Duration = Duration::from_secs(10);
 
 // ---------------------------------------------------------------------------
 // TLS certificate helpers
@@ -127,14 +132,14 @@ fn generate_client_cert(
 
 struct MtlsTestServer {
     port: u16,
-    _temp_dir: TempDir,
+    temp_dir: TempDir,
     shutdown_tx: oneshot::Sender<()>,
     server_handle: JoinHandle<()>,
 }
 
 impl MtlsTestServer {
     /// Start an mTLS Authority with the given certs and allow-list.
-    async fn start(certs: &MtlsCerts, allowed_identities: &[&str]) -> Self {
+    async fn start(certs: &MtlsCerts, allowed_identities: &[&str]) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
 
         // Write cert files.
@@ -150,7 +155,7 @@ impl MtlsTestServer {
         // Write authorized clients TOML.
         let mut f = std::fs::File::create(&authorized_clients_path).unwrap();
         for id in allowed_identities {
-            writeln!(f, "[[authorized]]\ncn = \"{id}\"").unwrap();
+            writeln!(f, "[[clients]]\nidentity = \"{id}\"").unwrap();
         }
 
         // Set up policy dirs.
@@ -171,22 +176,28 @@ impl MtlsTestServer {
         .unwrap();
 
         let revocation_file = temp_dir.path().join("revocations.txt");
+        let mappings = temp_dir.path().join("mapping-rules.toml");
+        std::fs::write(&mappings, "rules = []\n").unwrap();
         let key_file = temp_dir.path().join("authority.key");
         let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
         std::fs::write(&key_file, kp.secret.as_bytes()).unwrap();
 
-        let config = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
-            listen_addr: "127.0.0.1:0".to_string(),
-            policy_dir,
-            issuance_policy_dir: issuance_dir,
-            revocation_file,
-            key_file,
-            tls_cert_path: Some(server_cert_path),
-            tls_key_path: Some(server_key_path),
-            mtls_client_ca_cert_path: Some(client_ca_cert_path),
-            authorized_clients_path: Some(authorized_clients_path),
-            ..authority_schema::AuthorityConfig::default()
-        })
+        let config = AuthorityConfigBuilder::new(
+            authority_schema::AuthorityConfig {
+                listen_addr: "127.0.0.1:0".to_string(),
+                policy_dir,
+                issuance_policy_dir: issuance_dir,
+                mapping_rules_paths: vec![mappings],
+                revocation_file: Some(revocation_file),
+                key_file: Some(key_file),
+                tls_cert_path: Some(server_cert_path),
+                tls_key_path: Some(server_key_path),
+                mtls_client_ca_cert_path: Some(client_ca_cert_path),
+                authorized_clients_path: Some(authorized_clients_path),
+                ..authority_schema::AuthorityConfig::default()
+            },
+            &firma_runtime_state::RuntimeLayout::from_root(temp_dir.path()),
+        )
         .build()
         .expect("valid mtls authority config");
 
@@ -195,33 +206,33 @@ impl MtlsTestServer {
             let _ = shutdown_rx.await;
         };
 
-        let server = Server::try_new(config, shutdown_signal)
-            .await
-            .expect("failed to create mTLS server");
+        let server = Server::try_new(config, shutdown_signal);
+        let server = step("start the Authority", STEP_LIMIT, server).await??;
         let port = server.port();
 
         let server_handle = tokio::spawn(async move {
             server.run().await.expect("server failed");
         });
 
-        Self {
+        Ok(Self {
             port,
-            _temp_dir: temp_dir,
+            temp_dir,
             shutdown_tx,
             server_handle,
-        }
+        })
     }
 
-    async fn stop(self) {
+    async fn stop(self) -> anyhow::Result<()> {
         let _ = self.shutdown_tx.send(());
         let mut server_handle = self.server_handle;
-        if tokio::time::timeout(tokio::time::Duration::from_secs(1), &mut server_handle)
+        if tokio::time::timeout(Duration::from_secs(1), &mut server_handle)
             .await
             .is_err()
         {
             server_handle.abort();
-            let _ = server_handle.await;
+            let _ = step("abort the Authority", STEP_LIMIT, server_handle).await?;
         }
+        support::remove_dir(self.temp_dir).await
     }
 
     fn url(&self) -> String {
@@ -259,228 +270,217 @@ fn build_tls_only_channel(url: &str, server_ca_cert_pem: &[u8]) -> anyhow::Resul
     Ok(channel)
 }
 
+/// Open a policy bundle watch, which performs the TLS handshake.
+async fn watch(
+    grpc: &mut AuthorityServiceClient<Channel>,
+) -> anyhow::Result<Result<tonic::Response<tonic::Streaming<PolicyBundleUpdate>>, tonic::Status>> {
+    let response = grpc.watch_policy_bundle(WatchPolicyBundleRequest {
+        supported_capabilities: vec![
+            firma_protobuf::v1::PolicyBundleCapability::ActionMappingSnapshotV1 as i32,
+        ],
+        current_version: String::new(),
+        credentials: None,
+    });
+    step(
+        "open a policy bundle watch",
+        Duration::from_secs(5),
+        response,
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 /// An allow-listed Sidecar with a valid client cert can connect and receives
 /// the initial policy bundle.
-#[tokio::test(flavor = "multi_thread")]
-async fn mtls_allow_listed_client_receives_policy_bundle() {
-    let certs = generate_mtls_certs();
-    let client = generate_client_cert(
-        "sidecar-allowed",
-        Some("sidecar-allowed.internal"),
-        &certs.client_ca_cert,
-        &certs.client_ca_key,
-    );
+#[test]
+fn mtls_allow_listed_client_receives_policy_bundle() -> anyhow::Result<()> {
+    support::run(async {
+        let certs = generate_mtls_certs();
+        let client = generate_client_cert(
+            "sidecar-allowed",
+            Some("sidecar-allowed.internal"),
+            &certs.client_ca_cert,
+            &certs.client_ca_key,
+        );
 
-    let server = MtlsTestServer::start(&certs, &[&client.identity]).await;
-    let channel = build_mtls_channel(
-        &server.url(),
-        &certs.server_ca_cert,
-        &client.cert_pem,
-        &client.key_pem,
-    )
-    .expect("failed to build mTLS channel");
+        let server = MtlsTestServer::start(&certs, &[&client.identity]).await?;
+        let channel = build_mtls_channel(
+            &server.url(),
+            &certs.server_ca_cert,
+            &client.cert_pem,
+            &client.key_pem,
+        )
+        .expect("failed to build mTLS channel");
 
-    let mut grpc = AuthorityServiceClient::new(channel);
-    let stream_result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        grpc.watch_policy_bundle(WatchPolicyBundleRequest {
-            current_version: String::new(),
-            credentials: None,
-        }),
-    )
-    .await
-    .expect("timed out waiting for WatchPolicyBundle RPC");
+        let mut grpc = AuthorityServiceClient::new(channel);
+        let stream_result = watch(&mut grpc).await?;
 
-    assert!(
-        stream_result.is_ok(),
-        "allow-listed client should receive policy bundle stream, got: {stream_result:?}"
-    );
+        assert!(
+            stream_result.is_ok(),
+            "allow-listed client should receive policy bundle stream, got: {stream_result:?}"
+        );
 
-    let mut stream = stream_result.unwrap().into_inner();
-    let msg = tokio::time::timeout(tokio::time::Duration::from_secs(3), stream.message())
-        .await
-        .expect("timed out waiting for first bundle message");
+        let mut stream = stream_result.unwrap().into_inner();
+        let msg = step(
+            "receive the first snapshot",
+            Duration::from_secs(3),
+            stream.message(),
+        )
+        .await?;
 
-    assert!(
-        msg.is_ok(),
-        "expected a policy bundle update from allow-listed client"
-    );
+        assert!(
+            msg.is_ok(),
+            "expected a policy bundle update from allow-listed client"
+        );
 
-    server.stop().await;
+        server.stop().await
+    })
 }
 
 /// A Sidecar whose client cert CN/SAN is NOT in the allow-list is rejected
 /// at the TLS handshake level before any gRPC traffic flows.
-#[tokio::test(flavor = "multi_thread")]
-async fn mtls_non_allow_listed_client_rejected_at_handshake() {
-    let certs = generate_mtls_certs();
-    // Server allows "authorized-sidecar" only.
-    let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
+#[test]
+fn mtls_non_allow_listed_client_rejected_at_handshake() -> anyhow::Result<()> {
+    support::run(async {
+        let certs = generate_mtls_certs();
+        // Server allows "authorized-sidecar" only.
+        let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await?;
 
-    // Client presents "unauthorized-sidecar" identity.
-    let client = generate_client_cert(
-        "unauthorized-sidecar",
-        None,
-        &certs.client_ca_cert,
-        &certs.client_ca_key,
-    );
+        // Client presents "unauthorized-sidecar" identity.
+        let client = generate_client_cert(
+            "unauthorized-sidecar",
+            None,
+            &certs.client_ca_cert,
+            &certs.client_ca_key,
+        );
 
-    let channel = build_mtls_channel(
-        &server.url(),
-        &certs.server_ca_cert,
-        &client.cert_pem,
-        &client.key_pem,
-    )
-    .expect("failed to build mTLS channel");
+        let channel = build_mtls_channel(
+            &server.url(),
+            &certs.server_ca_cert,
+            &client.cert_pem,
+            &client.key_pem,
+        )
+        .expect("failed to build mTLS channel");
 
-    let mut grpc = AuthorityServiceClient::new(channel);
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        grpc.watch_policy_bundle(WatchPolicyBundleRequest {
-            current_version: String::new(),
-            credentials: None,
-        }),
-    )
-    .await
-    .expect("timed out")
-    .err();
+        let mut grpc = AuthorityServiceClient::new(channel);
+        let result = watch(&mut grpc).await?.err();
 
-    assert!(
-        result.is_some(),
-        "non-allow-listed client must be rejected; got Ok (should have failed)"
-    );
+        assert!(
+            result.is_some(),
+            "non-allow-listed client must be rejected; got Ok (should have failed)"
+        );
 
-    server.stop().await;
+        server.stop().await
+    })
 }
 
 /// A Sidecar that presents NO client certificate is rejected at the TLS
 /// handshake because `client_auth_mandatory()` returns `true`.
-#[tokio::test(flavor = "multi_thread")]
-async fn mtls_missing_client_cert_rejected_at_handshake() {
-    let certs = generate_mtls_certs();
-    let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
+#[test]
+fn mtls_missing_client_cert_rejected_at_handshake() -> anyhow::Result<()> {
+    support::run(async {
+        let certs = generate_mtls_certs();
+        let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await?;
 
-    // Build a channel WITHOUT client identity — only the server CA cert.
-    let channel = build_tls_only_channel(&server.url(), &certs.server_ca_cert)
-        .expect("failed to build TLS-only channel");
+        // Build a channel WITHOUT client identity — only the server CA cert.
+        let channel = build_tls_only_channel(&server.url(), &certs.server_ca_cert)
+            .expect("failed to build TLS-only channel");
 
-    let mut grpc = AuthorityServiceClient::new(channel);
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        grpc.watch_policy_bundle(WatchPolicyBundleRequest {
-            current_version: String::new(),
-            credentials: None,
-        }),
-    )
-    .await
-    .expect("timed out")
-    .err();
+        let mut grpc = AuthorityServiceClient::new(channel);
+        let result = watch(&mut grpc).await?.err();
 
-    assert!(
-        result.is_some(),
-        "client without cert must be rejected; got Ok (should have failed)"
-    );
+        assert!(
+            result.is_some(),
+            "client without cert must be rejected; got Ok (should have failed)"
+        );
 
-    server.stop().await;
+        server.stop().await
+    })
 }
 
 /// With a CN-based identity (no SAN), the CN is matched against the allow-list.
-#[tokio::test(flavor = "multi_thread")]
-async fn mtls_cn_identity_matched_when_no_san() {
-    let certs = generate_mtls_certs();
-    let client = generate_client_cert(
-        "cn-only-sidecar",
-        None, // No SAN — CN is the identity
-        &certs.client_ca_cert,
-        &certs.client_ca_key,
-    );
+#[test]
+fn mtls_cn_identity_matched_when_no_san() -> anyhow::Result<()> {
+    support::run(async {
+        let certs = generate_mtls_certs();
+        let client = generate_client_cert(
+            "cn-only-sidecar",
+            None, // No SAN — CN is the identity
+            &certs.client_ca_cert,
+            &certs.client_ca_key,
+        );
 
-    let server = MtlsTestServer::start(&certs, &["cn-only-sidecar"]).await;
+        let server = MtlsTestServer::start(&certs, &["cn-only-sidecar"]).await?;
 
-    let channel = build_mtls_channel(
-        &server.url(),
-        &certs.server_ca_cert,
-        &client.cert_pem,
-        &client.key_pem,
-    )
-    .expect("failed to build mTLS channel");
+        let channel = build_mtls_channel(
+            &server.url(),
+            &certs.server_ca_cert,
+            &client.cert_pem,
+            &client.key_pem,
+        )
+        .expect("failed to build mTLS channel");
 
-    let mut grpc = AuthorityServiceClient::new(channel);
-    let stream_result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        grpc.watch_policy_bundle(WatchPolicyBundleRequest {
-            current_version: String::new(),
-            credentials: None,
-        }),
-    )
-    .await
-    .expect("timed out");
+        let mut grpc = AuthorityServiceClient::new(channel);
+        let stream_result = watch(&mut grpc).await?;
 
-    assert!(
-        stream_result.is_ok(),
-        "CN-matched allow-listed client should connect; got: {stream_result:?}"
-    );
+        assert!(
+            stream_result.is_ok(),
+            "CN-matched allow-listed client should connect; got: {stream_result:?}"
+        );
 
-    server.stop().await;
+        server.stop().await
+    })
 }
 
 /// A valid client cert signed by the WRONG CA is rejected (chain validation
 /// fails before the allow-list check).
-#[tokio::test(flavor = "multi_thread")]
-async fn mtls_wrong_client_ca_rejected_at_handshake() {
-    let certs = generate_mtls_certs();
+#[test]
+fn mtls_wrong_client_ca_rejected_at_handshake() -> anyhow::Result<()> {
+    support::run(async {
+        let certs = generate_mtls_certs();
 
-    // A separate, unrecognized CA.
-    let rogue_ca_key = KeyPair::generate().unwrap();
-    let mut rogue_ca_params = CertificateParams::default();
-    rogue_ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "Rogue CA");
-    rogue_ca_params.distinguished_name = dn;
-    let rogue_ca_cert = rogue_ca_params.self_signed(&rogue_ca_key).unwrap();
+        // A separate, unrecognized CA.
+        let rogue_ca_key = KeyPair::generate().unwrap();
+        let mut rogue_ca_params = CertificateParams::default();
+        rogue_ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, "Rogue CA");
+        rogue_ca_params.distinguished_name = dn;
+        let rogue_ca_cert = rogue_ca_params.self_signed(&rogue_ca_key).unwrap();
 
-    let rogue_ca_cert_pem = rogue_ca_cert.pem().into_bytes();
-    let rogue_ca_key_pem = rogue_ca_key.serialize_pem().into_bytes();
+        let rogue_ca_cert_pem = rogue_ca_cert.pem().into_bytes();
+        let rogue_ca_key_pem = rogue_ca_key.serialize_pem().into_bytes();
 
-    // Client cert signed by rogue CA, CN in the allow-list.
-    let client = generate_client_cert(
-        "authorized-sidecar",
-        None,
-        &rogue_ca_cert_pem,
-        &rogue_ca_key_pem,
-    );
+        // Client cert signed by rogue CA, CN in the allow-list.
+        let client = generate_client_cert(
+            "authorized-sidecar",
+            None,
+            &rogue_ca_cert_pem,
+            &rogue_ca_key_pem,
+        );
 
-    // Server trusts the original client CA, not the rogue one.
-    let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
+        // Server trusts the original client CA, not the rogue one.
+        let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await?;
 
-    let channel = build_mtls_channel(
-        &server.url(),
-        &certs.server_ca_cert,
-        &client.cert_pem,
-        &client.key_pem,
-    )
-    .expect("failed to build mTLS channel");
+        let channel = build_mtls_channel(
+            &server.url(),
+            &certs.server_ca_cert,
+            &client.cert_pem,
+            &client.key_pem,
+        )
+        .expect("failed to build mTLS channel");
 
-    let mut grpc = AuthorityServiceClient::new(channel);
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        grpc.watch_policy_bundle(WatchPolicyBundleRequest {
-            current_version: String::new(),
-            credentials: None,
-        }),
-    )
-    .await
-    .expect("timed out")
-    .err();
+        let mut grpc = AuthorityServiceClient::new(channel);
+        let result = watch(&mut grpc).await?.err();
 
-    assert!(
-        result.is_some(),
-        "cert signed by rogue CA must be rejected; got Ok (should have failed)"
-    );
+        assert!(
+            result.is_some(),
+            "cert signed by rogue CA must be rejected; got Ok (should have failed)"
+        );
 
-    server.stop().await;
+        server.stop().await
+    })
 }

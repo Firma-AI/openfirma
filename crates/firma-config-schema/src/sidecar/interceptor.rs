@@ -12,7 +12,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use firma_config_utils::NonZeroDuration;
 
 const DEFAULT_DRAIN_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(30));
@@ -20,6 +20,8 @@ const DEFAULT_CONNECT_SETUP_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(10));
 const DEFAULT_CONNECT_SESSION_MAX: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_mins(10));
+/// The host pattern matching every host, used by the MITM defaults.
+const ALL_HOSTS: &str = "*";
 
 /// Interception mode selector.
 ///
@@ -78,7 +80,7 @@ pub struct InterceptorConfig {
     pub drain_timeout: NonZeroDuration,
     /// Maximum request body size accepted by proxy interceptors.
     #[serde(
-        deserialize_with = "crate::utils::byte_size::deserialize",
+        with = "crate::utils::byte_size",
         default = "default_max_request_body_size"
     )]
     pub max_request_body_size: ByteSize,
@@ -86,7 +88,7 @@ pub struct InterceptorConfig {
     /// decompressed for secret placeholder rehydration or masking. Bounds the
     /// memory a decompression bomb can force the Sidecar to allocate.
     #[serde(
-        deserialize_with = "crate::utils::byte_size::deserialize",
+        with = "crate::utils::byte_size",
         default = "default_max_decompressed_body_size"
     )]
     pub max_decompressed_body_size: ByteSize,
@@ -99,7 +101,7 @@ pub struct InterceptorConfig {
     /// Global ceiling for the total bytes of request bodies buffered
     /// concurrently across all in-flight proxy connections.
     #[serde(
-        deserialize_with = "crate::utils::byte_size::deserialize",
+        with = "crate::utils::byte_size",
         default = "default_total_body_budget"
     )]
     pub total_body_budget: ByteSize,
@@ -158,6 +160,7 @@ pub struct HttpsMitmConfig {
     #[serde(default = "default_https_mitm_enabled")]
     pub enabled: bool,
     /// Host patterns that should be intercepted (supports `*` wildcard).
+    /// Defaults to every host.
     #[serde(default = "default_https_mitm_intercept_hosts")]
     pub intercept_hosts: Vec<String>,
     /// Host patterns that should bypass interception and use CONNECT tunnel.
@@ -173,6 +176,8 @@ pub struct HttpsMitmConfig {
     #[serde(default = "default_https_mitm_cert_cache_capacity")]
     pub cert_cache_capacity: usize,
     /// Host patterns that must be intercepted; failures are hard deny.
+    /// Defaults to every host, so nothing falls back to an uninspected tunnel
+    /// unless `bypass_hosts` says so.
     #[serde(default = "default_https_mitm_strict_hosts")]
     pub strict_hosts: Vec<String>,
 }
@@ -192,14 +197,6 @@ impl Default for HttpsMitmConfig {
 
 fn default_listen_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 8080))
-}
-
-/// Default Unix domain socket path, derived from `XDG_RUNTIME_DIR`/`HOME`.
-#[must_use]
-pub fn default_socket_path() -> PathBuf {
-    let xdg = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-    PathBuf::from(xdg).join("firma/sidecar.sock")
 }
 
 const fn default_drain_timeout() -> NonZeroDuration {
@@ -238,42 +235,22 @@ const fn default_https_mitm_enabled() -> bool {
     true
 }
 
+/// Every host, so interception is on by default wherever an agent reaches.
+///
+/// A curated provider list would silently leave anything unlisted
+/// uninspected, which is indistinguishable from no governance for traffic
+/// nobody thought to enumerate. Narrow it with `bypass_hosts` for the hosts
+/// that cannot be intercepted, such as certificate-pinned or mTLS endpoints.
 fn default_https_mitm_intercept_hosts() -> Vec<String> {
-    vec![
-        "chatgpt.com".to_string(),
-        "auth.openai.com".to_string(),
-        "api.openai.com".to_string(),
-        "api.anthropic.com".to_string(),
-        "platform.claude.com".to_string(),
-        "claude.ai".to_string(),
-        "console.anthropic.com".to_string(),
-        "openrouter.ai".to_string(),
-        "api.groq.com".to_string(),
-        "api.mistral.ai".to_string(),
-        "api.cohere.com".to_string(),
-        "generativelanguage.googleapis.com".to_string(),
-        "aiplatform.googleapis.com".to_string(),
-        "api.deepseek.com".to_string(),
-        "api.together.xyz".to_string(),
-        "api.fireworks.ai".to_string(),
-        "api.replicate.com".to_string(),
-        "api.perplexity.ai".to_string(),
-        "api.x.ai".to_string(),
-        "api.supabase.com".to_string(),
-        "*.supabase.co".to_string(),
-        "api.resend.com".to_string(),
-        "api.twilio.com".to_string(),
-        "api.sendgrid.com".to_string(),
-        "api.stripe.com".to_string(),
-        "api.slack.com".to_string(),
-        "hooks.slack.com".to_string(),
-        "github.com".to_string(),
-        "api.github.com".to_string(),
-        "uploads.github.com".to_string(),
-        "downloads.claude.ai".to_string(),
-    ]
+    vec![ALL_HOSTS.to_string()]
 }
 
+/// Every host, matching [`default_https_mitm_intercept_hosts`]: a host that
+/// cannot be intercepted is denied rather than tunnelled uninspected.
+///
+/// Fail-closed is the point of the default. An endpoint that must stay
+/// reachable without inspection belongs in `bypass_hosts`, which is checked
+/// first and is an explicit operator decision.
 fn default_https_mitm_strict_hosts() -> Vec<String> {
-    default_https_mitm_intercept_hosts()
+    vec![ALL_HOSTS.to_string()]
 }

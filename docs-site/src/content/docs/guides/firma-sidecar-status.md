@@ -28,9 +28,9 @@ firma sidecar status --daemon
 ### Table (default)
 
 ```text
-SANDBOX_ID                           AGENT        PID     STATE      LISTEN                     UPTIME
-sbx_01j0000000e008000000000001      claude-code  42891   running    /run/user/1000/firma/…     00:02:34
-sbx_01j0000000e008000000000002      codex        51002   stopped    -                          00:14:08
+SANDBOX_ID                           AGENT        PID     STATE      BUNDLE                LISTEN                     UPTIME
+sbx_01j0000000e008000000000001      claude-code  42891   running    7f3a9c0d21be…         /run/user/1000/firma/…     00:02:34
+sbx_01j0000000e008000000000002      codex        51002   stopped    41 (stale)            -                          00:14:08
 ```
 
 Columns:
@@ -41,6 +41,7 @@ Columns:
 | `AGENT`      | Agent associated with the run.                   |
 | `PID`        | Sidecar process ID, or `-` if absent.            |
 | `STATE`      | `running`, `unhealthy`, `stopped`, or `unknown`. |
+| `BUNDLE`     | Authority bundle version the sidecar enforces, shortened to 12 characters plus `…`; `(stale)` past its TTL; `-` when unknown. |
 | `LISTEN`     | Address used to reach the sidecar, or `-`.       |
 | `UPTIME`     | Sidecar uptime as `HH:MM:SS`, or `-`.            |
 
@@ -59,7 +60,8 @@ Emits a single JSON array — one object per sidecar. An empty list prints `[]`.
     "agent_id": "agt_01j0000000e008000000000001",
     "session_id": "sess-abc123",
     "authority_url": "http://127.0.0.1:50051",
-    "policy_bundle_version": "a1b2c3d4",
+    "policy_bundle_version": "7f3a9c…",
+    "policy_bundle_expires_at": "2026-05-18T08:03:04+00:00",
     "pid": 42891,
     "started_at": "2026-05-18T08:00:00Z",
     "state": "running",
@@ -70,7 +72,8 @@ Emits a single JSON array — one object per sidecar. An empty list prints `[]`.
 ```
 
 When a PID is unavailable, table mode renders `PID` as `-` and JSON mode emits
-`"pid": null`.
+`"pid": null`. `policy_bundle_version` and `policy_bundle_expires_at` are empty
+until the sidecar accepts its first Authority bundle.
 
 ## Modes
 

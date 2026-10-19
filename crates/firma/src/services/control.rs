@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use firma_authority::AuthorityConfig;
+use firma_authority::{AuthorityConfig, TlsRequest};
 use firma_tui::control::{AuditRow, AuditSourceError, ErrorMessage};
 
 use crate::args::control::Args;
@@ -21,7 +21,11 @@ use crate::monitor::tailer::{self, Source as TailSource};
 /// The command reuses the same audit log source as `firma monitor` and reads
 /// the Authority policy directory from the selected stack config. If no stack
 /// config is available, the TUI still opens and reports the missing policy
-/// source through normal UI state.
+/// source through normal UI state. A config that exists but does not load is a
+/// different case: it fails the command rather than opening a TUI whose policy
+/// view would silently disagree with the stack. `--state-dir` selects the state
+/// directory that unset `[authority]` artifact paths resolve against, so it also
+/// decides whose `tls/` directory an incomplete pair is reported from.
 ///
 /// # Errors
 ///
@@ -30,7 +34,7 @@ use crate::monitor::tailer::{self, Source as TailSource};
 pub fn run(args: &Args, config: Option<&Path>) -> anyhow::Result<ExitCode> {
     let (audit_rows, _audit_guard) = spawn_audit_source(args, config)?;
     let mut options = firma_tui::control::ControlOptions::with_audit_rows(audit_rows);
-    if let Some(policy_dir) = resolve_policy_dir(config)? {
+    if let Some(policy_dir) = resolve_policy_dir(config, args.state_dir.clone())? {
         options = options.with_policy_dir(policy_dir);
     }
 
@@ -44,6 +48,8 @@ enum PolicyDirResolveError {
         #[source]
         source: firma_config_loader::ConfigResolveError,
     },
+    #[error("failed to resolve the state directory for policy discovery: {reason}")]
+    ResolveStateDir { reason: String },
     #[error("failed to load authority config for policy discovery")]
     LoadAuthorityConfig {
         #[source]
@@ -53,12 +59,13 @@ enum PolicyDirResolveError {
 
 fn resolve_policy_dir(
     config_override: Option<&Path>,
+    state_dir: Option<PathBuf>,
 ) -> Result<Option<PathBuf>, PolicyDirResolveError> {
     let Some(resolved) = resolve_control_config(config_override)? else {
         return Ok(None);
     };
 
-    load_authority_policy_dir(&resolved)
+    load_authority_policy_dir(&resolved, state_dir)
 }
 
 fn resolve_control_config(
@@ -69,12 +76,26 @@ fn resolve_control_config(
         .map_err(|source| PolicyDirResolveError::ResolveConfig { source })
 }
 
+/// `state_dir` is the `--state-dir` flag the TUI already honours for the audit
+/// log. Passing it here keeps policy discovery on the same state directory
+/// instead of silently reading the ambient one.
 fn load_authority_policy_dir(
     resolved: &firma_config_loader::ResolvedConfig,
+    state_dir: Option<PathBuf>,
 ) -> Result<Option<PathBuf>, PolicyDirResolveError> {
-    Ok(AuthorityConfig::from_resolved_section(resolved)
-        .map_err(|source| PolicyDirResolveError::LoadAuthorityConfig { source })?
-        .map(|config| config.policy_dir().to_path_buf()))
+    let state = firma_runtime_state::RuntimeLayout::resolve(state_dir).map_err(|error| {
+        PolicyDirResolveError::ResolveStateDir {
+            reason: error.to_string(),
+        }
+    })?;
+    // Plaintext is requested here because only `policy_dir` is read: the
+    // control surface never serves gRPC, so a host without TLS material must
+    // not lose its policy directory over it.
+    Ok(
+        AuthorityConfig::from_resolved_section(resolved, &state, TlsRequest::Disabled)
+            .map_err(|source| PolicyDirResolveError::LoadAuthorityConfig { source })?
+            .map(|config| config.policy_dir().to_path_buf()),
+    )
 }
 
 fn spawn_audit_source(

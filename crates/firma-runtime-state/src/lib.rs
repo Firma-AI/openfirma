@@ -5,6 +5,7 @@
 //! lifecycle ownership and component-specific in-memory state remain with the
 //! crates that implement those behaviors.
 
+pub mod enforcement_state;
 pub mod error;
 pub mod pidfile;
 pub mod process_id;
@@ -14,7 +15,7 @@ pub mod status;
 
 pub use error::{Result, RuntimeStateError};
 pub use process_id::UserProcessId;
-pub use runtime_paths::{RunEntryLayout, RuntimeLayout};
+pub use runtime_paths::{RunEntryLayout, RuntimeLayout, STATE_DIR_ENV, is_material_present};
 pub use sidecar_markers::{MetadataFile, SidecarEntry, gc_stale, get, list, publish};
 pub use status::State;
 

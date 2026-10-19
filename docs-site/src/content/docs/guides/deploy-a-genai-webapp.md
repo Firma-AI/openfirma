@@ -66,6 +66,7 @@ per-tenant policies plus per-session isolation in the audit log.
 listen_addr         = "0.0.0.0:50051"   # or behind an internal load balancer
 policy_dir          = "/etc/firma/policies"
 issuance_policy_dir = "/etc/firma/issuance"
+mapping_rules_paths = ["/etc/firma/mapping-rules.toml"]
 revocation_file     = "/var/lib/firma/revocations.txt"
 key_file            = "/etc/firma/firma-authority.key"
 max_ttl    = "1h"  # capabilities live at most 1h
@@ -163,11 +164,6 @@ strict_hosts    = ["api.acme-vendor.com"]    # never fall back to CONNECT here
 [sidecar.ca]
 dir = "/etc/firma/firma-ca"
 
-[sidecar.mapping]
-rules_path  = "/etc/firma/mapping-rules.toml"
-rules_paths = []
-default_protected = true                      # production!
-
 [sidecar.policy]
 dir           = "/etc/firma/cache/policies"   # populated by Authority stream
 
@@ -207,16 +203,20 @@ secret_path    = "/run/secrets/acme-vendor-api-key"
 [sidecar.audit]
 sink             = "grpc"
 grpc_url         = "https://audit-collector.internal:9090"
+buffer_path      = "/var/lib/firma/audit-buffer.jsonl"
+buffer_max_size  = "100 MiB"
 signing_key_path = "/etc/firma/audit.key"
 
 ```
 
 A few things worth highlighting:
 
-- **`default_protected = true`** — anything not in mapping rules denies. Production posture.
+- **Authority-owned mappings** — configure `[authority].mapping_rules_paths` on
+  the Authority service, including `/etc/firma/mapping-rules.toml`. Its snapshots
+  always deny unmatched requests; the Sidecar has no mapping-file settings.
 - **`[sidecar.authority].url` uses `https://` + `[sidecar.authority].ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
 - **`reconnect_min_backoff` / `reconnect_max_backoff`** — Sidecars retry Authority streams with bounded exponential backoff. The defaults are `"250ms"` and `"30s"`.
-- **`grpc` audit sink** — events go to a centralized collector, not to a local file. Multiple Sidecars feed one collector.
+- **`grpc` audit sink** — events go to a centralized collector; multiple Sidecars feed one collector. `buffer_path` is required: while the collector is unreachable the Sidecar buffers events there and replays them on reconnect, so give it a writable path on a volume that survives restarts. Past `buffer_max_size` the oldest events are evicted rather than blocking the agent.
 - **Vault Agent for credentials** — no API keys in the app. Vault Agent renders short-lived files and the Sidecar reads them per call.
 - **`strict_hosts` on the vendor** — if MITM fails (e.g. cert mismatch), the call denies rather than falling back to weaker CONNECT-only policy.
 
@@ -290,9 +290,11 @@ containers:
 ```
 
 Use the same endpoint for a Kubernetes `readinessProbe` if you run the
-same container pair there. Keep liveness separate: a liveness failure
-should mean the Sidecar process is wedged and should be restarted, not
-that the Authority is briefly unreachable during startup.
+same container pair there. `/healthz` also turns `503` while the enforced
+policy bundle is past its TTL, because every request is denied in that
+state; it returns to `200` when a fresh bundle arrives. Keep liveness
+separate: a liveness failure should mean the Sidecar process is wedged and
+should be restarted, not that the Authority is unreachable.
 
 ## Step 7: Per-session capability issuance
 

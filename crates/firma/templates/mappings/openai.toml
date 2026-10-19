@@ -1,7 +1,11 @@
 # OpenAI API mapping.
-# Tunnels through without MITM; the LLM SDK does not need to trust firma-ca.
+# The Sidecar intercepts every host by default, so the LLM SDK must trust
+# firma-ca. The CONNECT rules classify the tunnel preface; the REST
+# fallbacks below classify the decrypted requests. Move these hosts into
+# https_mitm.bypass_hosts to tunnel them uninspected instead.
 
-# API-key traffic (api.openai.com, etc.) — single-label wildcard.
+# API-key traffic (api.openai.com, etc.). A leading * spans host labels, so
+# this also covers deeper subdomains.
 [[rules]]
 method = "CONNECT"
 host = "*.openai.com"
@@ -12,7 +16,8 @@ method = "CONNECT"
 host = "chatgpt.com"
 action_class = "communication.external.send"
 
-# Subdomains (ab.chatgpt.com, etc.) — single-label wildcard.
+# Subdomains (ab.chatgpt.com, etc.); the wildcard spans labels, so deeper
+# subdomains match too.
 [[rules]]
 method = "CONNECT"
 host = "*.chatgpt.com"

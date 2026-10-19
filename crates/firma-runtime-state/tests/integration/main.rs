@@ -1,3 +1,4 @@
+mod material_presence;
 mod pidfile_roundtrip;
 mod process_id;
 mod runtime_paths;

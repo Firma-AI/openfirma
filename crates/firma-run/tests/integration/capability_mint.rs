@@ -40,6 +40,7 @@ use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 #[cfg(unix)]
 use firma_run::backend::{BackendKind, EnforcementProof, NetworkConfinement, SandboxHandle};
 use firma_run::capability::issue::{IssueParams, mint_and_write};
+use firma_run::capability::read_capability_token;
 use firma_run::capability::refresh::CapabilityRefresher;
 use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
 #[cfg(unix)]
@@ -49,7 +50,12 @@ use firma_run::identity::RunIdentity;
 #[cfg(unix)]
 use firma_run::routing::{AutostartFlags, ResolvedAuthority, prepare_network_runtime};
 
+use firma_test_helpers::bounded::{self, step};
+
 use super::helper::RealAuthority;
+
+/// Covers the Authority's request deadline plus connection setup.
+const MINT_LIMIT: Duration = Duration::from_secs(30);
 
 /// Mock Authority that signs whatever it is asked to issue with a test key.
 struct MockAuthority {
@@ -300,181 +306,196 @@ fn lease() -> CapabilityLeaseConfig {
     }
 }
 
-#[tokio::test]
-async fn real_authority_token_mints_compatible_seed() {
-    let authority = RealAuthority::start().await;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("seed.toml");
-    let params = IssueParams {
-        authority_url: authority.url.clone(),
-        authority_pub_key_path: authority.pub_key_path.clone(),
-        authority_ca_cert_path: None,
-        credentials: None,
-        agent_id: *super::helper::agent_id(),
-        session_id: "live-session".to_string(),
-        requested_actions: vec!["communication.external.send".to_string()],
-        resource_scope: "*".to_string(),
-        ttl_seconds: 900,
-    };
-    let mint_path = seed_path.clone();
+#[test]
+fn real_authority_token_mints_compatible_seed() -> anyhow::Result<()> {
+    bounded::run(async {
+        let authority = RealAuthority::start().await?;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(dir.path());
+        let capabilities_dir = runtime_layout.capabilities_dir();
+        std::fs::create_dir(&capabilities_dir).expect("create capabilities directory");
+        let seed_path = capabilities_dir.join("seed.toml");
+        let params = IssueParams {
+            authority_url: authority.url.clone(),
+            authority_pub_key_path: authority.pub_key_path.clone(),
+            authority_ca_cert_path: None,
+            credentials: None,
+            agent_id: *super::helper::agent_id(),
+            session_id: "live-session".to_string(),
+            requested_actions: vec!["communication.external.send".to_string()],
+            resource_scope: "*".to_string(),
+            ttl_seconds: 900,
+        };
+        let mint_path = seed_path.clone();
 
-    let written = tokio::task::spawn_blocking(move || mint_and_write(&params, &mint_path))
-        .await
-        .expect("join capability mint")
-        .expect("mint against real Authority");
+        let mint = tokio::task::spawn_blocking(move || mint_and_write(&params, &mint_path));
+        let written = step("mint a capability", MINT_LIMIT, mint)
+            .await??
+            .expect("mint against real Authority");
 
-    assert_eq!(written, seed_path);
-    let body = std::fs::read_to_string(&seed_path).expect("read minted seed");
-    let seed: CapabilitySeed = toml::from_str(&body).expect("parse minted seed");
-    assert_eq!(seed.agent_id, super::helper::agent_id().to_string());
-    assert_eq!(seed.session_id, "live-session");
-    assert_eq!(
-        seed.action_set,
-        vec!["communication.external.send".to_string()]
-    );
-    assert!(!seed.raw_token.is_empty(), "seed carries the signed token");
+        assert_eq!(written, seed_path);
+        let body = std::fs::read_to_string(&seed_path).expect("read minted seed");
+        let seed: CapabilitySeed = toml::from_str(&body).expect("parse minted seed");
+        assert_eq!(seed.agent_id, super::helper::agent_id().to_string());
+        assert_eq!(seed.session_id, "live-session");
+        assert_eq!(
+            seed.action_set,
+            vec!["communication.external.send".to_string()]
+        );
+        assert!(!seed.raw_token.is_empty(), "seed carries the signed token");
+        let run_token = read_capability_token(&CapabilitySource::File {
+            path: seed_path.clone(),
+        })
+        .expect("Run parses Authority-issued seed")
+        .expect("file source carries a token");
+        assert_eq!(run_token, seed.raw_token);
 
-    let verifier = build_token_verifier(Some(&authority.pub_key_path))
-        .expect("build verifier from real Authority key");
-    let capability_map = load_capability_map(
-        &CapabilitySeedConfig {
-            paths: vec![seed_path],
-            hot_reload: true,
-        },
-        verifier.as_ref(),
-        &dir.path().join("runtime-capabilities"),
-    )
-    .expect("Sidecar loads seed minted through firma-run");
-    let entry = capability_map
-        .select(
-            "live-session",
-            "communication.external.send",
-            "example.test/request",
+        let verifier = build_token_verifier(Some(&authority.pub_key_path))
+            .expect("build verifier from real Authority key");
+        let capability_map = load_capability_map(
+            &CapabilitySeedConfig {
+                paths: vec![seed_path],
+                hot_reload: true,
+            },
+            verifier.as_ref(),
+            &capabilities_dir,
         )
-        .expect("minted capability admits matching request at Stage 1");
-    let claims = verifier
-        .verify(&entry.raw_token)
-        .expect("Sidecar verifies token from real Authority");
-    assert_eq!(claims.session_id.to_string(), "live-session");
+        .expect("Sidecar loads seed minted through firma-run");
+        let entry = capability_map
+            .select(
+                "live-session",
+                "communication.external.send",
+                "example.test/request",
+            )
+            .expect("minted capability admits matching request at Stage 1");
+        let claims = verifier
+            .verify(&entry.raw_token)
+            .expect("Sidecar verifies token from real Authority");
+        assert_eq!(claims.session_id.to_string(), "live-session");
 
-    authority.stop().await;
+        authority.stop().await
+    })
 }
 
-#[tokio::test]
-async fn real_authority_rejects_empty_actions_without_writing_seed() {
-    let authority = RealAuthority::start().await;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let seed_path = dir.path().join("empty-actions.toml");
-    let params = IssueParams {
-        authority_url: authority.url.clone(),
-        authority_pub_key_path: authority.pub_key_path.clone(),
-        authority_ca_cert_path: None,
-        credentials: None,
-        agent_id: *super::helper::agent_id(),
-        session_id: "empty-actions".to_string(),
-        requested_actions: Vec::new(),
-        resource_scope: "*".to_string(),
-        ttl_seconds: 900,
-    };
-    let mint_path = seed_path.clone();
+#[test]
+fn real_authority_rejects_empty_actions_without_writing_seed() -> anyhow::Result<()> {
+    bounded::run(async {
+        let authority = RealAuthority::start().await?;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seed_path = dir.path().join("empty-actions.toml");
+        let params = IssueParams {
+            authority_url: authority.url.clone(),
+            authority_pub_key_path: authority.pub_key_path.clone(),
+            authority_ca_cert_path: None,
+            credentials: None,
+            agent_id: *super::helper::agent_id(),
+            session_id: "empty-actions".to_string(),
+            requested_actions: Vec::new(),
+            resource_scope: "*".to_string(),
+            ttl_seconds: 900,
+        };
+        let mint_path = seed_path.clone();
 
-    let error = tokio::task::spawn_blocking(move || mint_and_write(&params, &mint_path))
-        .await
-        .expect("join capability mint")
-        .expect_err("empty action request must fail closed");
+        let mint = tokio::task::spawn_blocking(move || mint_and_write(&params, &mint_path));
+        let error = step("mint a capability", MINT_LIMIT, mint)
+            .await??
+            .expect_err("empty action request must fail closed");
 
-    assert!(matches!(
-        error,
-        firma_run::error::RunError::CapabilityDenied { reason, message, .. }
-            if reason == "NO_ACTIONS" && message == "no actions requested"
-    ));
-    assert!(!seed_path.exists(), "denied issuance must not write a seed");
+        assert!(matches!(
+            error,
+            firma_run::error::RunError::CapabilityDenied { reason, message, .. }
+                if reason == "NO_ACTIONS" && message == "no actions requested"
+        ));
+        assert!(!seed_path.exists(), "denied issuance must not write a seed");
 
-    authority.stop().await;
+        authority.stop().await
+    })
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() {
-    let authority = RealAuthority::start().await;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(dir.path().join("runtime"));
-    let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
-    let seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
-    let marker_dir = runtime_layout
-        .run_entry_layout(&identity.sandbox_id)
-        .into_root();
-    let sandbox_runtime = dir.path().join("sandbox");
-    std::fs::create_dir_all(&sandbox_runtime).expect("sandbox runtime");
-    let handle = SandboxHandle {
-        backend: BackendKind::Vz,
-        runtime_dir: sandbox_runtime,
-        identity: identity.clone(),
-        mounts: Vec::new(),
-        network_policy: NetworkPolicy {
-            enforce_network_namespace: false,
-            fail_closed: true,
-        },
-    };
-    let proof = EnforcementProof {
-        backend: BackendKind::Vz,
-        structural: false,
-        fail_closed: true,
-        detail: "empty capability action test".to_string(),
-        network_confinement: NetworkConfinement::ProxyOnly,
-    };
-    let flags = AutostartFlags {
-        sidecar_autostart: true,
-        startup_timeout: Duration::from_secs(1),
-        ..AutostartFlags::default()
-    };
-    let resolved_authority = ResolvedAuthority {
-        url: authority.url.clone(),
-        ca_cert_path: None,
-        pub_key_path: Some(authority.pub_key_path.clone()),
-        credentials: None,
-        credentials_config: None,
-        owned: None,
-    };
-    let capability = CapabilityLeaseConfig {
-        source: CapabilitySource::Disabled,
-        public_key_path: Some(authority.pub_key_path.clone()),
-        refresh_ratio: 0.60,
-        grace: Duration::from_secs(30),
-        requested_actions: Vec::new(),
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        prepare_network_runtime(
-            &runtime_layout,
-            &handle,
-            &proof,
-            &SidecarEndpoint::Tcp {
-                addr: "127.0.0.1:1".parse().expect("sidecar address"),
+#[test]
+fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() -> anyhow::Result<()> {
+    bounded::run(async {
+        let authority = RealAuthority::start().await?;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime_layout =
+            firma_runtime_state::RuntimeLayout::from_root(dir.path().join("runtime"));
+        let identity = RunIdentity::new(*super::helper::agent_id(), "generic");
+        let seed_path = runtime_layout.capability_seed(&identity.sandbox_id);
+        let marker_dir = runtime_layout
+            .run_entry_layout(&identity.sandbox_id)
+            .into_root();
+        let sandbox_runtime = dir.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox_runtime).expect("sandbox runtime");
+        let handle = SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir: sandbox_runtime,
+            identity: identity.clone(),
+            mounts: Vec::new(),
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
             },
-            &identity,
-            &flags,
-            resolved_authority,
-            &capability,
-        )
+        };
+        let proof = EnforcementProof {
+            backend: BackendKind::Vz,
+            structural: false,
+            fail_closed: true,
+            detail: "empty capability action test".to_string(),
+            network_confinement: NetworkConfinement::ProxyOnly,
+        };
+        let flags = AutostartFlags {
+            sidecar_autostart: true,
+            startup_timeout: Duration::from_secs(1),
+            ..AutostartFlags::default()
+        };
+        let resolved_authority = ResolvedAuthority {
+            url: authority.url.clone(),
+            ca_cert_path: None,
+            pub_key_path: Some(authority.pub_key_path.clone()),
+            credentials: None,
+            credentials_config: None,
+            owned: None,
+        };
+        let capability = CapabilityLeaseConfig {
+            source: CapabilitySource::Disabled,
+            public_key_path: Some(authority.pub_key_path.clone()),
+            refresh_ratio: 0.60,
+            grace: Duration::from_secs(30),
+            requested_actions: Vec::new(),
+        };
+
+        let preparation = tokio::task::spawn_blocking(move || {
+            prepare_network_runtime(
+                &runtime_layout,
+                &handle,
+                &proof,
+                &SidecarEndpoint::Tcp {
+                    addr: "127.0.0.1:1".parse().expect("sidecar address"),
+                },
+                &identity,
+                &flags,
+                resolved_authority,
+                &capability,
+            )
+        });
+        let result = step("prepare the network runtime", MINT_LIMIT, preparation).await??;
+        let Err(error) = result else {
+            panic!("empty actions must abort routing preparation");
+        };
+
+        assert!(
+            error.to_string().contains("NO_ACTIONS"),
+            "unexpected error: {error}"
+        );
+        assert!(!seed_path.exists(), "denied issuance must not leave a seed");
+        assert!(
+            !marker_dir.join("sidecar.toml").exists(),
+            "Sidecar preparation must not begin after denied issuance"
+        );
+
+        authority.stop().await
     })
-    .await
-    .expect("join routing preparation");
-    let Err(error) = result else {
-        panic!("empty actions must abort routing preparation");
-    };
-
-    assert!(
-        error.to_string().contains("NO_ACTIONS"),
-        "unexpected error: {error}"
-    );
-    assert!(!seed_path.exists(), "denied issuance must not leave a seed");
-    assert!(
-        !marker_dir.join("sidecar.toml").exists(),
-        "Sidecar preparation must not begin after denied issuance"
-    );
-
-    authority.stop().await;
 }
 
 #[test]

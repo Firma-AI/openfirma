@@ -2,15 +2,17 @@
 //!
 //! Each [`ExecutionEvent`](crate::audit::ExecutionEvent) is serialized
 //! as a single JSON line and appended to the configured file path. The
-//! file is opened in create + append mode at startup; if the file
+//! file is opened in create + append mode by
+//! [`FileAuditSink::open`], before the sink is spawned; if the file
 //! already exists, new events are appended without truncating.
 //!
 //! # Error handling
 //!
-//! - **Startup**: if the file cannot be opened (permissions, missing
-//!   parent directory, etc.) the sink returns
-//!   [`AuditSinkError::BindFailed`](crate::audit::AuditSinkError::BindFailed)
-//!   immediately.
+//! - **Startup**: if the parent directory cannot be created or the file
+//!   cannot be opened (permissions, a non-directory component, etc.)
+//!   [`FileAuditSink::open`] returns
+//!   [`AuditSinkError::BindFailed`](crate::audit::AuditSinkError::BindFailed),
+//!   which fails startup rather than a detached task.
 //! - **Serialization**: events that fail to serialize are logged at
 //!   `warn` level and skipped. The enforcement pipeline must never be
 //!   blocked by an audit formatting error.
@@ -19,25 +21,63 @@
 //!   write — transient errors (e.g. disk pressure) are tolerated so
 //!   that subsequent events still have a chance to land.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use tokio::io::AsyncWriteExt;
 
-use crate::audit::{AuditSink, ExecutionEvent};
+use super::create_private_dir_all;
+use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
 
 /// Audit sink that writes JSON-lines to a file.
 #[derive(Debug)]
 pub struct FileAuditSink {
     path: PathBuf,
+    file: tokio::fs::File,
 }
 
 impl FileAuditSink {
-    /// Constructs a new [`FileAuditSink`] writing to `path`.
-    pub(crate) fn new<P>(path: P) -> Self
-    where
-        P: AsRef<Path>,
-    {
-        Self::from(path.as_ref())
+    /// Open `path` for appending, creating its parent directory.
+    ///
+    /// The file is opened here rather than inside the spawned task so that a
+    /// sink which cannot write is a startup failure. A task that fails to open
+    /// its log resolves long after `serve` has stopped looking, which is a
+    /// Sidecar reporting ready while auditing nothing.
+    ///
+    /// The parent directory is created because the log defaults to the state
+    /// directory, which nothing is guaranteed to have created yet at this
+    /// point in startup. It is created private on Unix: the events name
+    /// resources, agents, and tokens.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditSinkError::BindFailed`] when the parent directory cannot
+    /// be created or the file cannot be opened.
+    pub(crate) fn open(path: PathBuf) -> Result<Self, AuditSinkError> {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            create_private_dir_all(parent).map_err(|error| {
+                AuditSinkError::BindFailed(format!(
+                    "failed to create audit log directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|error| {
+                AuditSinkError::BindFailed(format!(
+                    "failed to open audit log {}: {error}",
+                    path.display()
+                ))
+            })?;
+        Ok(Self {
+            path,
+            file: tokio::fs::File::from_std(file),
+        })
     }
 
     /// Serialize and append a single event to `file`. Serialization
@@ -72,20 +112,6 @@ impl FileAuditSink {
     }
 }
 
-impl From<PathBuf> for FileAuditSink {
-    fn from(path: PathBuf) -> Self {
-        Self { path }
-    }
-}
-
-impl From<&Path> for FileAuditSink {
-    fn from(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-        }
-    }
-}
-
 impl AuditSink for FileAuditSink {
     async fn run(
         self,
@@ -93,13 +119,7 @@ impl AuditSink for FileAuditSink {
         exit: tokio_util::sync::CancellationToken,
     ) -> Result<(), crate::audit::AuditSinkError> {
         tracing::debug!("Starting FileAuditSink with path={}", self.path.display());
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .await
-            .map_err(|e| crate::audit::AuditSinkError::BindFailed(e.to_string()))?;
-        tracing::debug!("FileAuditSink successfully opened file");
+        let mut file = self.file;
 
         loop {
             tokio::select! {
@@ -128,39 +148,10 @@ impl AuditSink for FileAuditSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audit::Decision;
+    use crate::audit::test_support::sample_event;
 
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
-
-    fn sample_event(id: &str) -> ExecutionEvent {
-        ExecutionEvent {
-            event_id: id.to_string(),
-            session_id: "sess-1".parse().expect("literal session id"),
-            token_id: "ctok_01j0000000e008000000000001"
-                .parse()
-                .expect("literal token id"),
-            agent_id: "agt_01j0000000e008000000000001"
-                .parse()
-                .expect("literal agent id"),
-            action: "http_get".to_string(),
-            resource: "https://api.example.com/v1".to_string(),
-            decision: Decision::Allow,
-            deny_reason: String::new(),
-            enforcement_latency_us: 42,
-            context_hash: "abc123".to_string(),
-            bundle_version: "v1".to_string(),
-            timestamp: Some(1_700_000_000_000_000_000),
-            dispatch_status: 0,
-            dispatch_latency_us: 0,
-            response_size: 0,
-            sandbox_id: String::new(),
-            provenance: String::new(),
-            thread_id: String::new(),
-            parent_action_id: String::new(),
-            signature: vec![0xDE, 0xAD],
-        }
-    }
 
     #[tokio::test]
     async fn test_sink_writes_events_to_file() {
@@ -170,7 +161,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         let exit = CancellationToken::new();
 
-        let sink = FileAuditSink::new(&path);
+        let sink = FileAuditSink::open(path.clone()).expect("open audit log");
         let exit_clone = exit.clone();
         let handle = tokio::spawn(async move { sink.run(rx, exit_clone).await });
 
@@ -215,7 +206,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         let exit = CancellationToken::new();
 
-        let sink = FileAuditSink::new(&path);
+        let sink = FileAuditSink::open(path.clone()).expect("open audit log");
         let exit_clone = exit.clone();
         let handle = tokio::spawn(async move { sink.run(rx, exit_clone).await });
 
@@ -248,24 +239,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sink_returns_bind_error_for_invalid_path() {
-        let path = PathBuf::from("/nonexistent/dir/that/does/not/exist/audit.jsonl");
-
-        let (_tx, rx) = mpsc::channel::<ExecutionEvent>(1);
-        let exit = CancellationToken::new();
-
-        let sink = FileAuditSink::new(&path);
-        let result = sink.run(rx, exit).await;
-
-        assert!(result.is_err(), "should fail to open file");
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, crate::audit::AuditSinkError::BindFailed(_)),
-            "error should be BindFailed, got: {err}"
-        );
-    }
-
-    #[tokio::test]
     async fn test_sink_returns_ok_when_channel_empty() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("failed to create tempdir: {e}"));
         let path = dir.path().join("empty.jsonl");
@@ -273,7 +246,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
 
-        let sink = FileAuditSink::new(&path);
+        let sink = FileAuditSink::open(path.clone()).expect("open audit log");
         let exit_clone = exit.clone();
         let handle = tokio::spawn(async move { sink.run(rx, exit_clone).await });
 
@@ -282,17 +255,5 @@ mod tests {
 
         let result = handle.await;
         assert!(result.is_ok(), "task should not panic");
-    }
-
-    #[test]
-    fn test_from_path_buf() {
-        let sink = FileAuditSink::from(PathBuf::from("/tmp/audit.jsonl"));
-        assert_eq!(sink.path, PathBuf::from("/tmp/audit.jsonl"));
-    }
-
-    #[test]
-    fn test_from_path_ref() {
-        let sink = FileAuditSink::from(Path::new("/var/log/audit.jsonl"));
-        assert_eq!(sink.path, PathBuf::from("/var/log/audit.jsonl"));
     }
 }

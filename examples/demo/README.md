@@ -25,6 +25,13 @@ The LLM-backed hero driver prints labelled turns like this:
 
 The LLM path is best-effort because models can choose different tool paths. The deterministic CI path is the one used as a stable gate.
 
+The mini-authority publishes the complete mapping list from
+`[authority].mapping_rules_paths`. The Python SDK's `api.openai.com` requests and
+the weather/tool requests use `communication.external.send`, covered by the demo
+capability. Model and tool clients both send `x-firma-session-id` for that
+capability's session. Unknown hosts remain protected; the `paste.rs` mapping still
+reaches the Cedar forbid policy rather than bypassing enforcement.
+
 ## Prerequisites
 
 All modes require a working Rust toolchain and `protoc`.
@@ -74,7 +81,8 @@ The first run creates local runtime files under `examples/demo/`:
 - `authority-ca.crt` and `authority-ca.key` for Authority transport TLS;
 - `authority.crt` and `authority.key` for the Authority gRPC server cert/key;
 - `audit.key` for signing audit events;
-- `capability-demo-agent.toml` as the pre-issued permission token seed;
+- `capabilities/capability-demo-agent.toml` as the pre-issued permission token
+  seed under the Sidecar runtime boundary;
 - `revocations.txt` as the local revocation file;
 - `firma-ca/` for the Sidecar HTTPS interception CA;
 - `logs/` for Authority, Sidecar, and fixture logs.

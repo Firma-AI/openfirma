@@ -1,6 +1,5 @@
 //! Schema for the sidecar's top-level infrastructure sections:
-//! `sidecar.mode`, `[sidecar.policy]`, `[sidecar.ca]`, and
-//! `[sidecar.credentials.*]`.
+//! `[sidecar.policy]`, `[sidecar.ca]`, and `[sidecar.credentials.*]`.
 //!
 //! Representation only. `firma-sidecar` validates these values and parses
 //! them into its own configuration types (for example, the credential
@@ -9,20 +8,6 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-
-/// Enforcement mode for the sidecar.
-///
-/// `enforce` (default) is normal fail-closed operation; `monitor` is
-/// observe-only. The monitor-mode opt-in gating lives in `firma-sidecar`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SidecarMode {
-    /// Normal fail-closed enforcement (default).
-    #[default]
-    Enforce,
-    /// Observe-only: classify and log every call, but never block.
-    Monitor,
-}
 
 /// Policy source settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -42,20 +27,15 @@ impl Default for PolicyConfig {
 }
 
 /// Certificate authority directory settings.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaConfig {
     /// Directory containing CA key material.
-    #[serde(default = "default_ca_dir")]
-    pub dir: PathBuf,
-}
-
-impl Default for CaConfig {
-    fn default() -> Self {
-        Self {
-            dir: default_ca_dir(),
-        }
-    }
+    ///
+    /// Unset defaults to `generated-firma-ca` in the resolved state directory,
+    /// which is where `firma config` also points it explicitly.
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
 }
 
 /// Credential injection mode selector.
@@ -108,13 +88,6 @@ pub struct CredentialConfig {
 
 /// Sentinel: unset `sidecar.policy.dir`.
 const DEFAULT_POLICY_DIR: &str = "./policies/";
-/// Sentinel: unset `sidecar.ca.dir` (state-managed; never re-based).
-const DEFAULT_CA_DIR: &str = "./firma-ca/";
-
 fn default_policy_dir() -> PathBuf {
     PathBuf::from(DEFAULT_POLICY_DIR)
-}
-
-fn default_ca_dir() -> PathBuf {
-    PathBuf::from(DEFAULT_CA_DIR)
 }

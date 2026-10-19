@@ -1,0 +1,18 @@
+[package]
+name = "firma-config-utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Reusable value types for Firma configuration"
+
+[lints]
+workspace = true
+
+[dependencies]
+jiff = { workspace = true, features = ["serde"] }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

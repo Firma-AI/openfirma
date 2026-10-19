@@ -1,7 +1,17 @@
-# GitHub Copilot CLI mapping — CONNECT-level classification for Copilot's
-# outbound hosts. github.com / api.github.com are NOT MITM'd for Copilot
-# (they are added to https_mitm.bypass_hosts by `firma config`), so only these
-# CONNECT rules fire. All Copilot traffic is communication.external.send.
+# GitHub Copilot CLI mapping — classification for Copilot's outbound hosts.
+# github.com / api.github.com / uploads.github.com are NOT MITM'd for Copilot
+# (they are added to https_mitm.bypass_hosts by `firma config`), so for those
+# three only the CONNECT rules fire. A tunnel cannot identify its calling
+# application: the shared standard catalog uses GitHub's coarse code.write
+# class for github.com and api.github.com, including when selected through the
+# Copilot profile. An opaque API tunnel may contain writes. Copilot service and
+# upload hosts retain communication.external.send.
+#
+# The Sidecar intercepts every host by default, so the Copilot service hosts
+# are decrypted and their inner requests are classified individually. Without
+# a rule covering those requests they would match nothing, and a protected
+# host with no matching rule is denied as unclassified — Copilot would break.
+# Each host therefore carries a REST fallback below.
 
 [[rules]]
 method = "CONNECT"
@@ -16,14 +26,33 @@ action_class = "communication.external.send"
 [[rules]]
 method = "CONNECT"
 host = "api.github.com"
-action_class = "communication.external.send"
+action_class = "code.write"
 
 [[rules]]
 method = "CONNECT"
 host = "github.com"
-action_class = "communication.external.send"
+action_class = "code.write"
 
 [[rules]]
 method = "CONNECT"
 host = "uploads.github.com"
+action_class = "communication.external.send"
+
+# REST fallback (post-MITM). Each entry keeps the action class of its CONNECT
+# rule, so interception does not change the policy outcome for a host — it only
+# stops the inner requests from being denied as unclassified.
+#
+# The three GitHub hosts deliberately have no fallback: `firma config` bypasses
+# them for this profile, so they are never decrypted here. An operator who
+# removes them from https_mitm.bypass_hosts wants real GitHub enforcement and
+# should select the `github` mapping, which classifies those endpoints
+# individually instead of as one coarse class.
+[[rules]]
+host = "api.individual.githubcopilot.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "telemetry.individual.githubcopilot.com"
+path = "*"
 action_class = "communication.external.send"

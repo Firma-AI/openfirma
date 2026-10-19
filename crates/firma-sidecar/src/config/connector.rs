@@ -6,17 +6,18 @@
 //! the [`GenericHttpConnector`](crate::connector::provider::GenericHttpConnector).
 
 use std::collections::HashSet;
-use std::time::Duration;
+use std::num::NonZeroU32;
 
 use firma_config_schema::sidecar::connector::{
     ConnectorConfig as SchemaConnectorConfig, HostConnectorConfig as SchemaHostConnectorConfig,
 };
+use firma_config_utils::NonZeroDuration;
 
 /// Validated top-level connector configuration.
 #[derive(Debug, Clone)]
 pub struct ConnectorConfig {
     /// Timeout applied to the registry default.
-    pub default_timeout: Duration,
+    pub default_timeout: NonZeroDuration,
     /// Per-host overrides.
     pub hosts: Vec<HostConnectorConfig>,
 }
@@ -27,11 +28,11 @@ pub struct HostConnectorConfig {
     /// Target host this entry applies to.
     pub host: String,
     /// Sustained refill rate, in requests per second.
-    pub rps: u32,
+    pub rps: NonZeroU32,
     /// Token-bucket capacity.
-    pub burst: u32,
+    pub burst: NonZeroU32,
     /// Dispatch timeout applied to this host.
-    pub timeout: Duration,
+    pub timeout: NonZeroDuration,
 }
 
 /// Error validating a [`ConnectorConfig`].
@@ -71,7 +72,7 @@ pub enum HostConnectorConfigError {
 impl Default for ConnectorConfig {
     fn default() -> Self {
         Self {
-            default_timeout: Duration::from_secs(30),
+            default_timeout: SchemaConnectorConfig::default().default_timeout,
             hosts: Vec::new(),
         }
     }
@@ -84,17 +85,13 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
         if schema.host.trim().is_empty() {
             return Err(HostConnectorConfigError::EmptyHost);
         }
-        if schema.rps == 0 {
-            return Err(HostConnectorConfigError::ZeroRps);
-        }
-        if schema.burst == 0 {
-            return Err(HostConnectorConfigError::ZeroBurst);
-        }
+        let rps = NonZeroU32::new(schema.rps).ok_or(HostConnectorConfigError::ZeroRps)?;
+        let burst = NonZeroU32::new(schema.burst).ok_or(HostConnectorConfigError::ZeroBurst)?;
         Ok(Self {
             host: schema.host,
-            rps: schema.rps,
-            burst: schema.burst,
-            timeout: schema.timeout.duration(),
+            rps,
+            burst,
+            timeout: schema.timeout,
         })
     }
 }
@@ -121,7 +118,7 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
             hosts.push(validated);
         }
         Ok(Self {
-            default_timeout: schema.default_timeout.duration(),
+            default_timeout: schema.default_timeout,
             hosts,
         })
     }
@@ -129,8 +126,9 @@ impl TryFrom<SchemaConnectorConfig> for ConnectorConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use firma_config_schema::utils::NonZeroDuration;
 
     fn host(host: &str, rps: u32, burst: u32, timeout: Duration) -> SchemaHostConnectorConfig {
         SchemaHostConnectorConfig {
@@ -155,7 +153,9 @@ mod tests {
     #[test]
     fn default_config_is_valid() {
         let d = ConnectorConfig::default();
-        assert!(ConnectorConfig::try_from(schema(d.default_timeout, Vec::new())).is_ok());
+        assert!(
+            ConnectorConfig::try_from(schema(d.default_timeout.duration(), Vec::new())).is_ok()
+        );
     }
 
     #[test]
@@ -224,9 +224,9 @@ mod tests {
             ],
         ))
         .expect("valid");
-        assert_eq!(config.default_timeout, Duration::from_secs(15));
+        assert_eq!(config.default_timeout.duration(), Duration::from_secs(15));
         assert_eq!(config.hosts.len(), 2);
         assert_eq!(config.hosts[0].host, "api.openai.com");
-        assert_eq!(config.hosts[1].timeout, Duration::from_secs(5));
+        assert_eq!(config.hosts[1].timeout.duration(), Duration::from_secs(5));
     }
 }

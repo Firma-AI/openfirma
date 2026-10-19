@@ -42,7 +42,15 @@ just install && just run
 
 ## What to try
 
-Ask the agent for normal outbound work, then ask it to exfiltrate text to a paste service. The mapped paste path is denied, while unmapped demo traffic can pass through when `default_protected = false`.
+Ask the agent for mapped outbound work, then ask it to exfiltrate text to a paste
+service. Policy denies the mapped paste path; unmatched requests are also denied
+by the protected Authority snapshot.
+
+`mapping-rules.toml` classifies every host the example agents reach. Hosts
+other than paste.rs are not intercepted, so their rules match the CONNECT
+tunnel. A mapped request still needs a capability token for its
+`x-firma-session-id` session before Cedar evaluates it; this example seeds no
+capability, so expect Stage 1 denials until you provision one.
 
 ## Files
 

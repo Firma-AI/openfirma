@@ -7,7 +7,7 @@ This guide provides ready-to-use local setups for `firma run` with:
 
 Both tracks assume:
 
-- `default_protected = true`
+- protected Authority mapping snapshots (unmatched traffic is denied)
 - sidecar in `http_proxy` mode
 - capability token tied to a stable `session_id`
 - authority stream enabled (fail-closed posture)
@@ -67,8 +67,9 @@ Note: the Claude mapping sample includes both:
 - `CONNECT` destination mappings, and
 - MITM inner HTTP path mappings (for example `/v1/*`, `/api/*`)
 
-This is required when `sidecar.interceptor.https_mitm.enabled = true` and
-`sidecar.mapping.default_protected = true`.
+This is required when `sidecar.interceptor.https_mitm.enabled = true`: the
+Sidecar sees the decrypted inner requests, and the Authority's snapshot denies
+any request that no rule matches.
 
 Recommended local destinations:
 
@@ -83,17 +84,9 @@ examples/firma-run/local/setup.sh
 
 This creates `.local/` scaffolding, including audit key material.
 
-## 2) Start authority (required for fail-closed stream mode)
+## 2) Choose an agent track (Codex or Claude)
 
-```bash
-cargo run -p firma -- authority --config .local/firma.toml
-```
-
-Keep this running in its own terminal.
-
-## 3) Choose an agent track (Codex or Claude)
-
-Copy one sidecar sample and one mapping sample into `.local/`:
+Copy one config sample and one mapping sample into `.local/`:
 
 ```bash
 # Codex track
@@ -105,36 +98,48 @@ cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local
 # cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 ```
 
-## 4) Run the agent (automatic capability mint)
+## 3) Complete the local Authority configuration
 
-`firma run` mints a capability automatically on each session start. No manual
-token issuance is required.
-
-## 5) Start sidecar
+`firma config` adds the Authority listener, generates the Authority key and
+TLS material, and keeps the sample's `[authority].mapping_rules_paths`:
 
 ```bash
-cargo run -p firma -- sidecar -c .local/firma.toml
+cargo run -p firma -- config --yes --mode agent-local --profile codex \
+  --agent-id agt_01j0000000e008000000000001 --output-dir .local
 ```
 
-Verify startup includes:
+Use `--profile claude-code` for the Claude track.
 
-- `authority stream connected endpoint=...` (not disabled)
-- `ready`
+## 4) Start the Authority
 
-## 6) Run the agent through `firma run`
+```bash
+cargo run -p firma -- authority --config .local/firma.toml
+```
+
+Keep this running in its own terminal. Every Sidecar requires it: the
+Authority publishes the policy and mapping snapshot.
+
+## 5) Run the agent through `firma run`
+
+`firma run` starts a per-session Sidecar and mints a capability automatically
+on each session start. No manual token issuance is required.
 
 Codex:
 
 ```bash
 export FIRMA_RUN_REQUIRE_SESSION_ID=true
-cargo run -p firma -- run --profile codex -- codex
+export FIRMA_RUN_SESSION_ID=<stable-value>
+cargo run -p firma -- run --config .local/firma.toml --profile codex \
+  --authority https://127.0.0.1:50051 --sidecar local -- codex
 ```
 
 Claude:
 
 ```bash
 export FIRMA_RUN_REQUIRE_SESSION_ID=true
-cargo run -p firma -- run --profile claude-code -- claude
+export FIRMA_RUN_SESSION_ID=<stable-value>
+cargo run -p firma -- run --config .local/firma.toml --profile claude-code \
+  --authority https://127.0.0.1:50051 --sidecar local -- claude
 ```
 
 ## Expected behavior
@@ -154,7 +159,8 @@ Capability expired:
 Unclassified endpoint:
 
 - Add a specific mapping rule in `.local/mapping-rules.toml` for method/host/path.
-- Restart sidecar.
+- The Authority watches its mapping files and publishes the updated snapshot;
+  running Sidecars apply it without a restart.
 
 ## Validation checks
 

@@ -14,6 +14,8 @@
 //! shim  →  {"bin":"bws","args":["secret","get","abc"]}\n
 //! broker → {"type":"executed","output":[{"stream":"stdout","data":"<base64>"}],"status":{"type":"exited","code":0}}\n
 //! broker → {"type":"rejected","error":"<reason>"}\n
+//! guest →  {"control":{"type":"readiness","version":1}}\n
+//! broker → {"type":"ready","version":1}\n
 //! ```
 //!
 //! Layout mirrors the secret gateway's: shared wire types live here,
@@ -30,6 +32,12 @@
 pub mod client;
 pub mod server;
 pub mod stream;
+
+/// Environment variable containing the secret broker endpoint used by the shim.
+pub const BROKER_ADDR_ENV: &str = "FIRMA_SECRET_BROKER_ADDR";
+
+/// Current version of the broker control protocol.
+pub const BROKER_CONTROL_VERSION: u32 = 1;
 
 use std::{fmt::Display, io, ops::Deref};
 
@@ -118,6 +126,78 @@ pub struct BrokerRequest<'a> {
     /// Arguments (everything after the binary name).
     #[serde(borrow)]
     pub args: Vec<Str<'a>>,
+}
+
+/// Versioned guest → broker readiness request.
+///
+/// Execution requests deliberately remain outside this envelope so their JSON
+/// representation stays compatible with existing shims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct BrokerReadinessRequest {
+    control: BrokerReadinessControl,
+}
+
+impl BrokerReadinessRequest {
+    /// Builds a readiness request for the current control protocol.
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            control: BrokerReadinessControl {
+                kind: BrokerReadinessKind::Readiness,
+                version: BROKER_CONTROL_VERSION,
+            },
+        }
+    }
+
+    /// Returns the requested control protocol version.
+    #[must_use]
+    pub const fn version(self) -> u32 {
+        self.control.version
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+struct BrokerReadinessControl {
+    #[serde(rename = "type")]
+    kind: BrokerReadinessKind,
+    version: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BrokerReadinessKind {
+    Readiness,
+}
+
+/// Affirmative broker → guest readiness response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct BrokerReadinessResponse {
+    #[serde(rename = "type")]
+    kind: BrokerReadyKind,
+    version: u32,
+}
+
+impl BrokerReadinessResponse {
+    /// Builds the affirmative response for the current control protocol.
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            kind: BrokerReadyKind::Ready,
+            version: BROKER_CONTROL_VERSION,
+        }
+    }
+
+    /// Returns the broker control protocol version.
+    #[must_use]
+    pub const fn version(self) -> u32 {
+        self.version
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BrokerReadyKind {
+    Ready,
 }
 
 /// One base64-encoded, stream-tagged output chunk in a broker response.

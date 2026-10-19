@@ -4,7 +4,10 @@
 )]
 
 use std::assert_matches;
+use std::num::NonZeroU64;
 use std::time::Duration;
+
+use firma_config_utils::NonZeroDuration;
 
 use firma_config_schema::sidecar::local_exec::DefaultAction;
 use firma_identifiers::SandboxId;
@@ -35,8 +38,8 @@ fn handler(expected_sandbox_id: Option<SandboxId>) -> LocalExecHandler {
     LocalExecHandler::new(LocalExecHandlerConfig {
         default_action: DefaultAction::PendingHitl,
         expected_sandbox_id,
-        token_ttl: Duration::from_mins(1),
-        retry_after_ms: 100,
+        token_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+        retry_after_ms: const { NonZeroU64::new(100).unwrap() },
     })
 }
 

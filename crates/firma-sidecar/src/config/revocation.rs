@@ -1,5 +1,7 @@
 //! `[sidecar.revocation]` configuration section.
 
+use std::num::NonZeroUsize;
+
 use firma_config_schema::sidecar::revocation::RevocationConfig as SchemaRevocationConfig;
 
 use crate::enforcement::revocation::RevocationConfig as StoreConfig;
@@ -8,11 +10,11 @@ use crate::enforcement::revocation::RevocationConfig as StoreConfig;
 #[derive(Debug, Clone, Copy)]
 pub struct RevocationConfig {
     /// Expected distinct revoked tokens the bloom is sized for.
-    pub(crate) capacity: usize,
+    pub(crate) capacity: NonZeroUsize,
     /// Target false positive rate.
     pub(crate) fpr: f64,
     /// Capacity of the confirmed-positive LRU cache.
-    pub(crate) lru_capacity: usize,
+    pub(crate) lru_capacity: NonZeroUsize,
 }
 
 /// Error validating a [`RevocationConfig`].
@@ -31,10 +33,11 @@ pub enum RevocationConfigError {
 
 impl Default for RevocationConfig {
     fn default() -> Self {
+        let d = StoreConfig::default();
         Self {
-            capacity: 1_000_000,
-            fpr: 0.0001,
-            lru_capacity: 100_000,
+            capacity: d.capacity,
+            fpr: d.fpr,
+            lru_capacity: d.lru_capacity,
         }
     }
 }
@@ -43,19 +46,17 @@ impl TryFrom<SchemaRevocationConfig> for RevocationConfig {
     type Error = RevocationConfigError;
 
     fn try_from(schema: SchemaRevocationConfig) -> Result<Self, Self::Error> {
-        if schema.capacity == 0 {
-            return Err(RevocationConfigError::ZeroCapacity);
-        }
+        let capacity =
+            NonZeroUsize::new(schema.capacity).ok_or(RevocationConfigError::ZeroCapacity)?;
         if !(schema.fpr > 0.0 && schema.fpr < 1.0) {
             return Err(RevocationConfigError::FprOutOfRange);
         }
-        if schema.lru_capacity == 0 {
-            return Err(RevocationConfigError::ZeroLruCapacity);
-        }
+        let lru_capacity =
+            NonZeroUsize::new(schema.lru_capacity).ok_or(RevocationConfigError::ZeroLruCapacity)?;
         Ok(Self {
-            capacity: schema.capacity,
+            capacity,
             fpr: schema.fpr,
-            lru_capacity: schema.lru_capacity,
+            lru_capacity,
         })
     }
 }
@@ -85,7 +86,10 @@ mod tests {
     #[test]
     fn defaults_valid() {
         let d = RevocationConfig::default();
-        assert!(RevocationConfig::try_from(schema(d.capacity, d.fpr, d.lru_capacity)).is_ok());
+        assert!(
+            RevocationConfig::try_from(schema(d.capacity.get(), d.fpr, d.lru_capacity.get()))
+                .is_ok()
+        );
     }
 
     #[test]

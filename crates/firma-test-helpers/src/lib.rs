@@ -5,12 +5,26 @@
     reason = "fixture setup failures should fail the calling test immediately"
 )]
 
+pub mod bounded;
+
 use std::process::Command;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 const CONFIG_ENV: &str = "FIRMA_PROCESS_FIXTURE_CONFIG";
+
+/// Returns the body of the first fenced `toml` code block after `marker`.
+///
+/// Documentation tests use it to load the configuration examples a guide
+/// shows under a heading, so the examples cannot drift from the parser.
+#[must_use]
+pub fn toml_fence_after<'a>(markdown: &'a str, marker: &str) -> Option<&'a str> {
+    markdown
+        .split_once(marker)
+        .and_then(|(_, remainder)| remainder.split_once("```toml"))
+        .and_then(|(_, remainder)| remainder.split_once("```").map(|(toml, _)| toml))
+}
 
 /// Builds a command that re-executes the current test binary and selects one
 /// ignored fixture test.

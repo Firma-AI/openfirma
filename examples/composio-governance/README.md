@@ -13,9 +13,7 @@ The automated scenario proves:
 
 - an allowed tool execution reaches the mock TLS upstream once;
 - a denied execution reaches it zero times;
-- a mixed allow/deny multi-tool batch is blocked atomically;
-- monitor mode forwards the original request once and retains the would-deny
-  audit reason.
+- a mixed allow/deny multi-tool batch is blocked atomically.
 
 The test uses synthetic user and account selectors and empty tool arguments. It
 requires no API key, OAuth token, or connected account.

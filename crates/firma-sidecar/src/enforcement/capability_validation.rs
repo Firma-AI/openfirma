@@ -8,8 +8,7 @@
 //!    action class and resource scope (ADR-002). The agent knows nothing about
 //!    Firma; the sidecar selects the correct token internally.
 //! 2. **Token validation** — parse PASETO v4, verify Ed25519 signature, check
-//!    expiry (with configurable clock skew tolerance), and check revocation via
-//!    bloom filter + LRU cache.
+//!    expiry, and check revocation via bloom filter + LRU cache.
 //!
 //! All operations are fully local — the Authority is never contacted on the
 //! hot path. Target latency: < 1 ms p95.
@@ -29,7 +28,6 @@
 
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use arc_swap::ArcSwap;
 
@@ -39,7 +37,6 @@ use firma_identifiers::AgentId;
 use firma_identifiers::TokenId;
 
 use crate::normalizer::NormalizedEnvelope;
-use firma_config_schema::sidecar::TenancyMode;
 
 use super::capability_map::CapabilityMap;
 use super::decision::{
@@ -95,7 +92,6 @@ impl Deref for CapabilityMapHandle {
 ///
 /// Target: < 1ms p95.
 pub struct CapabilityValidator {
-    clock_skew_tolerance: Duration,
     /// Hot-swappable capability map. Rebuilt from the seed file(s) by the
     /// background reload task when `firma run` re-mints the per-session token,
     /// so a long session never fails closed on an expired-but-renewable token.
@@ -103,7 +99,8 @@ pub struct CapabilityValidator {
     capability_map: CapabilityMapHandle,
     revocation: Arc<dyn RevocationStore + Send + Sync>,
     verifier: Arc<dyn TokenVerifier + Send + Sync>,
-    tenancy_mode: TenancyMode,
+    /// Agent identity this validator is bound to, established by the first
+    /// request it admits. A sidecar process serves exactly one agent.
     first_agent_id: OnceLock<AgentId>,
 }
 
@@ -115,15 +112,11 @@ impl CapabilityValidator {
         capability_map: impl Into<CapabilityMapHandle>,
         verifier: Arc<dyn TokenVerifier + Send + Sync>,
         revocation: Arc<dyn RevocationStore + Send + Sync>,
-        clock_skew_tolerance: Duration,
-        tenancy_mode: TenancyMode,
     ) -> Self {
         Self {
-            clock_skew_tolerance,
             capability_map: capability_map.into(),
             revocation,
             verifier,
-            tenancy_mode,
             first_agent_id: OnceLock::new(),
         }
     }
@@ -163,22 +156,20 @@ impl CapabilityValidator {
         let claims = self.validate(&entry.raw_token)?;
 
         // Step 3: Enforce single-agent tenancy (V1 ADR §2)
-        if self.tenancy_mode == TenancyMode::SingleAgent {
-            let first_agent = self.first_agent_id.get_or_init(|| claims.agent_id);
-            if first_agent != &claims.agent_id {
-                return Err(EnforcementDecision::Deny {
-                    reason: firma_core::DenyReason::TenantMismatch,
-                    stage: EnforcementStage::CapabilityValidation(
-                        CapabilityValidationStage::TokenValidation,
-                    ),
-                    detail: format!(
-                        "agent_id '{}' does not match first observed agent_id '{}'",
-                        claims.agent_id, first_agent
-                    ),
-                    envelope: Some(envelope.clone()),
-                    identity: Some(DenyIdentity::from_claims(&claims)),
-                });
-            }
+        let first_agent = self.first_agent_id.get_or_init(|| claims.agent_id);
+        if first_agent != &claims.agent_id {
+            return Err(EnforcementDecision::Deny {
+                reason: firma_core::DenyReason::TenantMismatch,
+                stage: EnforcementStage::CapabilityValidation(
+                    CapabilityValidationStage::TokenValidation,
+                ),
+                detail: format!(
+                    "agent_id '{}' does not match first observed agent_id '{}'",
+                    claims.agent_id, first_agent
+                ),
+                envelope: Some(envelope.clone()),
+                identity: Some(DenyIdentity::from_claims(&claims)),
+            });
         }
 
         Ok(ValidatedCapability {
@@ -193,7 +184,7 @@ impl CapabilityValidator {
     /// 1. Parse PASETO v4 token structure
     /// 2. Verify Ed25519 cryptographic signature
     /// 3. Extract claims
-    /// 4. Check expiry (with configurable clock skew tolerance)
+    /// 4. Check expiry
     /// 5. Check revocation via `RevocationStore`
     ///
     /// Returns verified `CapabilityClaims` on success, or DENY on failure.
@@ -202,11 +193,6 @@ impl CapabilityValidator {
     ///
     /// Returns `EnforcementDecision::Deny` if the token is invalid, expired,
     /// or revoked.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the clock skew tolerance exceeds the range representable by
-    /// `chrono::Duration` (practically unreachable).
     #[expect(
         clippy::result_large_err,
         reason = "domain decision carries denial context"
@@ -221,11 +207,11 @@ impl CapabilityValidator {
             .verify(raw_token)
             .map_err(|e| EnforcementError::from(e).into_deny(stage))?;
 
-        // Step 4: Check expiry with clock skew tolerance
+        // Step 4: Check expiry. Strictly against the sidecar clock: no skew
+        // window is forgiven, so a token is unusable the instant it expires.
+        // Keep the Authority and Sidecar clocks in sync.
         let now = chrono::Utc::now();
-        let tolerance = chrono::Duration::from_std(self.clock_skew_tolerance)
-            .unwrap_or(chrono::Duration::zero());
-        if claims.expiry + tolerance <= now {
+        if claims.expiry <= now {
             return Err(EnforcementError::TokenValidation(TokenError::Expired {
                 token_id: claims.token_id,
             })
@@ -347,8 +333,6 @@ mod tests {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         )
     }
 
@@ -366,8 +350,6 @@ mod tests {
             test_capability_map(),
             Arc::new(FailingVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.bad_token");
@@ -390,8 +372,6 @@ mod tests {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         assert!(
             validator
@@ -426,8 +406,6 @@ mod tests {
             Arc::new(MockRevocationStore {
                 revoked: vec!["ctok_01j0000000e008000000000001".to_string()],
             }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -448,8 +426,6 @@ mod tests {
             test_capability_map(),
             Arc::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -476,8 +452,6 @@ mod tests {
             test_capability_map(),
             Arc::new(MalformedVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("garbage-not-a-token");
@@ -485,26 +459,6 @@ mod tests {
         assert_eq!(
             result.unwrap_err().deny_reason(),
             Some(firma_core::DenyReason::TokenInvalid)
-        );
-    }
-
-    #[test]
-    fn test_clock_skew_tolerance_allows_slightly_expired() {
-        let mut claims = valid_claims();
-        claims.expiry = Utc::now() - chrono::Duration::seconds(2);
-
-        let validator = CapabilityValidator::new(
-            test_capability_map(),
-            Arc::new(MockVerifier { claims }),
-            Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(5),
-            TenancyMode::SingleAgent,
-        );
-
-        let result = validator.validate("v4.public.test_token");
-        assert!(
-            result.is_ok(),
-            "clock skew tolerance should allow slightly expired token"
         );
     }
 
@@ -531,8 +485,6 @@ mod tests {
             test_capability_map(),
             Arc::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
 
         let result = validator.enforce(&envelope, "sess_001");
@@ -568,8 +520,6 @@ mod tests {
             test_capability_map(),
             Arc::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
 
         let result = validator.enforce(&envelope, "sess_001");
@@ -595,8 +545,6 @@ mod tests {
                 test_capability_map(),
                 verifier,
                 Arc::new(MockRevocationStore { revoked: vec![] }),
-                Duration::from_secs(0),
-                TenancyMode::SingleAgent,
             );
             let result = validator.validate("any");
             assert!(
@@ -619,8 +567,6 @@ mod tests {
             test_capability_map(),
             Arc::new(verifier.clone()),
             Arc::new(MockRevocationStore { revoked: vec![] }),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
 
         let envelope = NormalizedEnvelope {

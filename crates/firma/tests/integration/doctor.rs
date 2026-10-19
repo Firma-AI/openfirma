@@ -17,7 +17,12 @@ use std::os::unix::fs::PermissionsExt as _;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 
+use firma_config_schema::sidecar::{AuthorityConfig, SidecarConfig};
+#[cfg(unix)]
+use firma_config_schema::sidecar::{InterceptorConfig, InterceptorMode};
 use serde_json::Value;
+
+use super::config_fixture::write_section;
 
 #[test]
 fn doctor_json_emits_valid_envelope() {
@@ -81,11 +86,96 @@ fn config_check_from_output(output: &Output) -> Value {
         .clone()
 }
 
+/// Regression: the doctor validated the `[sidecar]` section without the state
+/// directory, so a configuration the Sidecar starts on — an `https://`
+/// Authority whose CA certificate is only in the state directory — was
+/// reported as `config parsed: fail`.
+#[test]
+fn doctor_accepts_an_authority_ca_that_defaults_from_the_state_dir() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(state_dir.join("tls")).expect("create tls directory");
+    std::fs::write(state_dir.join("tls").join("authority-ca.crt"), "ca")
+        .expect("write authority CA certificate");
+    let config_path = tmp.path().join("firma.toml");
+    write_section(
+        &config_path,
+        "sidecar",
+        &SidecarConfig {
+            authority: AuthorityConfig {
+                url: Some("https://authority.test:9443".to_owned()),
+                ..AuthorityConfig::default()
+            },
+            ..SidecarConfig::default()
+        },
+    )
+    .expect("write config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["doctor", "--json", "--config"])
+        .arg(&config_path)
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .args(["--timeout-ms", "250"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("spawn firma doctor");
+    let config_check = config_check_from_output(&output);
+
+    assert_eq!(
+        config_check["status"], "ok",
+        "doctor rejected a config the Sidecar accepts: {config_check}"
+    );
+}
+
+/// Without the generated CA the same config stays a failure, and the reason
+/// names the path the Sidecar looked for.
+#[test]
+fn doctor_reports_a_missing_authority_ca_with_the_state_dir_default() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let state_dir = tmp.path().join("state");
+    let config_path = tmp.path().join("firma.toml");
+    write_section(
+        &config_path,
+        "sidecar",
+        &SidecarConfig {
+            authority: AuthorityConfig {
+                url: Some("https://authority.test:9443".to_owned()),
+                ..AuthorityConfig::default()
+            },
+            ..SidecarConfig::default()
+        },
+    )
+    .expect("write config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["doctor", "--json", "--config"])
+        .arg(&config_path)
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .args(["--timeout-ms", "250"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("spawn firma doctor");
+    let config_check = config_check_from_output(&output);
+    let reason = config_check["reason"].as_str().expect("failure reason");
+    let expected = state_dir.join("tls").join("authority-ca.crt");
+
+    assert_eq!(config_check["status"], "fail");
+    assert!(
+        reason.contains(expected.to_string_lossy().as_ref()),
+        "reason must name the state-directory default '{}'; got: {reason}",
+        expected.display()
+    );
+}
+
 #[test]
 fn doctor_uses_only_canonical_config_environment_variable() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_path = tmp.path().join("firma.toml");
-    std::fs::write(&config_path, "[sidecar]\n").expect("write config");
+    let mut schema = SidecarConfig::default();
+    schema.authority.url = Some("http://127.0.0.1:50051".into());
+    write_section(&config_path, "sidecar", &schema).expect("write config");
     let removed_path = tmp.path().join("removed.toml");
     std::fs::write(&removed_path, "not valid TOML").expect("write removed config");
 
@@ -181,9 +271,20 @@ fn doctor_uses_lifecycle_socket_default_when_path_is_omitted() {
     let socket_path = state_dir.join("sidecar.sock");
     let _listener = UnixListener::bind(&socket_path).expect("bind sidecar socket");
     let config_path = tmp.path().join("firma.toml");
-    fs::write(
+    write_section(
         &config_path,
-        "[sidecar.interceptor]\nmode = \"unix_socket\"\n",
+        "sidecar",
+        &SidecarConfig {
+            interceptor: InterceptorConfig {
+                mode: InterceptorMode::UnixSocket,
+                ..InterceptorConfig::default()
+            },
+            authority: AuthorityConfig {
+                url: Some("http://127.0.0.1:50051".into()),
+                ..Default::default()
+            },
+            ..SidecarConfig::default()
+        },
     )
     .expect("write config");
 

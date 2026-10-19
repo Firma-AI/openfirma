@@ -307,10 +307,16 @@ mod tests {
 
     #[test]
     fn authority_endpoint_extracts_listen_addr() {
-        let cfg = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
-            listen_addr: "127.0.0.1:60051".to_owned(),
-            ..authority_schema::AuthorityConfig::default()
-        })
+        let state = tempfile::tempdir().expect("tempdir");
+        let cfg = AuthorityConfigBuilder::new(
+            authority_schema::AuthorityConfig {
+                listen_addr: "127.0.0.1:60051".to_owned(),
+                mapping_rules_paths: vec!["mapping-rules.toml".into()],
+                ..authority_schema::AuthorityConfig::default()
+            },
+            &firma_runtime_state::RuntimeLayout::from_root(state.path()),
+        )
+        .without_tls()
         .build()
         .expect("valid authority config");
         let endpoint = endpoint_from_authority(&cfg).expect("endpoint");
@@ -333,10 +339,16 @@ mod tests {
 
     #[test]
     fn endpoint_from_authority_returns_none_on_unparseable_listen_addr() {
-        let cfg = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
-            listen_addr: "not-an-addr".to_owned(),
-            ..authority_schema::AuthorityConfig::default()
-        })
+        let state = tempfile::tempdir().expect("tempdir");
+        let cfg = AuthorityConfigBuilder::new(
+            authority_schema::AuthorityConfig {
+                listen_addr: "not-an-addr".to_owned(),
+                mapping_rules_paths: vec!["mapping-rules.toml".into()],
+                ..authority_schema::AuthorityConfig::default()
+            },
+            &firma_runtime_state::RuntimeLayout::from_root(state.path()),
+        )
+        .without_tls()
         .build()
         .expect("valid authority config");
         assert!(endpoint_from_authority(&cfg).is_none());

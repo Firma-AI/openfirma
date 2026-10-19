@@ -5,11 +5,11 @@
 //! - Sidecar CA first-run generation and existing-state load lifecycle
 //! - Per-host leaf certificate issuance and bounded cache
 
-use std::collections::VecDeque;
 use std::fs;
 #[cfg(unix)]
 use std::io::Write;
 use std::net::IpAddr;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,6 +17,7 @@ use std::time::Instant;
 #[cfg(test)]
 use std::time::Duration;
 
+use lru::LruCache;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
@@ -31,7 +32,7 @@ use x509_parser::pem::parse_x509_pem;
 
 use firma_runtime_state::runtime_paths::{CA_CERT_FILE_NAME, CA_KEY_FILE_NAME};
 
-use crate::config::HttpsMitmConfig;
+use crate::config::{HostSyntax, HttpsMitmConfig, validate_dns_hostname};
 
 /// Runtime state for HTTPS MITM interception.
 pub struct HttpsMitmRuntime {
@@ -147,20 +148,15 @@ struct CachedLeafCert {
 }
 
 struct LeafCertCache {
-    capacity: usize,
-    order: VecDeque<String>,
-    entries: std::collections::HashMap<String, CachedLeafCert>,
+    entries: LruCache<String, CachedLeafCert>,
 }
 
 impl LeafCertCache {
     fn new(capacity: usize) -> Result<Self, String> {
-        if capacity == 0 {
-            return Err("MITM certificate cache capacity must be > 0".to_string());
-        }
+        let capacity = NonZeroUsize::new(capacity)
+            .ok_or_else(|| "MITM certificate cache capacity must be > 0".to_string())?;
         Ok(Self {
-            capacity,
-            order: VecDeque::new(),
-            entries: std::collections::HashMap::new(),
+            entries: LruCache::new(capacity),
         })
     }
 
@@ -171,51 +167,19 @@ impl LeafCertCache {
 
     fn get(&mut self, host: &str) -> Option<CachedLeafCert> {
         let now = Instant::now();
-        if let Some(entry) = self.entries.get(host).cloned()
-            && entry.expires_at > now
+        if self
+            .entries
+            .peek(host)
+            .is_some_and(|entry| entry.expires_at > now)
         {
-            self.touch(host);
-            return Some(entry);
+            return self.entries.get(host).cloned();
         }
-        self.remove(host);
+        self.entries.pop(host);
         None
     }
 
     fn put(&mut self, host: String, cert: CachedLeafCert) {
-        if self.entries.contains_key(&host) {
-            self.entries.insert(host.clone(), cert);
-            self.touch(&host);
-            return;
-        }
-
-        self.entries.insert(host.clone(), cert);
-        self.order.push_back(host);
-        self.evict_if_needed();
-    }
-
-    fn touch(&mut self, host: &str) {
-        if let Some(pos) = self.order.iter().position(|h| h == host)
-            && let Some(existing) = self.order.remove(pos)
-        {
-            self.order.push_back(existing);
-        }
-    }
-
-    fn evict_if_needed(&mut self) {
-        while self.entries.len() > self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn remove(&mut self, host: &str) {
-        self.entries.remove(host);
-        if let Some(pos) = self.order.iter().position(|h| h == host) {
-            let _ = self.order.remove(pos);
-        }
+        self.entries.put(host, cert);
     }
 }
 
@@ -451,7 +415,11 @@ fn leaf_certificate_params(host: &str) -> Result<CertificateParams, String> {
     if let Ok(ip) = normalized.parse::<IpAddr>() {
         params.subject_alt_names.push(SanType::IpAddress(ip));
     } else {
-        validate_dns_hostname(&normalized)?;
+        // Strict DNS, never `DnsOrUnderscore`: an underscore host has no
+        // certificate that can carry it, which is why `bypass_hosts` accepts
+        // one and the interception selectors do not.
+        validate_dns_hostname(&normalized, HostSyntax::Dns)
+            .map_err(|error| format!("leaf certificate host '{normalized}': {error}"))?;
         let dns_name = normalized
             .clone()
             .try_into()
@@ -515,42 +483,6 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
     false
 }
 
-fn validate_dns_hostname(host: &str) -> Result<(), String> {
-    if host.is_empty() {
-        return Err("invalid DNS hostname: empty value".to_string());
-    }
-    if host.len() > 253 {
-        return Err(format!(
-            "invalid DNS hostname '{host}': exceeds 253-character limit"
-        ));
-    }
-
-    for label in host.split('.') {
-        if label.is_empty() {
-            return Err(format!(
-                "invalid DNS hostname '{host}': contains empty label"
-            ));
-        }
-        if label.len() > 63 {
-            return Err(format!(
-                "invalid DNS hostname '{host}': label '{label}' exceeds 63-character limit"
-            ));
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            return Err(format!(
-                "invalid DNS hostname '{host}': label '{label}' starts/ends with '-'"
-            ));
-        }
-        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(format!(
-                "invalid DNS hostname '{host}': label '{label}' contains non-DNS characters"
-            ));
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -577,23 +509,26 @@ mod tests {
     }
 
     #[test]
-    fn validate_dns_hostname_accepts_standard_host() {
-        assert!(validate_dns_hostname("api.openai.com").is_ok());
-        assert!(validate_dns_hostname("xn--bcher-kva.example").is_ok());
+    fn leaf_params_accept_a_standard_host() {
+        assert!(leaf_certificate_params("api.openai.com").is_ok());
+        assert!(leaf_certificate_params("xn--bcher-kva.example").is_ok());
     }
 
+    /// Issuance stays strict even though `bypass_hosts` accepts underscores:
+    /// the shared validator is asked with [`HostSyntax::Dns`] here.
     #[test]
-    fn validate_dns_hostname_rejects_underscore() {
-        let err = validate_dns_hostname("exa_mple.com")
+    fn leaf_params_reject_an_underscore_host() {
+        let err = leaf_certificate_params("exa_mple.com")
             .err()
             .unwrap_or_else(|| panic!("expected invalid DNS hostname"));
-        assert!(err.contains("non-DNS characters"));
+        assert!(err.contains("non-DNS characters"), "{err}");
+        assert!(err.contains("exa_mple.com"), "{err}");
     }
 
     #[test]
-    fn validate_dns_hostname_rejects_oversized_label() {
+    fn leaf_params_reject_an_oversized_label() {
         let host = format!("{}.com", "a".repeat(64));
-        let err = validate_dns_hostname(&host)
+        let err = leaf_certificate_params(&host)
             .err()
             .unwrap_or_else(|| panic!("expected oversized-label error"));
         assert!(err.contains("exceeds 63-character limit"));
@@ -617,6 +552,31 @@ mod tests {
 
         assert!(!runtime.should_intercept_host("api.openai.com"));
         assert!(runtime.should_intercept_host("chat.openai.com"));
+    }
+
+    /// `firma config` strips `enabled` and `intercept_hosts` on every run, so
+    /// this is the only global opt-out that survives one. It has to leave every
+    /// host uninspected under the shipped defaults, not just the ones a
+    /// narrowed `intercept_hosts` would have named.
+    #[test]
+    fn a_wildcard_bypass_leaves_every_host_uninspected() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let runtime = HttpsMitmRuntime::new(
+            HttpsMitmConfig {
+                bypass_hosts: vec!["*".to_string()],
+                ..HttpsMitmConfig::default()
+            },
+            dir.path(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(runtime.config.is_active(), "the default must stay active");
+        for host in ["api.openai.com", "internal.test:8443", "10.0.0.1"] {
+            assert!(
+                !runtime.should_intercept_host(host),
+                "{host} must stay uninspected"
+            );
+        }
     }
 
     #[test]

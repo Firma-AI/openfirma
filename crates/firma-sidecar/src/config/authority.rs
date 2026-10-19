@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use firma_config_schema::sidecar::authority::AuthorityConfig as SchemaAuthorityConfig;
+use firma_config_utils::NonZeroDuration;
 use firma_identifiers::{AgentId, AgentIdParseError};
 use hyper::Uri;
 
-use super::AuthorityTarget;
 use crate::authority_credentials::{SidecarCredentialsConfig, SidecarCredentialsConfigError};
 
 /// A validated Authority destination.
@@ -92,9 +92,6 @@ pub enum AuthorityEndpointError {
     /// The configured URL is not a valid URI.
     #[error("url must be a valid URI: {0}")]
     InvalidUrl(String),
-    /// A physical route was configured without a logical origin.
-    #[error("connect_addr requires url to be set")]
-    ConnectAddrWithoutUrl,
     /// The configured URL has no scheme.
     #[error("url must include a scheme")]
     MissingScheme,
@@ -116,18 +113,21 @@ pub enum AuthorityEndpointError {
 #[derive(Debug, Clone)]
 pub struct AuthorityConfig {
     /// Authority-registered `TypeID` for the agent represented by this Sidecar.
-    #[expect(dead_code, reason = "accepted for configuration compatibility")]
+    #[expect(
+        dead_code,
+        reason = "validated here and consumed by firma-run before sidecar startup"
+    )]
     pub(crate) agent_id: Option<AgentId>,
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
-    pub url: Option<String>,
+    pub url: String,
     /// Optional physical TCP destination for the Authority connection.
     pub connect_addr: Option<SocketAddr>,
     /// Connection timeout.
-    pub(crate) connect_timeout: Duration,
+    pub(crate) connect_timeout: NonZeroDuration,
     /// Minimum reconnect backoff.
-    pub(crate) reconnect_min_backoff: Duration,
+    pub(crate) reconnect_min_backoff: NonZeroDuration,
     /// Maximum reconnect backoff.
-    pub(crate) reconnect_max_backoff: Duration,
+    pub(crate) reconnect_max_backoff: NonZeroDuration,
     /// Grace period before the revocation stream is considered ready.
     pub(crate) revocation_readiness_grace: Duration,
     /// Flip revocation readiness back to false on disconnect.
@@ -154,6 +154,9 @@ pub struct AuthorityConfig {
 /// Error validating an [`AuthorityConfig`].
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorityConfigError {
+    /// No Authority endpoint was selected.
+    #[error("sidecar.authority.url is required")]
+    MissingUrl,
     /// `agent_id` was not a valid `TypeID`.
     #[error("authority.agent_id: {0}")]
     AgentId(#[from] AgentIdParseError),
@@ -183,16 +186,8 @@ pub enum AuthorityConfigError {
 }
 
 impl AuthorityConfig {
-    pub(crate) fn target(&self) -> Result<AuthorityTarget, AuthorityEndpointError> {
-        match self.url.as_deref() {
-            Some(url) => {
-                AuthorityEndpoint::new(url, self.connect_addr).map(AuthorityTarget::Enabled)
-            }
-            None if self.connect_addr.is_some() => {
-                Err(AuthorityEndpointError::ConnectAddrWithoutUrl)
-            }
-            None => Ok(AuthorityTarget::Disabled),
-        }
+    pub(crate) fn target(&self) -> Result<AuthorityEndpoint, AuthorityEndpointError> {
+        AuthorityEndpoint::new(&self.url, self.connect_addr)
     }
 }
 
@@ -212,9 +207,13 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
     type Error = AuthorityConfigError;
 
     fn try_from(s: SchemaAuthorityConfig) -> Result<Self, Self::Error> {
+        let url = s
+            .url
+            .filter(|url| !url.trim().is_empty())
+            .ok_or(AuthorityConfigError::MissingUrl)?;
         let agent_id = s.agent_id.map(|id| id.parse::<AgentId>()).transpose()?;
-        let reconnect_min_backoff = s.reconnect_min_backoff.duration();
-        let reconnect_max_backoff = s.reconnect_max_backoff.duration();
+        let reconnect_min_backoff = s.reconnect_min_backoff;
+        let reconnect_max_backoff = s.reconnect_max_backoff;
         if reconnect_max_backoff < reconnect_min_backoff {
             return Err(AuthorityConfigError::MaxBackoffLessThanMin);
         }
@@ -239,9 +238,9 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             .transpose()?;
         Ok(Self {
             agent_id,
-            url: s.url,
+            url,
             connect_addr: s.connect_addr,
-            connect_timeout: s.connect_timeout.duration(),
+            connect_timeout: s.connect_timeout,
             reconnect_min_backoff,
             reconnect_max_backoff,
             revocation_readiness_grace: s.revocation_readiness_grace,
@@ -253,26 +252,5 @@ impl TryFrom<SchemaAuthorityConfig> for AuthorityConfig {
             tls_client_key_path,
             credentials,
         })
-    }
-}
-
-impl Default for AuthorityConfig {
-    fn default() -> Self {
-        Self {
-            agent_id: None,
-            url: None,
-            connect_addr: None,
-            connect_timeout: Duration::from_secs(10),
-            reconnect_min_backoff: Duration::from_millis(250),
-            reconnect_max_backoff: Duration::from_secs(30),
-            revocation_readiness_grace: Duration::from_millis(500),
-            revocation_fail_closed_on_disconnect: false,
-            public_key_path: None,
-            ca_cert_path: None,
-            allow_insecure_remote_authority: false,
-            tls_client_cert_path: None,
-            tls_client_key_path: None,
-            credentials: None,
-        }
     }
 }

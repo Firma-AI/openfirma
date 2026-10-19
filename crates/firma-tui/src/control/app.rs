@@ -189,11 +189,6 @@ impl App {
         }
     }
 
-    /// Authority policy directory, when it was resolved from the stack config.
-    #[must_use]
-    pub fn policy_dir(&self) -> Option<&Path> {
-        self.policies.dir()
-    }
     /// Changes the audit decision filter.
     ///
     /// Selection is clamped to the filtered row set and follows the tail again

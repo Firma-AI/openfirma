@@ -14,14 +14,17 @@
 //! Four output modes are supported, selectable via the `[sidecar.audit]`
 //! configuration section:
 //!
-//! | Sink     | Description                                                |
-//! |----------|------------------------------------------------------------|
-//! | `stdout` | Structured JSON lines (default for containers).            |
-//! | `file`   | Append-only file at a configured path.                     |
-//! | `grpc`   | Client-streaming RPC to a downstream audit service.        |
-//! | `wal`    | Write-ahead log: buffers events locally when gRPC is       |
-//! |          | unavailable and replays on reconnect. Bounded by size cap; |
-//! |          | oldest events are evicted when the cap is exceeded.        |
+//! | Sink     | Description                                                 |
+//! |----------|-------------------------------------------------------------|
+//! | `stdout` | Structured JSON lines (default for containers).             |
+//! | `file`   | Append-only file at a configured path.                      |
+//! | `grpc`   | Durable client-streaming RPC to a downstream audit service:  |
+//! |          | buffers events to a local file while the stream is down and  |
+//! |          | replays them on reconnect. The buffer is bounded by a size   |
+//! |          | cap; oldest events are evicted when the cap is exceeded.     |
+//! | `wal`    | Journal before delivery; reclaim only after a committed     |
+//! |          | receipt or durable rejection archival. Capacity failure     |
+//! |          | retains pending records instead of evicting them.           |
 //!
 //! # Signing
 //!
@@ -42,7 +45,7 @@ use tokio_util::sync::CancellationToken;
 /// An audit sink that consumes signed [`ExecutionEvent`]s and writes
 /// them to an external destination.
 ///
-/// Each concrete sink (stdout, file, gRPC, WAL) is constructed with
+/// Each concrete sink (stdout, file, gRPC) is constructed with
 /// only the configuration it needs. The [`run`](AuditSink::run) method
 /// drives the sink to completion, draining events from the channel
 /// until the cancellation token fires or an unrecoverable error occurs.
@@ -106,9 +109,9 @@ pub struct AuditPayload {
     pub(crate) resource: String,
     /// Enforcement outcome.
     pub(crate) decision: Decision,
-    /// Human-readable reason when decision is DENY or ABORT. Empty on
-    /// ALLOW, except in monitor mode where an overridden DENY carries
-    /// `"monitor_mode: <original_deny_reason>"`.
+    /// Human-readable reason when the decision is DENY, ABORT, `STEP_UP`, or
+    /// DEFER. A MODIFY carries the applied transformation here instead.
+    /// Empty on ALLOW, which is also how a passthrough is recorded.
     pub(crate) deny_reason: String,
     /// Wall-clock time spent in the enforcement pipeline, in
     /// microseconds.
@@ -172,5 +175,104 @@ impl AuditPayload {
     #[must_use]
     pub fn response_size(&self) -> i64 {
         self.response_size
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use super::{Decision, ExecutionEvent};
+
+    /// How long a sink test waits for an asynchronous effect to land. The
+    /// gRPC sink's first reconnect is 250 ms, so this leaves room for several
+    /// attempts.
+    const SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Polls `condition` until it holds or [`SETTLE_TIMEOUT`] elapses.
+    ///
+    /// Sinks do their work on their own task, so tests observe them through a
+    /// side effect that appears at an unknown moment. Polling for it keeps the
+    /// wait bounded without pinning the test to a wall-clock guess.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `condition` has not held by the deadline.
+    #[expect(
+        clippy::redundant_pub_crate,
+        reason = "hawk requires the crate bound spelled out; the module is test-only"
+    )]
+    pub(crate) async fn wait_until(label: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + SETTLE_TIMEOUT;
+        while tokio::time::Instant::now() < deadline {
+            if condition() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("timed out waiting for {label}");
+    }
+
+    /// Returns the event IDs currently held in a sink's buffer file, in
+    /// buffered order. A missing file reads as an empty buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a buffered line is not a serialized [`ExecutionEvent`].
+    #[expect(
+        clippy::redundant_pub_crate,
+        reason = "hawk requires the crate bound spelled out; the module is test-only"
+    )]
+    pub(crate) fn buffered_ids(path: &Path) -> Vec<String> {
+        let Ok(contents) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        contents
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<ExecutionEvent>(line)
+                    .expect("buffered line is a valid event")
+                    .event_id
+            })
+            .collect()
+    }
+
+    /// A fully populated event for sink tests.
+    ///
+    /// Every sink test needs the same shape and varies only `event_id`, so the
+    /// fixture lives here instead of once per sink module.
+    #[expect(
+        clippy::redundant_pub_crate,
+        reason = "hawk requires the crate bound spelled out; the module is test-only"
+    )]
+    pub(crate) fn sample_event(id: &str) -> ExecutionEvent {
+        ExecutionEvent {
+            event_id: id.to_string(),
+            session_id: "sess-1".parse().expect("literal session id"),
+            token_id: "ctok_01j0000000e008000000000001"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
+            action: "http_get".to_string(),
+            resource: "https://api.example.com/v1".to_string(),
+            decision: Decision::Allow,
+            deny_reason: String::new(),
+            enforcement_latency_us: 42,
+            context_hash: "abc123".to_string(),
+            bundle_version: "v1".to_string(),
+            timestamp: Some(1_700_000_000_000_000_000),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
+            sandbox_id: String::new(),
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
+            signature: vec![0xDE, 0xAD],
+            run_evidence: None,
+        }
     }
 }

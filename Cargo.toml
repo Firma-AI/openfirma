@@ -5,13 +5,17 @@ members = [
   "crates/firma-authority",
   "crates/firma-config-loader",
   "crates/firma-config-schema",
+  "crates/firma-config-utils",
+  "crates/firma-connection-store",
   "crates/firma-core",
   "crates/firma-demo-fixture",
   "crates/firma-demo-tui",
   "crates/firma-fs",
+  "crates/firma-futures-util",
   "crates/firma-grpc-interceptor-proto",
   "crates/firma-http",
   "crates/firma-identifiers",
+  "crates/firma-login",
   "crates/firma-process-orchestrator",
   "crates/firma-protobuf",
   "crates/firma-run",
@@ -27,12 +31,12 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0-rc1"
+version = "0.2.0-rc2"
 edition = "2024"
 license = "GPL-3.0-only"
 publish = false
 repository = "https://github.com/Firma-AI/openfirma"
-rust-version = "1.97"
+rust-version = "1.99"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -61,10 +65,13 @@ lto = "thin"
 [workspace.dependencies]
 aho-corasick = "1"
 anyhow = "1"
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
 arbitrary = "1"
 arc-swap = "1"
 async-stream = "0.3"
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false }
+axum-server = "0.8"
 base64 = "0.22"
 block2 = "0.6"
 brotli = "8"
@@ -82,39 +89,46 @@ dispatch2 = "0.3"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 either = "1.17"
 elliptic-curve = { version = "0.13", features = ["pem"] }
-firma-audit-schema = { path = "crates/firma-audit-schema", version = "0.2.0-rc1" }
-firma-authority = { path = "crates/firma-authority", version = "0.2.0-rc1" }
-firma-config-loader = { path = "crates/firma-config-loader", version = "0.2.0-rc1" }
-firma-config-schema = { path = "crates/firma-config-schema", version = "0.2.0-rc1" }
-firma-core = { path = "crates/firma-core", version = "0.2.0-rc1" }
-firma-fs = { path = "crates/firma-fs", version = "0.2.0-rc1" }
-firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.2.0-rc1" }
-firma-http = { path = "crates/firma-http", version = "0.2.0-rc1" }
-firma-identifiers = { path = "crates/firma-identifiers", version = "0.2.0-rc1" }
-firma-process-orchestrator = { path = "crates/firma-process-orchestrator", version = "0.2.0-rc1" }
-firma-protobuf = { path = "crates/firma-protobuf", version = "0.2.0-rc1" }
-firma-run = { path = "crates/firma-run", version = "0.2.0-rc1" }
-firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.2.0-rc1" }
-firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.2.0-rc1" }
-firma-sidecar = { path = "crates/firma-sidecar", version = "0.2.0-rc1" }
-firma-stack = { path = "crates/firma-stack", version = "0.2.0-rc1" }
-firma-test-helpers = { path = "crates/firma-test-helpers", version = "0.2.0-rc1" }
-firma-tui = { path = "crates/firma-tui", version = "0.2.0-rc1" }
+firma-audit-schema = { path = "crates/firma-audit-schema", version = "0.2.0-rc2" }
+firma-authority = { path = "crates/firma-authority", version = "0.2.0-rc2" }
+firma-config-loader = { path = "crates/firma-config-loader", version = "0.2.0-rc2" }
+firma-config-schema = { path = "crates/firma-config-schema", version = "0.2.0-rc2" }
+firma-config-utils = { path = "crates/firma-config-utils", version = "0.2.0-rc2" }
+firma-connection-store = { path = "crates/firma-connection-store", version = "0.2.0-rc2" }
+firma-core = { path = "crates/firma-core", version = "0.2.0-rc2" }
+firma-fs = { path = "crates/firma-fs", version = "0.2.0-rc2" }
+firma-futures-util = { path = "crates/firma-futures-util", version = "0.2.0-rc2" }
+firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.2.0-rc2" }
+firma-http = { path = "crates/firma-http", version = "0.2.0-rc2" }
+firma-identifiers = { path = "crates/firma-identifiers", version = "0.2.0-rc2" }
+firma-login = { path = "crates/firma-login", version = "0.2.0-rc2" }
+firma-process-orchestrator = { path = "crates/firma-process-orchestrator", version = "0.2.0-rc2" }
+firma-protobuf = { path = "crates/firma-protobuf", version = "0.2.0-rc2" }
+firma-run = { path = "crates/firma-run", version = "0.2.0-rc2" }
+firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.2.0-rc2" }
+firma-secret-provider = { path = "crates/firma-secret-provider", version = "0.2.0-rc2" }
+firma-sidecar = { path = "crates/firma-sidecar", version = "0.2.0-rc2" }
+firma-stack = { path = "crates/firma-stack", version = "0.2.0-rc2" }
+firma-test-helpers = { path = "crates/firma-test-helpers", version = "0.2.0-rc2" }
+firma-tui = { path = "crates/firma-tui", version = "0.2.0-rc2" }
 flate2 = "1"
 form_urlencoded = "1"
 fs-err = "3.3"
 fs2 = "0.4.3"
+getrandom = "0.4"
 governor = "0.10"
 headers = "0.4"
 hex = "0.4"
 http = "1"
 http-body = "1"
 http-body-util = "0.1"
+httparse = "1"
 hyper = { version = "1", default-features = false }
-hyper-util = { version = "0.1", default-features = false }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 insta = { version = "1", features = ["filters", "json", "redactions"] }
 jiff = "0.2"
 json-escape = "0.3"
+keyring-core = "1"
 libc = "0.2"
 lru = "0.18.2"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
@@ -127,6 +141,7 @@ objc2-virtualization = { version = "0.3.2", default-features = false }
 owo-colors = { version = "4", features = ["supports-colors"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
+percent-encoding = "2"
 pin-project = "1.1"
 pretty_assertions = "1"
 proptest = "1"
@@ -154,11 +169,12 @@ sha2 = "0.11"
 signal-hook = "0.3"
 socket2 = "0.6"
 strum = "0.28"
+subtle = "2.6"
 tempfile = "3"
 textwrap = "0.16"
 thiserror = "2"
 time = { version = "0.3", default-features = false }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -172,11 +188,16 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 type-safe-id = { version = "0.3.3", features = ["serde"] }
+url = "2"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 wait-timeout = "0.2"
+webbrowser = { version = "1.2", features = ["hardened"] }
 webpki-roots = "1"
+windows-native-keyring-store = { version = "1", default-features = false }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
 wiremock = "0.6"
 x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"] }
+zeroize = "1"
 zstd = "0.13"

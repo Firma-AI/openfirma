@@ -4,6 +4,7 @@
 # ── Mini Authority ───────────────────────────────────────────────────────────
 
 [authority]
+mapping_rules_paths = ["mapping-rules.toml"]
 listen_addr = "127.0.0.1:50051"
 policy_dir = "policies/"
 issuance_policy_dir = "issuance-policies/"
@@ -19,10 +20,11 @@ mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 drain_timeout = "30s"
 
-# Override the built-in HTTPS MITM allowlist. Only the demo's stand-in for
+# Narrow the intercept-everything default. Only the demo's stand-in for
 # api.internal is MITM'd so the policy can see the path of inner GETs; the
 # agent's own LLM traffic (api.openai.com) tunnels through untouched so the
-# OpenAI SDK doesn't have to trust the generated firma-ca.
+# OpenAI SDK doesn't have to trust the generated firma-ca. Listing
+# `intercept_hosts` replaces the default, which is why api.openai.com tunnels.
 [sidecar.interceptor.https_mitm]
 intercept_hosts = ["httpbin.org"]
 # Strict-MITM the demo target so the CONNECT preface is auto-authorized once
@@ -34,13 +36,6 @@ dir = "."
 
 [sidecar.ca]
 dir = "examples/demos/demo1/.runtime/generated-firma-ca"
-
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-default_protected = true
-
-[sidecar.capability_validation]
-clock_skew_tolerance = "0s"
 
 [sidecar.connector]
 default_timeout = "10s"

@@ -2,15 +2,17 @@
 //!
 //! Spin up an in-process `AuthorityService` backed by tonic, connect the
 //! sidecar stream clients, and verify the end-to-end behavior documented
-//! in task 007: readiness gating, revocation propagation, TTL fail-closed,
+//! for the Authority streams: readiness gating, revocation propagation, TTL fail-closed,
 //! reconnect with bundle swap, and parse-failure retention of the last
 //! valid bundle.
 
 #![cfg(test)]
 
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use firma_config_utils::NonZeroDuration;
 use firma_core::RevocationStore;
 use firma_identifiers::{AgentId, TokenId};
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
@@ -30,7 +32,7 @@ use tonic::{Request, Response, Status};
 use super::channel::build_channel;
 use super::policy_bundle::CedarBundleParser;
 use super::readiness::{ReadinessFlag, ReadinessState, ReadinessView};
-use super::swappable_policy::SwappablePolicyEvaluation;
+use super::swappable_policy::{RuntimeSnapshot, SwappablePolicyEvaluation};
 use super::{AuthorityClientHandle, AuthorityDeps, spawn_authority_client};
 use crate::authority_credentials::{
     RedactedPreSharedKey, ResolvedSidecarCredentials, SidecarCredentialSource,
@@ -106,7 +108,7 @@ impl AuthorityService for MockAuthority {
         _request: Request<IssueCapabilityRequest>,
     ) -> Result<Response<IssueCapabilityResponse>, Status> {
         Err(Status::unimplemented(
-            "mock authority: issue_capability not exercised in task 007 tests",
+            "mock authority: issue_capability not exercised in these tests",
         ))
     }
 
@@ -115,7 +117,7 @@ impl AuthorityService for MockAuthority {
         _request: Request<GetApprovalOutcomeRequest>,
     ) -> Result<Response<GetApprovalOutcomeResponse>, Status> {
         Err(Status::unimplemented(
-            "mock authority: get_approval_outcome is not exercised in task 007 tests",
+            "mock authority: get_approval_outcome is not exercised in these tests",
         ))
     }
 
@@ -389,12 +391,21 @@ fn spawn_sidecar_with_credentials(
         client_key_pem,
     )?;
     let revocation_store = Arc::new(BloomLruRevocationStore::new(RevocationConfig {
-        capacity: 1_024,
+        capacity: NonZeroUsize::new(1_024).unwrap(),
         fpr: 0.001,
-        lru_capacity: 128,
+        lru_capacity: NonZeroUsize::new(128).unwrap(),
     }));
     let initial_policy: Box<dyn PolicyEvaluation + Send + Sync> = Box::new(DenyAllEvaluation);
-    let swappable_policy = Arc::new(SwappablePolicyEvaluation::new(initial_policy));
+    let swappable_policy = Arc::new(SwappablePolicyEvaluation::from_snapshot(
+        RuntimeSnapshot::new(
+            crate::normalizer::IntentNormalizer::new(
+                crate::normalizer::MappingTable::from_managed_rules(Vec::new())?,
+            ),
+            initial_policy.into(),
+            0,
+            None,
+        ),
+    ));
     let (flag, readiness_view) = ReadinessFlag::new(ReadinessState::default());
     let readiness = Arc::new(flag);
     let cancel = CancellationToken::new();
@@ -402,6 +413,7 @@ fn spawn_sidecar_with_credentials(
         Arc::clone(&revocation_store) as Arc<dyn RevocationStore + Send + Sync>;
 
     let authority = spawn_authority_client(AuthorityDeps {
+        composio_coverage_warnings: Vec::new(),
         channel,
         swappable_policy: Arc::clone(&swappable_policy),
         revocation_store: revocation_dyn,
@@ -409,6 +421,7 @@ fn spawn_sidecar_with_credentials(
         cancel: cancel.clone(),
         config,
         credentials,
+        enforcement_state: None,
         bundle_parser: Arc::new(CedarBundleParser),
     });
 
@@ -462,8 +475,14 @@ fn bundle_update(version: &str, ttl_seconds: u32, policies: &[u8]) -> PolicyBund
             policies: policies.to_vec(),
             entity_schema: TEST_CEDAR_SCHEMA.as_bytes().to_vec(),
             ttl_seconds,
+            mappings: Some(firma_protobuf::v1::ActionMappingSnapshot {
+                format_version: 1,
+                default_protected: true,
+                rules: Vec::new(),
+            }),
         }),
         updated_at: None,
+        policy_set: None,
     }
 }
 
@@ -482,11 +501,11 @@ fn revocation(token_id: &str, reason: &str) -> RevocationEvent {
 fn test_config() -> AuthorityConfig {
     AuthorityConfig {
         agent_id: None,
-        url: None,
+        url: "http://127.0.0.1:50051".to_string(),
         connect_addr: None,
-        connect_timeout: Duration::from_secs(2),
-        reconnect_min_backoff: Duration::from_millis(50),
-        reconnect_max_backoff: Duration::from_secs(1),
+        connect_timeout: NonZeroDuration::from_static(Duration::from_secs(2)),
+        reconnect_min_backoff: NonZeroDuration::from_static(Duration::from_millis(50)),
+        reconnect_max_backoff: NonZeroDuration::from_static(Duration::from_secs(1)),
         revocation_readiness_grace: Duration::from_millis(100),
         revocation_fail_closed_on_disconnect: false,
         public_key_path: None,
@@ -662,7 +681,7 @@ async fn revocation_disconnect_loses_readiness_when_fail_closed() -> anyhow::Res
     let mut config = test_config();
     config.revocation_fail_closed_on_disconnect = true;
     config.revocation_readiness_grace = Duration::from_millis(10);
-    config.reconnect_min_backoff = Duration::from_millis(500);
+    config.reconnect_min_backoff = NonZeroDuration::from_static(Duration::from_millis(500));
     let harness = spawn_sidecar(&server.url, config, None, None, None)?;
 
     let became_ready = wait_for(Duration::from_secs(2), || {

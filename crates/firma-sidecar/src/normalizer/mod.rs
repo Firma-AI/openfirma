@@ -20,9 +20,14 @@
 //! Conforms to the FEP \[I-N1\] enforcement invariant.
 
 pub(crate) mod mapping;
+mod redaction;
+
+pub(crate) use redaction::redact_default_query_params;
+use redaction::{DEFAULT_SENSITIVE_QUERY_PARAMS, redact_query_params};
 
 use std::collections::{BTreeMap, HashMap};
 use std::str::{self, FromStr};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
@@ -74,23 +79,6 @@ const SENSITIVE_HEADERS: &[&str] = &[
     "x-api-key",
 ];
 
-/// Built-in deny-list of sensitive query parameter names.
-/// Case-insensitive comparison is used when matching.
-const DEFAULT_SENSITIVE_QUERY_PARAMS: &[&str] = &[
-    "api_key",
-    "apikey",
-    "key",
-    "token",
-    "access_token",
-    "refresh_token",
-    "auth",
-    "password",
-    "secret",
-    "signature",
-    "sig",
-    "sas",
-];
-
 /// Output of the intent normalizer — contains only the fields the normalizer can fill.
 ///
 /// Missing fields (`capability`, `agent_id`, `session_id`) are populated by the pipeline
@@ -116,12 +104,6 @@ impl NormalizedEnvelope {
     #[must_use]
     pub fn intent(&self) -> &ExecutionIntent {
         &self.intent
-    }
-
-    /// Returns the time the underlying request was observed.
-    #[must_use]
-    pub fn timestamp(&self) -> DateTime<Utc> {
-        self.timestamp
     }
 }
 
@@ -171,10 +153,10 @@ pub struct RawRequest {
 /// a `NormalizedEnvelope` with the five intent sub-fields and a timestamp.
 /// Fields that depend on token validation (`capability`, `session_id`,
 /// `agent_id`) are populated later by the pipeline.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IntentNormalizer {
-    mapping_table: MappingTable,
-    sensitive_query_params: &'static [&'static str],
+    mapping_table: Arc<MappingTable>,
+    sensitive_query_params: Arc<[String]>,
 }
 
 #[cfg(not(miri))]
@@ -190,22 +172,27 @@ fn runtime_timestamp() -> DateTime<Utc> {
 }
 
 impl IntentNormalizer {
-    #[must_use]
-    pub fn new(mapping_table: MappingTable) -> Self {
+    /// Redact a path or resource using this generation's local query-name list.
+    pub(crate) fn redact_query(&self, value: &str) -> String {
+        redact_query_params(value, &self.sensitive_query_params)
+    }
+
+    /// Replace the mapping generation while retaining locally owned redaction.
+    pub(crate) fn with_mapping_table(&self, mapping_table: MappingTable) -> Self {
         Self {
-            mapping_table,
-            sensitive_query_params: DEFAULT_SENSITIVE_QUERY_PARAMS,
+            mapping_table: Arc::new(mapping_table),
+            sensitive_query_params: Arc::clone(&self.sensitive_query_params),
         }
     }
 
     #[must_use]
-    pub fn with_sensitive_query_params(
-        mapping_table: MappingTable,
-        params: &'static [&'static str],
-    ) -> Self {
+    pub fn new(mapping_table: MappingTable) -> Self {
         Self {
-            mapping_table,
-            sensitive_query_params: params,
+            mapping_table: Arc::new(mapping_table),
+            sensitive_query_params: DEFAULT_SENSITIVE_QUERY_PARAMS
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
         }
     }
 
@@ -214,15 +201,18 @@ impl IntentNormalizer {
         mapping_table: MappingTable,
         custom_params: Vec<String>,
     ) -> Self {
-        let mut merged: Vec<&'static str> = DEFAULT_SENSITIVE_QUERY_PARAMS.to_vec();
+        let mut merged: Vec<String> = DEFAULT_SENSITIVE_QUERY_PARAMS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
         for param in custom_params {
             if !merged.iter().any(|p| p.eq_ignore_ascii_case(&param)) {
-                merged.push(Box::leak(param.into_boxed_str()));
+                merged.push(param);
             }
         }
         Self {
-            mapping_table,
-            sensitive_query_params: Box::leak(merged.into_boxed_slice()),
+            mapping_table: Arc::new(mapping_table),
+            sensitive_query_params: merged.into(),
         }
     }
 
@@ -234,7 +224,6 @@ impl IntentNormalizer {
     /// - The request is protected but cannot be mapped to a known action class.
     /// - The HTTP method is not a recognized standard method (fail-closed).
     ///
-    /// Returns `EnforcementDecision::Passthrough` if the host is not protected.
     #[expect(
         clippy::result_large_err,
         reason = "domain decision carries denial context"
@@ -270,7 +259,7 @@ impl IntentNormalizer {
         let (sanitized_path, query_params) = if query_string.is_empty() {
             (normalized_path.clone(), HashMap::new())
         } else {
-            let sanitized_query = sanitize_query_string(query_string, self.sensitive_query_params);
+            let sanitized_query = self.redact_query(query_string);
             let sanitized_path = format!("{normalized_path}?{sanitized_query}");
             let query_params = parse_query_string(query_string);
             (sanitized_path, query_params)
@@ -334,10 +323,6 @@ impl IntentNormalizer {
                 );
                 Err(EnforcementError::NormalizationFailed { detail }
                     .into_deny(EnforcementStage::Normalization))
-            }
-            MatchResult::NotProtected => {
-                let detail = format!("non-protected host: {} (not enforced)", request.host);
-                Err(EnforcementDecision::Passthrough { detail })
             }
         }
     }
@@ -659,27 +644,6 @@ fn sanitize_headers(headers: &HeaderMap) -> HeaderMap {
         .collect()
 }
 
-fn sanitize_query_string(query: &str, sensitive_params: &[&str]) -> String {
-    let pairs: Vec<&str> = query.split('&').collect();
-    let mut result = Vec::with_capacity(pairs.len());
-
-    for pair in pairs {
-        if let Some(eq_pos) = pair.find('=') {
-            let key = &pair[..eq_pos];
-            let is_sensitive = sensitive_params.iter().any(|p| p.eq_ignore_ascii_case(key));
-            if is_sensitive {
-                result.push(format!("{key}=<redacted>"));
-            } else {
-                result.push(pair.to_string());
-            }
-        } else {
-            result.push(pair.to_string());
-        }
-    }
-
-    result.join("&")
-}
-
 /// Split a raw query string into its decoded key/value pairs.
 ///
 /// Pairs without an `=` are dropped, matching what the mapping and Cedar
@@ -849,8 +813,7 @@ mod tests {
                 },
             ],
         };
-        let table =
-            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
         IntentNormalizer::new(table)
     }
 
@@ -1030,7 +993,7 @@ mod tests {
     fn normalizer_from_file(filename: &str) -> IntentNormalizer {
         let registry = ActionClassRegistry::v0_1();
         let file = load_mapping_file(filename);
-        let table = MappingTable::from_config(&file, &registry, true)
+        let table = MappingTable::from_config(&file, &registry)
             .unwrap_or_else(|e| panic!("from_config: {e}"));
         IntentNormalizer::new(table)
     }
@@ -1116,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_not_protected_returns_passthrough() {
+    fn test_normalize_unlisted_host_is_denied() {
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
@@ -1126,8 +1089,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&file, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
         let normalizer = IntentNormalizer::new(table);
 
         let request = RawRequest {
@@ -1142,7 +1104,7 @@ mod tests {
         let result = normalizer.normalize(&request);
         assert!(result.is_err());
         let decision = result.unwrap_err();
-        assert!(decision.is_passthrough());
+        assert!(decision.is_deny());
     }
 
     #[test]
@@ -1385,8 +1347,7 @@ mod tests {
     // --- C1 regression: mixed-case host must not bypass enforcement ---------
 
     /// Regression for C1: a mixed-case `Host` header must match the
-    /// lowercase mapping rule and be enforced, not fall through to
-    /// `NotProtected` → `Passthrough`.
+    /// lowercase mapping rule and be classified.
     #[test]
     fn test_normalize_mixed_case_host_matches_rule_not_passthrough() {
         let normalizer = github_normalizer();
@@ -1434,12 +1395,9 @@ mod tests {
         assert_eq!(env_port.intent.action_class, "code.read");
     }
 
-    /// Regression for C1: with `default_protected = false`, a host that
-    /// differs only in case from a protected host must NOT passthrough — it
-    /// must be enforced. (The shipped e2e/demo configs use
-    /// `default_protected = false`.)
+    /// A case variant of a mapped host must still be classified.
     #[test]
-    fn test_normalize_mixed_case_host_not_passthrough_when_unprotected_default() {
+    fn test_normalize_mixed_case_host_is_classified() {
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
@@ -1449,9 +1407,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        // default_protected = false — the dangerous default from the example configs.
-        let table =
-            MappingTable::from_config(&file, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
         let normalizer = IntentNormalizer::new(table);
 
         let request = RawRequest {
@@ -1497,8 +1453,7 @@ mod tests {
                 },
             ],
         };
-        let table =
-            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
         let normalizer = IntentNormalizer::new(table);
 
         let envelope = normalizer
@@ -1533,8 +1488,7 @@ mod tests {
                 action_class: "account.permission.change".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
         let normalizer = IntentNormalizer::new(table);
 
         let envelope = normalizer
@@ -1557,7 +1511,7 @@ mod tests {
         let file: MappingRulesFile = toml::from_str(&src).unwrap_or_else(|e| panic!("parse: {e}"));
         file.validate().unwrap_or_else(|e| panic!("validate: {e}"));
         let registry = ActionClassRegistry::v0_1();
-        let _table = MappingTable::from_config(&file, &registry, true).unwrap();
+        let _table = MappingTable::from_config(&file, &registry).unwrap();
     }
 
     #[test]
@@ -1853,7 +1807,7 @@ mod tests {
         let file = load_mapping_file("stripe.toml");
         assert_eq!(file.rules.len(), 88);
         let registry = ActionClassRegistry::v0_1();
-        let _table = MappingTable::from_config(&file, &registry, true)
+        let _table = MappingTable::from_config(&file, &registry)
             .unwrap_or_else(|e| panic!("from_config: {e}"));
     }
 
@@ -1959,7 +1913,7 @@ mod tests {
         let file = load_mapping_file("gmail.toml");
         assert_eq!(file.rules.len(), 41);
         let registry = ActionClassRegistry::v0_1();
-        let _table = MappingTable::from_config(&file, &registry, true)
+        let _table = MappingTable::from_config(&file, &registry)
             .unwrap_or_else(|e| panic!("from_config: {e}"));
     }
 

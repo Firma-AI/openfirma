@@ -22,6 +22,7 @@ fn sample_event(signature: Vec<u8>) -> ExecutionEvent {
         thread_id: String::new(),
         parent_action_id: String::new(),
         signature,
+        run_evidence: None,
     }
 }
 
@@ -66,6 +67,21 @@ fn invalid_base64_signature_is_rejected() {
         .expect_err("invalid signature encoding must fail");
 
     assert!(error.is_data(), "base64 failure should be a data error");
+}
+
+#[test]
+fn evidence_presence_and_bytes_survive_serialization_without_claiming_authority() {
+    for evidence in [None, Some(vec![]), Some(vec![0, 127, 255])] {
+        let mut event = sample_event(vec![1, 2]);
+        event.run_evidence = evidence.map(firma_audit_schema::RunEvidence);
+        let encoded = serde_json::to_vec(&event).expect("serialize");
+        let decoded: ExecutionEvent = serde_json::from_slice(&encoded).expect("deserialize");
+        assert_eq!(decoded, event);
+    }
+    assert_eq!(
+        format!("{:?}", firma_audit_schema::RunEvidence(vec![83, 69, 67])),
+        "RunEvidence(<redacted>)"
+    );
 }
 
 #[test]

@@ -20,6 +20,8 @@ pub(crate) mod lru;
 #[path = "metrics.rs"]
 pub(crate) mod metrics;
 
+use std::num::NonZeroUsize;
+
 use firma_core::{RevocationStore, TokenError};
 use firma_identifiers::TokenId;
 
@@ -31,19 +33,19 @@ use self::metrics::{RevocationMetrics, RevocationMetricsSnapshot};
 #[derive(Debug, Clone, Copy)]
 pub struct RevocationConfig {
     /// Expected distinct revoked tokens the bloom is sized for.
-    pub(crate) capacity: usize,
+    pub(crate) capacity: NonZeroUsize,
     /// Target false positive rate. Must be `0.0 < fpr < 1.0`.
     pub(crate) fpr: f64,
     /// Capacity of the confirmed-positive LRU cache.
-    pub(crate) lru_capacity: usize,
+    pub(crate) lru_capacity: NonZeroUsize,
 }
 
 impl Default for RevocationConfig {
     fn default() -> Self {
         Self {
-            capacity: 1_000_000,
+            capacity: const { NonZeroUsize::new(1_000_000).unwrap() },
             fpr: 0.0001,
-            lru_capacity: 100_000,
+            lru_capacity: const { NonZeroUsize::new(100_000).unwrap() },
         }
     }
 }
@@ -117,9 +119,9 @@ mod tests {
 
     fn small_store() -> BloomLruRevocationStore {
         BloomLruRevocationStore::new(RevocationConfig {
-            capacity: 1_000,
+            capacity: NonZeroUsize::new(1_000).unwrap(),
             fpr: 0.001,
-            lru_capacity: 4,
+            lru_capacity: NonZeroUsize::new(4).unwrap(),
         })
     }
 
@@ -166,9 +168,9 @@ mod tests {
     #[test]
     fn concurrent_reads_and_writes_no_panic() {
         let store = Arc::new(BloomLruRevocationStore::new(RevocationConfig {
-            capacity: 10_000,
+            capacity: NonZeroUsize::new(10_000).unwrap(),
             fpr: 0.001,
-            lru_capacity: 1_000,
+            lru_capacity: NonZeroUsize::new(1_000).unwrap(),
         }));
 
         let deadline = Instant::now() + Duration::from_millis(200);
@@ -208,9 +210,9 @@ mod proptests {
         fn members_always_revoked(count in 1usize..200) {
             let members: Vec<TokenId> = (0..count).map(|_| TokenId::generate()).collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
-                capacity: 10_000,
+                capacity: NonZeroUsize::new(10_000).unwrap(),
                 fpr: 0.001,
-                lru_capacity: members.len().max(1),
+                lru_capacity: NonZeroUsize::new(count).unwrap(),
             });
             for member in &members {
                 prop_assert!(store.add_revocation(member).is_ok());
@@ -229,9 +231,9 @@ mod proptests {
             let members: Vec<TokenId> = (0..count).map(|_| TokenId::generate()).collect();
             let member_set: HashSet<TokenId> = members.iter().copied().collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
-                capacity: 10_000,
+                capacity: NonZeroUsize::new(10_000).unwrap(),
                 fpr: 0.001,
-                lru_capacity: members.len(),
+                lru_capacity: NonZeroUsize::new(count).unwrap(),
             });
             for member in &members {
                 prop_assert!(store.add_revocation(member).is_ok());

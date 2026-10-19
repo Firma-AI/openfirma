@@ -196,12 +196,6 @@ impl EditorExitStatus {
             status: status.into(),
         }
     }
-
-    /// Returns the rendered process status.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.status
-    }
 }
 
 impl fmt::Display for EditorExitStatus {

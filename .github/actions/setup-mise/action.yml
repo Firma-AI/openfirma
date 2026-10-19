@@ -1,0 +1,38 @@
+name: Set up mise tools
+description: Install requested locked development tools with the repository's pinned mise release.
+
+inputs:
+  tools:
+    description: Mise tool names to install, one per line. Installs all configured tools when omitted.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory containing the mise configuration.
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare tool list
+      id: tool-list
+      shell: bash
+      env:
+        TOOLS: ${{ inputs.tools }}
+      run: |
+        tools=()
+        while IFS= read -r tool; do
+          if [[ -n "$tool" && "$tool" =~ [[:space:]] ]]; then
+            echo "tools must contain one mise tool name per line: $tool" >&2
+            exit 1
+          fi
+          if [[ -n "$tool" ]]; then
+            tools+=("$tool")
+          fi
+        done <<< "$TOOLS"
+        printf 'install_args=%s\n' "${tools[*]}" >> "$GITHUB_OUTPUT"
+    - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      with:
+        version: 2026.9.5
+        install_args: ${{ steps.tool-list.outputs.install_args }}
+        working_directory: ${{ inputs.working-directory }}

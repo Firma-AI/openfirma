@@ -2,7 +2,7 @@
 
 This is the fastest path to a working local environment with strict governance:
 
-- `default_protected = true`
+- protected Authority mapping snapshots (unmatched traffic is denied)
 - sidecar HTTP proxy + HTTPS MITM
 - authority stream enabled
 - session-bound capability token flow
@@ -40,7 +40,18 @@ cp examples/firma-run/local/assets/firma.local.claude.example.toml .local/firma.
 cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 ```
 
-## 3) Start services (3 terminals)
+## 3) Complete the local Authority configuration
+
+```bash
+cargo run -p firma -- config --yes --mode agent-local --profile codex \
+  --agent-id agt_01j0000000e008000000000001 --output-dir .local
+```
+
+Use `--profile claude-code` for Claude. `firma config` keeps the copied
+`[authority].mapping_rules_paths` and generates the Authority key and TLS
+material.
+
+## 4) Start services (2 terminals)
 
 Terminal A (authority):
 
@@ -48,34 +59,31 @@ Terminal A (authority):
 cargo run -p firma -- authority --config .local/firma.toml
 ```
 
-Terminal B (sidecar):
-
-```bash
-cargo run -p firma -- sidecar -c .local/firma.toml
-```
-
-Terminal C (agent via `firma run`):
+Terminal B (agent via `firma run` with a per-session Sidecar):
 
 ```bash
 export FIRMA_RUN_REQUIRE_SESSION_ID=true
+export FIRMA_RUN_SESSION_ID=<stable-value>
 ```
 
 Codex:
 
 ```bash
-cargo run -p firma -- run --profile codex -- codex
+cargo run -p firma -- run --config .local/firma.toml --profile codex \
+  --authority https://127.0.0.1:50051 --sidecar local -- codex
 ```
 
 Claude:
 
 ```bash
-cargo run -p firma -- run --profile claude-code -- claude
+cargo run -p firma -- run --config .local/firma.toml --profile claude-code \
+  --authority https://127.0.0.1:50051 --sidecar local -- claude
 ```
 
-## 4) Expected signals
+## 5) Expected signals
 
-- Sidecar logs `ready`.
-- Sidecar logs authority stream connected (not disabled).
+- Sidecar logs `authority stream connected endpoint=…` and
+  `policy bundle loaded version=…`, then `ready`.
 - Agent starts and can call its control-plane endpoints without `UnclassifiedIntent`.
 
 ## Troubleshooting quick map
@@ -85,7 +93,7 @@ cargo run -p firma -- run --profile claude-code -- claude
   - Start a new `firma run` session after restoring Authority availability.
 
 - `TokenInvalid`:
-  - Session mismatch or wrong token file.
+  - Session mismatch or wrong capability seed.
   - Ensure token was issued with the same session id as runtime.
 
 - `UnclassifiedIntent`:

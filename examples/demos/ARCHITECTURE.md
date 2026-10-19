@@ -121,6 +121,7 @@ Each demo provides a single `demoX/firma.toml`; its `[authority]` table maps dir
 
 ```toml
 [authority]
+mapping_rules_paths = ["mapping-rules.toml"] # relative to demoX/
 listen_addr = "127.0.0.1:50051"
 policy_dir = "examples/demos/demo0/policies" # note: policies/ subdir
 revocation_file = "examples/demos/demo0/.runtime/revocations.txt"
@@ -156,13 +157,6 @@ dir = "examples/demos/demo0"
 [sidecar.ca]
 dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 
-[sidecar.mapping]
-rules_path = "examples/demos/demo0/mapping-rules.toml"
-default_protected = true # demos default to fail-closed
-
-[sidecar.capability_validation]
-clock_skew_tolerance = "0s"
-
 [sidecar.connector]
 default_timeout = "10s"
 
@@ -180,7 +174,7 @@ revocation_readiness_grace = "500ms"
 revocation_fail_closed_on_disconnect = false
 ```
 
-`default_protected = true` is the demo default — every unmapped host is DENY.
+Authority snapshots protect every unmapped host by default — unmatched requests are DENY.
 
 ---
 
@@ -328,7 +322,7 @@ TUI renders all three panes
 3. Authority and sidecar config is per-demo, env-overridable
 4. Sidecar enforces all policy; the script always tries every call
 5. Mapping rules unify tool semantics across providers
-6. `default_protected = true` — demos fail closed
+6. Protected Authority snapshots — demos fail closed
 7. Public services (`httpbin.org`) stand in for internal APIs in OSS builds
 8. No LLM on the demo path — call order is hardcoded in the script for reproducibility
 

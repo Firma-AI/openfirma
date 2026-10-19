@@ -13,14 +13,9 @@
     reason = "test code"
 )]
 
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use super::CONFIG_DIR_NAME;
-
-fn firma_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_firma"))
-}
+use super::{CONFIG_DIR_NAME, firma_bin};
 
 fn isolated_firma_command(cwd: &std::path::Path) -> Command {
     let mut command = Command::new(firma_bin());

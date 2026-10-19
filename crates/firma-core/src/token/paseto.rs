@@ -484,6 +484,6 @@ mod tests {
 
         let token = signer.sign(&claims).unwrap();
         let recovered = verifier.verify(&token).unwrap();
-        assert!(recovered.action_set.is_empty());
+        assert_eq!(recovered.action_set, [] as [std::string::String; 0]);
     }
 }

@@ -1,5 +1,6 @@
 //! Lock-free atomic bloom filter.
 
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use xxhash_rust::xxh3::xxh3_128;
@@ -18,14 +19,13 @@ impl AtomicBloom {
         clippy::cast_sign_loss,
         reason = "Bloom filter sizing uses the standard floating-point formula, then clamps to sane minimums."
     )]
-    pub(super) fn new(capacity: usize, fpr: f64) -> Self {
-        let capacity = capacity.max(1);
+    pub(super) fn new(capacity: NonZeroUsize, fpr: f64) -> Self {
         let fpr = if fpr.is_finite() && (0.0..1.0).contains(&fpr) {
             fpr
         } else {
             0.0001
         };
-        let n = capacity as f64;
+        let n = capacity.get() as f64;
         let ln2 = std::f64::consts::LN_2;
         let bit_count_float = -(n * fpr.ln()) / (ln2 * ln2);
         let bit_count = (bit_count_float.ceil() as u64).max(64);
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn insert_then_contains_returns_true() {
-        let bloom = AtomicBloom::new(1_000, 0.01);
+        let bloom = AtomicBloom::new(NonZeroUsize::new(1_000).unwrap(), 0.01);
         bloom.insert("abc");
         assert!(bloom.contains("abc"));
     }
@@ -90,7 +90,7 @@ mod tests {
         reason = "Empirical false-positive rate calculation is test-only."
     )]
     fn unknown_returns_false_most_of_the_time() {
-        let bloom = AtomicBloom::new(10_000, 0.01);
+        let bloom = AtomicBloom::new(NonZeroUsize::new(10_000).unwrap(), 0.01);
         for i in 0..10_000 {
             bloom.insert(&format!("member-{i}"));
         }
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn idempotent_insert() {
-        let bloom = AtomicBloom::new(100, 0.01);
+        let bloom = AtomicBloom::new(NonZeroUsize::new(100).unwrap(), 0.01);
         bloom.insert("x");
         bloom.insert("x");
         assert!(bloom.contains("x"));
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn concurrent_insert_and_check_no_panic() {
-        let bloom = Arc::new(AtomicBloom::new(10_000, 0.001));
+        let bloom = Arc::new(AtomicBloom::new(NonZeroUsize::new(10_000).unwrap(), 0.001));
         let writer = {
             let bloom = Arc::clone(&bloom);
             thread::spawn(move || {

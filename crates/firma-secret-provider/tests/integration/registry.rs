@@ -1377,7 +1377,7 @@ fn vault_kv_v1_output_fails_closed() {
 
     std::assert_matches!(&error, firma_secret_provider::MatcherError::NoRecords);
     insta::assert_snapshot!(error.to_string(), @"json matcher record_path selected no records");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -1393,7 +1393,7 @@ fn vault_field_output_fails_closed() {
         .unwrap_err();
 
     std::assert_matches!(&error, firma_secret_provider::MatcherError::Json(_));
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -1470,7 +1470,7 @@ fn doppler_bare_secrets_restricted_value_fails_closed() {
             record_index: 0,
         }
     );
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]

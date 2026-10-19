@@ -261,10 +261,6 @@ fn cleanup_run_markers_after(operation: RunError, marker_dir: &Path) -> RunError
 
 /// Inputs to [`prepare_network_runtime`] that gate autostart behaviour.
 #[derive(Debug, Clone)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "this type intentionally models independent CLI/runtime flags one-to-one"
-)]
 pub struct AutostartFlags {
     /// `true` when the selection resolved to local autostart.
     pub sidecar_autostart: bool,
@@ -284,14 +280,11 @@ pub struct AutostartFlags {
     /// Sidecar credential config injected into `[sidecar.authority.credentials]`
     /// during sidecar config synthesis.
     pub authority_credentials: Option<SidecarCredentialsConfig>,
-    /// Path of the per-session capability seed minted by `firma run`.
+    /// Explicit or Firma-minted capability seed path for local Sidecar setup.
     pub capability_seed_path: Option<PathBuf>,
     /// When `true`, the autostarted sidecar is started in HTTP proxy
     /// interceptor mode rather than Unix socket mode.
     pub use_http_proxy_sidecar: bool,
-    /// When `true`, inject `mode = "monitor"` into the synthesized sidecar
-    /// config. Passed through from `RunInput.monitor_mode`.
-    pub monitor_mode: bool,
     /// Secret gateway address advertised to the autostarted Sidecar via
     /// `FIRMA_SECRET_GATEWAY_ADDR`. `None` when no secret providers are configured.
     pub secret_gateway_addr: Option<String>,
@@ -317,7 +310,6 @@ impl Default for AutostartFlags {
             authority_credentials: None,
             capability_seed_path: None,
             use_http_proxy_sidecar: false,
-            monitor_mode: false,
             secret_gateway_addr: None,
             http_secret_providers: Vec::new(),
         }
@@ -368,6 +360,8 @@ pub struct ResolveAuthorityRequest<'a> {
     pub capability_public_key_path: Option<&'a Path>,
     /// Working directory used to resolve a relative capability-specific key.
     pub working_dir: &'a Path,
+    /// State directory every unset artifact path resolves against.
+    pub state_layout: &'a RuntimeLayout,
 }
 
 /// Owned pieces threaded from [`prepare_network_runtime`] into the per-path
@@ -762,7 +756,7 @@ fn mint_capability_seed(
 ///
 /// The bridge injects the full attribution-header set (including
 /// `x-firma-session-id`) into every outbound HTTP/CONNECT request before
-/// forwarding it to the sidecar's TCP endpoint.  This is the fix for FIR-213:
+/// forwarding it to the sidecar's TCP endpoint. It is needed because
 /// on macOS the entrypoint script that normally starts the in-sandbox bridge
 /// subprocess is never run, so without this host-side bridge the sidecar
 /// receives an empty `session_id` and denies every request.
@@ -948,8 +942,10 @@ fn prepare_run_components(
                             session_id: &identity.session_id,
                             marker_dir: marker_dir.join("authority"),
                             profile_name: &plan.profile_name,
+                            execution_profile,
                             firma_exe: plan.firma_exe.clone(),
                             user_config_path: plan.user_config_path.clone(),
+                            state: runtime_layout,
                         },
                     )?;
                     let publication =
@@ -1021,6 +1017,7 @@ fn prepare_run_components(
                             execution_profile,
                             session_id: &identity.session_id,
                             marker_dir: marker_dir.clone(),
+                            state: runtime_layout.clone(),
                             template,
                             firma_exe: firma_exe.clone(),
                             authority_url: component_flags.authority_url.as_deref(),
@@ -1030,7 +1027,7 @@ fn prepare_run_components(
                             capability_seed_path: component_flags.capability_seed_path.clone(),
                             use_http_proxy_interceptor: component_flags.use_http_proxy_sidecar,
                             audit_fallback_path: Some(runtime_layout.audit_log()),
-                            monitor_mode: component_flags.monitor_mode,
+                            audit_signing_key_path: Some(runtime_layout.audit_key()),
                             secret_gateway_addr: component_flags.secret_gateway_addr.as_deref(),
                             http_secret_providers: &component_flags.http_secret_providers,
                         },
@@ -1267,16 +1264,52 @@ pub fn resolve_authority(
         .transpose()?
         .flatten()
         .unwrap_or_default();
+    // A scaffolded config names neither anchor: both are adopted from the state
+    // directory, and the Sidecar adopts them there when the material exists.
+    // Resolve the same positions here so the regeneration path below still sees
+    // a CA cert to repair, and the run still pins the anchors it should.
+    //
+    // A CA position that holds nothing yet is claimed only for an Authority this
+    // host owns and speaks TLS to, because claiming it is what schedules the
+    // regeneration below. A remote Authority's CA is issued elsewhere: there is
+    // nothing local to repair, and minting one here would pin a certificate
+    // authority the remote server never presented material from. A
+    // plaintext-loopback config must not acquire a CA path it never had either,
+    // which would send every run through TLS regeneration.
+    let local_authority = matches!(selection, crate::authority::AuthoritySelection::Local);
+    if local_authority
+        && section.local
+        && let Some(path) = request.user_config_path
+    {
+        crate::authority::bootstrap::backfill_mapping_inputs(path, request.profile_name)?;
+        // Reusing a daemon must not bypass admission of the selected config.
+        crate::authority::config::validate_local_config(path, request.state_layout)?;
+    }
+    let repairable_tls = local_authority
+        && section
+            .connect
+            .as_ref()
+            .and_then(|connect| connect.url.as_deref())
+            .is_some_and(is_https_scheme);
     let ca_cert_path = section
         .connect
         .as_ref()
         .and_then(|c| c.ca_cert_path.as_deref())
-        .map(|path| rebase_config_relative_path(path, request.user_config_dir));
+        .map(|path| rebase_config_relative_path(path, request.user_config_dir))
+        .or_else(|| {
+            let candidate = request.state_layout.authority_tls_ca_certificate();
+            (repairable_tls || firma_runtime_state::is_material_present(&candidate))
+                .then_some(candidate)
+        });
     let authority_pub_key_path = section
         .connect
         .as_ref()
         .and_then(|c| c.public_key_path.as_deref())
-        .map(|path| rebase_config_relative_path(path, request.user_config_dir));
+        .map(|path| rebase_config_relative_path(path, request.user_config_dir))
+        .or_else(|| {
+            let candidate = request.state_layout.authority_public_key();
+            firma_runtime_state::is_material_present(&candidate).then_some(candidate)
+        });
     let capability_pub_key_path = request
         .capability_public_key_path
         .map(|path| rebase_relative_path(path, request.working_dir));
@@ -1299,7 +1332,9 @@ pub fn resolve_authority(
         })?;
     let config_committed_local = section.local;
 
-    maybe_regen_tls(ca_cert_path.as_deref(), request.firma_exe)?;
+    if local_authority {
+        maybe_regen_tls(ca_cert_path.as_deref(), request.firma_exe)?;
+    }
 
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
@@ -1343,12 +1378,18 @@ pub fn resolve_authority(
             // the user-global Ed25519 signing key. On `Y`, persist the
             // `[authority]` section so subsequent runs skip the prompt.
             let cli_committed = !matches!(request.cli, crate::authority::AuthorityCli::Unset);
-            if !cli_committed && !config_committed_local {
+            let launch_config_path = if !cli_committed && !config_committed_local {
                 crate::authority::bootstrap::run_prompt(prompt)?;
                 let target_path =
                     crate::authority::bootstrap::resolve_persist_target(request.user_config_path)?;
-                crate::authority::bootstrap::persist_authority_section(&target_path)?;
-            }
+                crate::authority::bootstrap::persist_authority_section(
+                    &target_path,
+                    request.profile_name,
+                )?;
+                Some(target_path)
+            } else {
+                request.user_config_path.map(Path::to_path_buf)
+            };
             Ok(ResolvedAuthority {
                 // The effective ephemeral endpoint and key are filled from the
                 // validated Authority component before Sidecar planning.
@@ -1360,7 +1401,7 @@ pub fn resolve_authority(
                 owned: Some(OwnedAuthorityPlan {
                     profile_name: request.profile_name.to_string(),
                     firma_exe: request.firma_exe.to_path_buf(),
-                    user_config_path: request.user_config_path.map(Path::to_path_buf),
+                    user_config_path: launch_config_path,
                 }),
             })
         }
@@ -1369,12 +1410,19 @@ pub fn resolve_authority(
 
 /// Regenerate TLS material in-place when `ca_cert_path` is configured but
 /// absent (common after a tmpfs reboot wipe of `$XDG_RUNTIME_DIR`).
-/// Only called for local authority configurations.
+///
+/// Call this only for a local Authority: it reissues the material with
+/// `firma authority init-tls`, which this host has no standing to do for a CA
+/// that signs a remote Authority's certificate.
 fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), RunError> {
     let Some(path) = ca_cert_path else {
         return Ok(());
     };
-    if path.is_file() {
+    // Reissue only what is provably gone. Material that exists but cannot be
+    // stat-ed would be overwritten here, destroying the certificate the
+    // Authority is already serving; the component that opens it reports the
+    // permission error instead.
+    if firma_runtime_state::is_material_present(path) {
         return Ok(());
     }
     let out_dir = path.parent().ok_or_else(|| {
@@ -1473,6 +1521,17 @@ fn probe_authority_url(url_str: &str) -> Result<(), RunError> {
     })
 }
 
+/// Whether `url_str` names the `https` scheme.
+///
+/// URL schemes are case-insensitive, and the Sidecar reads this same URL through
+/// a URI parser that normalizes them. A byte-prefix comparison would disagree
+/// with the component that opens the connection.
+fn is_https_scheme(url_str: &str) -> bool {
+    url_str
+        .split_once("://")
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
+}
+
 fn parse_host_port(url_str: &str) -> Option<(String, u16)> {
     let (scheme, rest) = url_str.find("://").map_or((None, url_str), |i| {
         (Some(&url_str[..i]), &url_str[i + 3..])
@@ -1490,9 +1549,12 @@ fn parse_host_port(url_str: &str) -> Option<(String, u16)> {
     };
     let port = match port_str {
         Some(p) => p.parse::<u16>().ok()?,
+        // Schemes are case-insensitive, so the well-known port has to be
+        // matched that way too; otherwise `HTTPS://host` probes the gRPC
+        // default instead of 443.
         None => match scheme {
-            Some("https") => 443,
-            Some("http") => 80,
+            Some(s) if s.eq_ignore_ascii_case("https") => 443,
+            Some(s) if s.eq_ignore_ascii_case("http") => 80,
             _ => 50051,
         },
     };
@@ -1894,7 +1956,7 @@ mod non_structural_env_tests {
 
     /// Verifies that `setup_host_bridge` inserts all proxy env vars pointing
     /// to the bridge, and that the bridge port is distinct from the sidecar
-    /// port (FIR-213 regression guard).
+    /// port.
     #[test]
     fn non_structural_tcp_overrides_http_proxy_to_bridge_port() {
         let fake_sidecar = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -1958,7 +2020,7 @@ mod non_structural_env_tests {
         );
     }
 
-    /// Integration-style FIR-213 regression test across `prepare_network_runtime`:
+    /// Integration-style regression test across `prepare_network_runtime`:
     /// non-structural mode must wire an HTTP proxy bridge and point
     /// `HTTP_PROXY` at that bridge (not directly at the sidecar endpoint).
     #[test]

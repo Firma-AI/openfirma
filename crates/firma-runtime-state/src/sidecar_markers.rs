@@ -50,7 +50,8 @@ pub struct MetadataFile {
     pub session_id: String,
     /// URL of the authority that issued the capability tokens for this run.
     pub authority_url: String,
-    /// Policy bundle version digest string, as written by firma-run at startup.
+    /// Retained for older readers; written empty. The enforced version lives
+    /// in the Sidecar-owned enforcement state file.
     pub policy_bundle_version: String,
     /// PID of the sidecar process.
     pub pid: UserProcessId,
@@ -59,7 +60,7 @@ pub struct MetadataFile {
     /// Interceptor listen endpoint to health-probe: a `host:port` pair for an
     /// `http_proxy` interceptor, or a filesystem path for a Unix-domain-socket
     /// interceptor. Empty (the `serde` default) for legacy markers written
-    /// before FIR-195, in which case the probe falls back to
+    /// before markers recorded it, in which case the probe falls back to
     /// `<marker_dir>/sidecar.sock`.
     #[serde(default)]
     pub listen: String,
@@ -76,8 +77,12 @@ pub struct SidecarEntry {
     pub session_id: String,
     /// URL of the authority that issued the capability tokens for this run.
     pub authority_url: String,
-    /// Policy bundle version digest string.
+    /// Authority bundle version the Sidecar last reported enforcing; empty when
+    /// unknown.
     pub policy_bundle_version: String,
+    /// RFC 3339 UTC time the enforced bundle goes stale unless refreshed;
+    /// empty when unknown.
+    pub policy_bundle_expires_at: String,
     /// PID of the sidecar process, when known.
     pub pid: Option<UserProcessId>,
     /// RFC 3339 UTC timestamp of when the sidecar process started.
@@ -279,7 +284,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
 
     let meta = read(marker_dir)?;
 
-    // Legacy markers (pre-FIR-195) record no `listen`; fall back to the
+    // Legacy markers record no `listen`; fall back to the
     // conventional UDS path so their probe behavior is unchanged.
     let listen = if meta.listen.is_empty() {
         RunEntryLayout::from_root(marker_dir).sidecar_socket()
@@ -293,12 +298,18 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
         Err(_) => State::Unknown,
     };
 
+    let enforcement =
+        crate::enforcement_state::read(&crate::enforcement_state::run_path(marker_dir));
+    let (policy_bundle_version, policy_bundle_expires_at) = enforcement
+        .map(|state| (state.version, state.expires_at))
+        .unwrap_or_default();
     Ok(SidecarEntry {
         sandbox_id: meta.sandbox_id.to_string(),
         agent_id: meta.agent_id,
         session_id: meta.session_id,
         authority_url: meta.authority_url,
-        policy_bundle_version: meta.policy_bundle_version,
+        policy_bundle_version,
+        policy_bundle_expires_at,
         pid: Some(meta.pid),
         started_at: meta.started_at,
         state,

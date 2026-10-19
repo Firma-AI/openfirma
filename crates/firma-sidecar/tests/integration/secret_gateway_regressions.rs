@@ -1,4 +1,5 @@
 use std::io::{Read as _, Write as _};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,12 +20,10 @@ use firma_secret_provider::{
     non_empty::NonEmptyString,
     spec::http::{HttpIntegrationSpec, HttpMatcherRule, PathAndMatcher, PathOnly},
 };
-use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::connector::ConnectorRegistry;
 use firma_sidecar::handler::{HandledResponse, RequestHandler};
 use firma_sidecar::interceptor::http::HttpInterceptor;
 use firma_sidecar::normalizer::RawRequest;
-use firma_sidecar::startup::build_pipeline_runtime;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -87,34 +86,78 @@ impl ProxyResponse {
     }
 }
 
-fn passthrough_pipeline() -> anyhow::Result<Arc<firma_sidecar::pipeline::EnforcementPipeline>> {
-    let directory = tempfile::tempdir()?;
-    let rules_path = directory.path().join("mapping-rules.toml");
-    std::fs::write(
-        &rules_path,
-        r#"
-[[rules]]
-method = "GET"
-host = "unused.example.test"
-path = "/unused"
-action_class = "communication.external.read"
-"#,
-    )?;
-    let config_path = directory.path().join("firma.toml");
-    std::fs::write(
-        &config_path,
-        format!(
-            r"
-[mapping]
-rules_path = '{}'
-default_protected = false
-",
-            rules_path.display()
+fn authorized_pipeline() -> anyhow::Result<Arc<firma_sidecar::pipeline::EnforcementPipeline>> {
+    use firma_core::{CapabilityClaims, TokenError, TokenVerifier};
+    use firma_sidecar::pipeline::{
+        CapabilityMap, CapabilityValidator, ConstraintEnforcer, EnforcementPipeline,
+        IntentNormalizer, MappingTable, PipelineArgs, PolicyEvaluation,
+    };
+
+    struct Verifier(CapabilityClaims);
+    impl TokenVerifier for Verifier {
+        fn verify(&self, _: &str) -> Result<CapabilityClaims, TokenError> {
+            Ok(self.0.clone())
+        }
+    }
+    struct Permit;
+    impl PolicyEvaluation for Permit {
+        fn evaluate(
+            &self,
+            _: &firma_identifiers::AgentId,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn is_fresh(&self) -> bool {
+            true
+        }
+        fn version(&self) -> Option<String> {
+            None
+        }
+    }
+    // Secret mediation regressions exercise authorized dispatch, never a mapping bypass.
+    let now = chrono::Utc::now();
+    let claims = CapabilityClaims {
+        token_id: "ctok_01j0000000e008000000000001".parse()?,
+        agent_id: "agt_01j0000000e008000000000001".parse()?,
+        session_id: "sess_secret_regression".parse()?,
+        action_set: vec!["communication.external.send".into()],
+        resource_scope: "*".into(),
+        issued_at: now,
+        expiry: now + chrono::Duration::hours(1),
+        context_hash: String::new(),
+    };
+    let mappings =
+        MappingTable::from_managed_rules(vec![firma_sidecar::config::MappingRuleConfig {
+            method: Some(Method::POST),
+            host: "*".into(),
+            path: Some(PATH.into()),
+            action_class: "communication.external.send".into(),
+        }])?;
+    Ok(Arc::new(EnforcementPipeline::new(PipelineArgs {
+        normalizer: IntentNormalizer::new(mappings),
+        capability_validator: CapabilityValidator::new(
+            CapabilityMap::new(vec![
+                firma_sidecar::enforcement::capability_map::CapabilityEntry {
+                    raw_token: "fixture-token".into(),
+                    claims: claims.clone(),
+                },
+            ]),
+            Arc::new(Verifier(claims)),
+            Arc::new(
+                firma_sidecar::enforcement::revocation::BloomLruRevocationStore::new(
+                    firma_sidecar::enforcement::revocation::RevocationConfig::default(),
+                ),
+            ),
         ),
-    )?;
-    let config = SidecarConfig::load_from_path(&config_path).map_err(anyhow::Error::msg)?;
-    let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(directory.path());
-    Ok(build_pipeline_runtime(&runtime_layout, &config)?.pipeline)
+        constraint_enforcer: ConstraintEnforcer::new(Arc::new(Permit)),
+        credential_injector: Box::new(firma_sidecar::credential::NullCredentialInjector),
+        session_state_store: Arc::new(firma_sidecar::enforcement::LruSessionStateStore::new(
+            const { NonZeroUsize::new(16).unwrap() },
+        )),
+    })))
 }
 
 fn fixed_handler(
@@ -135,7 +178,7 @@ fn fixed_handler(
     let registry = Arc::new(ConnectorRegistry::new(Arc::new(connector)));
     let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(8);
     Ok((
-        RequestHandler::new(passthrough_pipeline()?, registry, audit_tx),
+        RequestHandler::new(authorized_pipeline()?, registry, audit_tx),
         requests,
     ))
 }
@@ -752,7 +795,7 @@ async fn oversized_decompressed_response_fails_closed() -> anyhow::Result<()> {
     let handler = handler
         .with_gateway_client(gateway)
         .with_http_secret_providers(vec![sensitive_provider(host).expect("valid provider")])
-        .with_max_decompressed_body_bytes(1024);
+        .with_max_decompressed_body_bytes(NonZeroUsize::new(1024).unwrap());
 
     let response = proxy_request(handler, host, b"{}").await?;
     let gateway_contact = tokio::time::timeout(Duration::from_millis(100), contacted).await;

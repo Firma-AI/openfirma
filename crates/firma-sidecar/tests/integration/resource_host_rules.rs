@@ -1,7 +1,7 @@
 //! Host/path-level Cedar rules evaluate end-to-end through the Sidecar policy
 //! evaluator.
 //!
-//! FIR-190 follow-up: the `Firma::Resource` entity now carries `host` / `path`
+//! The `Firma::Resource` entity carries `host` / `path`
 //! attributes, populated by the evaluator from the normalized resource string
 //! and passed to Cedar in the authorizer's entity store. Before this, every
 //! `resource.<attr>` access errored against an empty store, so host-level rules

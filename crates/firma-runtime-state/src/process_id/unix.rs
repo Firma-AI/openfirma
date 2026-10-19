@@ -30,10 +30,6 @@ impl UserProcessId {
 }
 
 impl From<UserProcessId> for nix::unistd::Pid {
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "Type invariant: UserProcessId only stores values that fit Unix pid_t"
-    )]
     fn from(value: UserProcessId) -> Self {
         Self::from_raw(value.get() as nix::libc::pid_t)
     }

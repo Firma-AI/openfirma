@@ -1,6 +1,6 @@
 //! Mapping table for intent normalization.
 //!
-//! Loaded from TOML configuration at startup. Each rule maps an HTTP
+//! Compiled from each accepted Authority snapshot. Each rule maps an HTTP
 //! method + host + path pattern to a canonical action class from the
 //! Canonical Action Class Registry v0.1. Rules are sorted by descending
 //! specificity so that the first match wins.
@@ -18,7 +18,7 @@ use crate::enforcement::registry::ActionClassRegistry;
 /// Errors that can occur while building a [`MappingTable`] from configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum MappingTableError {
-    /// The mapping rules file itself failed validation (empty file,
+    /// The mapping rules file itself failed validation (malformed host,
     /// malformed rule, invalid HTTP method, etc).
     #[error("invalid mapping rules file: {0}")]
     InvalidRulesFile(String),
@@ -59,16 +59,15 @@ pub struct MappingRule {
     pub host_pattern: String,
     pub path_pattern: Option<String>,
     pub action_class: String,
-    specificity: u32,
+    specificity: usize,
 }
 
 /// Collection of validated, specificity-ordered mapping rules.
 ///
-/// Loaded from TOML configuration at startup. Immutable after initialization.
+/// Compiled once per accepted snapshot and immutable afterwards.
 #[derive(Debug, Clone)]
 pub struct MappingTable {
     rules: Vec<MappingRule>,
-    default_protected: bool,
 }
 
 /// The result of matching a request against the mapping table.
@@ -78,45 +77,20 @@ pub enum MatchResult<'a> {
     Matched(&'a MappingRule),
     /// No rule matched and the host is protected — deny as unclassified.
     UnclassifiedProtected,
-    /// No rule matched and the host is not protected — passthrough.
-    NotProtected,
 }
 
 impl MappingRule {
-    fn compute_specificity(method: Option<&Method>, host: &str, path: Option<&String>) -> u32 {
-        let mut score = 0u32;
-
-        // Exact host > wildcard host
-        if !host.contains('*') {
-            score += 100;
-        }
-
-        // Specific method > any method
-        if method.is_some() {
-            score += 10;
-        }
-
-        // Path presence and specificity
-        if let Some(p) = path {
-            score += 5;
-            // Longer path = more specific
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "path segments will never exceed u32"
-            )]
-            let segments = p.split('/').filter(|s| !s.is_empty()).count() as u32;
-            score += segments;
-            // No wildcards in path = more specific
-            if !p.contains('*') {
-                score += 10;
-            }
-        }
-
-        score
+    fn compute_specificity(method: Option<&Method>, host: &str, path: Option<&String>) -> usize {
+        firma_core::mapping_specificity(method.is_some(), host, path.map(String::as_str))
     }
 }
 
 impl MappingTable {
+    /// An explicit managed snapshot with no rules still protects all traffic.
+    pub(crate) fn empty_protected() -> Self {
+        Self { rules: Vec::new() }
+    }
+
     /// Load and validate mapping rules from a parsed config.
     ///
     /// Host patterns are normalized like runtime request hosts (lowercased,
@@ -126,15 +100,47 @@ impl MappingTable {
     ///
     /// # Errors
     /// Returns an error if the rules are structurally invalid or
-    /// ambiguous.
+    /// ambiguous. Empty rules are protected deny-all.
     pub fn from_config(
         file: &MappingRulesFile,
         registry: &ActionClassRegistry,
-        default_protected: bool,
     ) -> Result<Self, MappingTableError> {
         file.validate()
             .map_err(MappingTableError::InvalidRulesFile)?;
 
+        Self::compile(file, registry)
+    }
+
+    /// Compile a complete managed rule list, including a protected empty list.
+    ///
+    /// Managed snapshots must arrive normalized: hosts are already lowercased
+    /// without trailing dots or default ports, and paths are already checked
+    /// for NUL and length. A non-canonical spelling is a producer bug and
+    /// fails closed here instead of being silently normalized like local
+    /// files, which remain forgiving for operator-authored configuration.
+    ///
+    /// # Errors
+    /// Rejects malformed rules, unknown action classes, and duplicate matchers.
+    pub fn from_managed_rules(rules: Vec<MappingRuleConfig>) -> Result<Self, MappingTableError> {
+        let file = MappingRulesFile { rules };
+        for (index, rule) in file.rules.iter().enumerate() {
+            firma_core::mapping::validate_managed_rule(
+                rule.method.as_ref().map(|method| method.as_str()),
+                &rule.host,
+                rule.path.as_deref(),
+                &rule.action_class,
+            )
+            .map_err(|error| {
+                MappingTableError::InvalidRulesFile(format!("rule {index}: {error}"))
+            })?;
+        }
+        Self::compile(&file, &ActionClassRegistry::v0_1())
+    }
+
+    fn compile(
+        file: &MappingRulesFile,
+        registry: &ActionClassRegistry,
+    ) -> Result<Self, MappingTableError> {
         // Duplicate (method, host, path) tuple detection. Two rules
         // with the same triple across merged mapping files produces
         // ambiguous classification — fail-closed at startup. Hosts are
@@ -185,10 +191,7 @@ impl MappingTable {
         // Sort by descending specificity (most specific first)
         rules.sort_by_key(|rule| std::cmp::Reverse(rule.specificity));
 
-        Ok(Self {
-            rules,
-            default_protected,
-        })
+        Ok(Self { rules })
     }
 
     /// Find the first (most specific) matching rule for a request.
@@ -205,11 +208,7 @@ impl MappingTable {
             }
         }
 
-        if self.default_protected {
-            MatchResult::UnclassifiedProtected
-        } else {
-            MatchResult::NotProtected
-        }
+        MatchResult::UnclassifiedProtected
     }
 
     fn rule_matches(rule: &MappingRule, method: &Method, host: &Authority, path: &str) -> bool {
@@ -240,28 +239,14 @@ impl MappingTable {
 
 /// Normalize a host or rule host pattern into its canonical matching form.
 ///
-/// Splits the authority into a name and an optional port, per address
-/// family (see [`split_authority`] and [`split_ipv6_authority`]), then
-/// drops a default `:443`/`:80` port and re-appends a nonstandard all-digit
-/// one. This is the single normalization shared by runtime request hosts,
-/// rule host patterns, and config validation, so the three can never
+/// This is [`firma_core::normalize_mapping_host`], re-exported so runtime
+/// request hosts, rule host patterns, and config validation can never
 /// disagree on what a spelling means.
-pub fn normalize_host_pattern(host: &str) -> String {
-    let trimmed = host.trim();
-    let (name, port) = if trimmed.starts_with('[') {
-        split_ipv6_authority(trimmed)
-    } else {
-        split_authority(trimmed)
-    };
-    match port.as_deref() {
-        Some("443" | "80") | None => name,
-        Some(port) => format!("{name}:{port}"),
-    }
-}
+pub use firma_core::normalize_mapping_host as normalize_host_pattern;
 
 /// Normalize a request host into the authority used for outbound dispatch.
 ///
-/// Splits the authority exactly like [`normalize_host_pattern`], but drops
+/// Splits the authority with [`firma_core::split_mapping_authority`], but drops
 /// the port only when it is the default for the request's *actual* scheme
 /// (`443` for HTTPS, `80` for HTTP) rather than either default. An explicit
 /// port that names the opposite scheme's default — `:443` on a plain HTTP
@@ -269,56 +254,11 @@ pub fn normalize_host_pattern(host: &str) -> String {
 /// be preserved, since the connector dispatches to exactly the authority
 /// stored in the normalized envelope's resource host.
 pub fn normalize_dispatch_host(host: &str, is_https: bool) -> String {
-    let trimmed = host.trim();
-    let (name, port) = if trimmed.starts_with('[') {
-        split_ipv6_authority(trimmed)
-    } else {
-        split_authority(trimmed)
-    };
+    let (name, port) = firma_core::split_mapping_authority(host);
     let default_port = if is_https { "443" } else { "80" };
     match port.as_deref() {
         Some(port) if port != default_port => format!("{name}:{port}"),
         _ => name,
-    }
-}
-
-/// Returns `true` for a nonempty all-digit port, the only form accepted as a
-/// port when splitting an authority.
-fn is_valid_port(port: &str) -> bool {
-    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// Splits a hostname/IPv4 authority into a lowercased name and an optional
-/// port.
-///
-/// Trailing dots are stripped both before the port split (`host:443.`) and
-/// from the name part after it (`host.:443`); either position spells the
-/// same authority (RFC 4343 case-insensitivity plus the FQDN trailing dot).
-/// Wildcards pass through untouched except for this dot handling (`*.:443`
-/// normalizes to `*`, which validation rejects as a silent catch-all
-/// promotion).
-fn split_authority(host: &str) -> (String, Option<String>) {
-    let lower = host.trim_end_matches('.').to_ascii_lowercase();
-    let (name, port) = match lower.rsplit_once(':') {
-        Some((name, port)) if !name.is_empty() && is_valid_port(port) => (name, Some(port)),
-        _ => (lower.as_str(), None),
-    };
-    (
-        name.trim_end_matches('.').to_string(),
-        port.map(str::to_string),
-    )
-}
-
-/// Splits a bracketed IPv6 authority into a lowercased, bracketed name and
-/// an optional port.
-///
-/// The port is split at the closing bracket rather than the last colon,
-/// since an IPv6 address itself contains colons.
-fn split_ipv6_authority(host: &str) -> (String, Option<String>) {
-    let lower = host.to_ascii_lowercase();
-    match lower.split_once("]:") {
-        Some((name, port)) if is_valid_port(port) => (format!("{name}]"), Some(port.to_string())),
-        _ => (lower, None),
     }
 }
 
@@ -327,7 +267,7 @@ fn split_ipv6_authority(host: &str) -> (String, Option<String>) {
 /// Shared with `firma-secret-provider`'s `HttpIntegrationSpec` host/path
 /// matching (a distinct crate this one already depends on) rather than
 /// reimplemented here, so the two never silently diverge.
-pub use firma_secret_provider::glob_match;
+pub use firma_core::glob_match;
 
 #[cfg(test)]
 mod tests {
@@ -347,8 +287,7 @@ mod tests {
                 action_class: "nonexistent.action".to_string(),
             }],
         };
-        let err =
-            MappingTable::from_config(&bad_file, &ActionClassRegistry::v0_1(), true).unwrap_err();
+        let err = MappingTable::from_config(&bad_file, &ActionClassRegistry::v0_1()).unwrap_err();
         assert_matches!(
             err,
             MappingTableError::NonExistingActionClass { index: 0, ref rule }
@@ -380,7 +319,7 @@ mod tests {
                 },
             ],
         };
-        let err = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap_err();
+        let err = MappingTable::from_config(&file, &ActionClassRegistry::v0_1()).unwrap_err();
         assert_matches!(
             err,
             MappingTableError::DuplicateRule { index: 1, ref rule }
@@ -407,7 +346,7 @@ mod tests {
                 },
             ],
         };
-        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
+        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1()).unwrap();
 
         match table.find_match(
             &Method::POST,
@@ -417,7 +356,7 @@ mod tests {
             MatchResult::Matched(rule) => {
                 assert_eq!(rule.action_class, "communication.external.send");
             }
-            other => panic!("expected Matched, got {other:?}"),
+            other @ MatchResult::UnclassifiedProtected => panic!("expected Matched, got {other:?}"),
         }
     }
 
@@ -439,7 +378,7 @@ mod tests {
                 },
             ],
         };
-        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
+        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1()).unwrap();
 
         match table.find_match(
             &Method::GET,
@@ -447,7 +386,7 @@ mod tests {
             "/forecast",
         ) {
             MatchResult::Matched(rule) => assert_eq!(rule.action_class, "filesystem.read"),
-            other => panic!("expected Matched, got {other:?}"),
+            other @ MatchResult::UnclassifiedProtected => panic!("expected Matched, got {other:?}"),
         }
     }
 
@@ -462,7 +401,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
+        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1()).unwrap();
 
         assert!(matches!(
             table.find_match(&Method::GET, &Authority::from_static("unknown.host"), "/"),

@@ -2,11 +2,10 @@
 //!
 //! This crate is the single source of truth for the *shape* of Firma
 //! configuration. It contains representation only: `serde`-derived structs
-//! and enums, their default values, and value types that enforce intrinsic
-//! constructibility invariants. It deliberately holds no cross-field or
+//! and enums and their default values. It deliberately holds no cross-field or
 //! environment validation, no path rebasing, and no derived runtime types.
-//! Dependencies are limited to `serde` and representation-fidelity helpers for
-//! individual fields (such as `bytesize` for human-readable byte sizes).
+//! Dependencies are limited to `serde`, shared configuration value types, and
+//! representation-fidelity helpers for individual fields.
 //!
 //! Each Firma component owns a validated configuration type built from the
 //! relevant portion of this schema (typically via `TryFrom`), keeping
@@ -22,4 +21,4 @@ pub mod run;
 pub mod secret_matcher;
 pub mod secret_provider;
 pub mod sidecar;
-pub mod utils;
+mod utils;

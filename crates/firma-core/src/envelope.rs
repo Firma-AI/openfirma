@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use firma_http::{HeaderMap, Method};
@@ -170,7 +171,7 @@ pub enum ActionParams {
 ///
 /// Restricts the method to known values so that invalid strings
 /// (e.g., `"WHATEVER"`) are rejected at the type level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::EnumIter)]
 pub enum HttpMethod {
     GET,
     POST,
@@ -199,6 +200,28 @@ impl HttpMethod {
     }
 }
 
+impl FromStr for HttpMethod {
+    type Err = InvalidStrMethod;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "GET" => Ok(Self::GET),
+            "POST" => Ok(Self::POST),
+            "PUT" => Ok(Self::PUT),
+            "DELETE" => Ok(Self::DELETE),
+            "PATCH" => Ok(Self::PATCH),
+            "HEAD" => Ok(Self::HEAD),
+            "OPTIONS" => Ok(Self::OPTIONS),
+            "CONNECT" => Ok(Self::CONNECT),
+            _ => Err(InvalidStrMethod(s.to_owned())),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid method {0}")]
+pub struct InvalidStrMethod(String);
+
 impl<'a> TryFrom<&'a Method> for HttpMethod {
     type Error = InvalidMethod<'a>;
 
@@ -226,6 +249,7 @@ impl fmt::Display for HttpMethod {
         f.write_str(self.as_str())
     }
 }
+
 /// Parameters for an outbound HTTP request.
 ///
 /// The target URL lives on `ExecutionIntent.resource`, not here —

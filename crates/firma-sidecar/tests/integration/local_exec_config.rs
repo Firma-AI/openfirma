@@ -1,3 +1,4 @@
+use super::state_layout::empty_state_beside;
 use firma_sidecar::config::{LocalExecConfigError, SidecarConfig, SidecarConfigError};
 
 #[test]
@@ -9,6 +10,8 @@ fn sub_millisecond_local_exec_retry_after_is_rejected() -> Result<(), Box<dyn st
         &config_path,
         format!(
             r#"
+[authority]
+url = "http://127.0.0.1:50051"
 [local_exec]
 socket_path = '{}'
 retry_after = "500us"
@@ -17,7 +20,7 @@ retry_after = "500us"
         ),
     )?;
 
-    let error = SidecarConfig::load_from_path(&config_path)
+    let error = SidecarConfig::load_from_path(&config_path, &empty_state_beside(&config_path))
         .expect_err("a positive duration below the millisecond wire unit must fail");
 
     let SidecarConfigError::LocalExec(source) = &error else {

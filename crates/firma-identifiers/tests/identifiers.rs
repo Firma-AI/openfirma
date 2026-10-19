@@ -1,6 +1,9 @@
 use std::assert_matches;
 
-use firma_identifiers::{AgentId, ApprovalTokenId, AuditEventId, SandboxId, SessionId, TokenId};
+use firma_identifiers::{
+    AgentId, ApprovalTokenId, AuditEventId, MembershipId, SandboxId, SessionId, TokenId,
+    WorkspaceId,
+};
 
 #[test]
 fn generated_type_ids_have_their_canonical_prefixes_and_round_trip() {
@@ -10,6 +13,8 @@ fn generated_type_ids_have_their_canonical_prefixes_and_round_trip() {
         TokenId::generate().to_string(),
         AuditEventId::generate().to_string(),
         ApprovalTokenId::generate().to_string(),
+        WorkspaceId::generate().to_string(),
+        MembershipId::generate().to_string(),
     ];
 
     assert!(ids[0].starts_with("agt_"));
@@ -22,6 +27,10 @@ fn generated_type_ids_have_their_canonical_prefixes_and_round_trip() {
     assert!(ids[3].parse::<AuditEventId>().is_ok());
     assert!(ids[4].starts_with("atok_"));
     assert!(ids[4].parse::<ApprovalTokenId>().is_ok());
+    assert!(ids[5].starts_with("wsp_"));
+    assert!(ids[5].parse::<WorkspaceId>().is_ok());
+    assert!(ids[6].starts_with("mem_"));
+    assert!(ids[6].parse::<MembershipId>().is_ok());
 }
 
 #[test]

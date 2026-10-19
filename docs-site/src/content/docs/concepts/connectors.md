@@ -28,7 +28,11 @@ This is a design choice worth understanding. The connector is downstream of the 
 - The connector cannot see, modify, or override decisions. It just dispatches what was allowed.
 - Adding new connectors (in the future, for non-HTTP transports) does not enlarge the enforcement surface. Whatever a new connector does to a request, it does to a request the policy already approved.
 
-Conversely, an `ALLOW` means the request is forwarded **as the agent submitted it**, modulo credential injection. The Sidecar does not rewrite payloads, does not synthesize fields, does not "fix up" what the agent sent. If you want behavior to change, the place to express it is policy — not the connector.
+An `ALLOW` authorizes dispatch; it does not promise byte-for-byte forwarding.
+Explicitly configured transformations may still modify the dispatch copy or its
+response: policy `MODIFY`, static header injection, secret-gateway rehydration,
+HTTP-provider extraction, and inbound secret masking. Without one of those
+features, the connector does not synthesize or "fix up" payload fields.
 
 ## Configuring per-host limits
 
@@ -68,7 +72,11 @@ Hosts not listed use `default_timeout` and no rate limit. Set sensible defaults 
 
 ## Credential injection
 
-The connector is also where credentials for upstream services are attached. This is a deliberate choice: the agent never holds the secret, the policy decides whether the call is OK, and only then does the connector add the credential.
+The connector is also where credentials for upstream services are attached. This
+is a deliberate choice: the agent does not hold the credential before dispatch,
+the policy decides whether the call is OK, and only then does the connector add
+it. Static injection does not mask responses, so an authorized upstream that
+reflects the injected header can still expose it to the agent.
 
 The `[sidecar.credentials.*]` blocks declare what to inject for which host:
 
@@ -87,7 +95,10 @@ Two modes are supported today:
 - **`vault`** — reads the value from a file rendered by Vault Agent. Requires
   `secret_path` in the credential block.
 
-The injection happens after `Decision::Allow` and before dispatch. If injection fails (env var missing, Vault unreachable), the connector returns a typed error, the call is denied, and the audit event records what happened.
+The injection happens after `Decision::Allow` and before dispatch. A missing or
+empty `basic` environment variable prevents Sidecar startup. An unreadable
+`vault` file fails the already-allowed call before dispatch with an
+`ABORT:CREDENTIAL_INJECTION_FAILED` outcome; it is not a policy denial.
 
 For the operator workflow, see [Inject credentials](../../guides/inject-credentials/).
 

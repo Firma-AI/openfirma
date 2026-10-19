@@ -17,6 +17,14 @@ pub enum InitError {
         to: PathBuf,
         source: io::Error,
     },
+    /// The shared guest secret shim could not be inspected.
+    InspectSecretShim {
+        path: PathBuf,
+        target: String,
+        source: io::Error,
+    },
+    /// The shared guest secret shim is not an executable regular file.
+    SecretShimNotExecutable { path: PathBuf },
     /// `/dev/ptmx` could not be inspected before PTY setup.
     StatPtmx { path: PathBuf, source: io::Error },
     /// `/proc/cmdline` could not be read after procfs is mounted.
@@ -102,6 +110,8 @@ pub enum InitError {
     NonLoopbackNetworkSocketAddr { field: &'static str, value: String },
     /// A required network port was zero.
     ZeroNetworkPort { field: &'static str },
+    /// A VSOCK port used the wildcard sentinel, which is invalid for connections.
+    ReservedVsockPort { field: &'static str },
     /// The contract allowed direct guest network devices.
     DirectNetworkDevicesAllowed,
     /// The network attribution header map contained an empty key.
@@ -274,6 +284,20 @@ impl fmt::Display for InitError {
                 to.display(),
                 from.display()
             ),
+            Self::InspectSecretShim {
+                path,
+                target,
+                source,
+            } => write!(
+                formatter,
+                "inspect secret shim binary {} for target '{target}': {source}",
+                path.display()
+            ),
+            Self::SecretShimNotExecutable { path } => write!(
+                formatter,
+                "secret shim must be an executable regular file: {}",
+                path.display()
+            ),
             Self::StatPtmx { path, source } => {
                 write!(
                     formatter,
@@ -408,6 +432,9 @@ impl fmt::Display for InitError {
             }
             Self::ZeroNetworkPort { field } => {
                 write!(formatter, "{field} port must be greater than zero")
+            }
+            Self::ReservedVsockPort { field } => {
+                write!(formatter, "{field} must not use the VSOCK wildcard port")
             }
             Self::DirectNetworkDevicesAllowed => {
                 formatter.write_str("network.direct_network_devices_allowed must be false")
@@ -667,10 +694,15 @@ impl fmt::Display for InitError {
 
 impl std::error::Error for InitError {
     /// Returns the underlying I/O or parse error when one exists.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive source mapping is clearest as one match"
+    )]
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::CreateDir { source, .. }
             | Self::CreateSymlink { source, .. }
+            | Self::InspectSecretShim { source, .. }
             | Self::StatPtmx { source, .. }
             | Self::ReadKernelCmdline { source }
             | Self::MountPseudo { source, .. }
@@ -729,6 +761,7 @@ impl std::error::Error for InitError {
             }
             Self::InvalidChildPgid { source, .. } => Some(source),
             Self::MissingKernelArg { .. }
+            | Self::SecretShimNotExecutable { .. }
             | Self::UnsupportedNetworkMode { .. }
             | Self::ContractNotRegularFile { .. }
             | Self::InvalidContractVersion { .. }
@@ -749,6 +782,7 @@ impl std::error::Error for InitError {
             | Self::RelativeMountTarget { .. }
             | Self::NonLoopbackNetworkSocketAddr { .. }
             | Self::ZeroNetworkPort { .. }
+            | Self::ReservedVsockPort { .. }
             | Self::DirectNetworkDevicesAllowed
             | Self::EmptyAttributionHeaderName
             | Self::EmptyAttributionHeaderValue { .. }

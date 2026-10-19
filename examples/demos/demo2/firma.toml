@@ -4,6 +4,7 @@
 # ── Mini Authority ───────────────────────────────────────────────────────────
 
 [authority]
+mapping_rules_paths = ["mapping-rules.toml"]
 listen_addr = "127.0.0.1:50051"
 policy_dir = "policies/"
 issuance_policy_dir = "issuance-policies/"
@@ -19,8 +20,9 @@ mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 drain_timeout = "30s"
 
-# Override the built-in HTTPS MITM allowlist so the policy can see plaintext
-# requests on the two demo targets.
+# Narrow the intercept-everything default so the policy sees plaintext requests
+# on the two demo targets and everything else tunnels. Listing
+# `intercept_hosts` replaces the default.
 [sidecar.interceptor.https_mitm]
 intercept_hosts = ["api.github.com", "httpbin.org"]
 # Strict-MITM these hosts so the CONNECT preface is auto-authorized once the
@@ -44,13 +46,6 @@ target_host = "api.github.com"
 header = "Authorization"
 prefix = "Bearer "
 value_from_env = "GITHUB_TOKEN"
-
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-default_protected = true
-
-[sidecar.capability_validation]
-clock_skew_tolerance = "0s"
 
 [sidecar.connector]
 default_timeout = "10s"

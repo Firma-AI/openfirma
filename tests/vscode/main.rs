@@ -78,8 +78,10 @@ fn scaffold_vscode_config(config_dir: &Path, state_dir: &Path, workspace: &Path)
 
 fn run_vscode_profile(
     config_path: &Path,
+    state_dir: &Path,
     workspace: &Path,
     path: Option<String>,
+    connection_dir: Option<&Path>,
     code_args: &[&str],
 ) -> Output {
     let mut command = Command::new(firma_bin());
@@ -90,12 +92,16 @@ fn run_vscode_profile(
         .args(["--", "code"])
         .args(code_args)
         .current_dir(workspace)
+        .env("FIRMA_STATE_DIR", state_dir)
         .env("NO_COLOR", "1");
     if let Some(path) = path {
         command.env("PATH", path);
     }
+    if let Some(connection_dir) = connection_dir {
+        command.env("FIRMA_CONNECTION_DIR", connection_dir);
+    }
     // The shim passes `--wait`, so this blocks until the launcher exits. Both
-    // callers use a launcher that returns immediately; the run-away case is
+    // test launchers return immediately; the run-away case is
     // bounded by the nextest `slow-timeout` in `.config/nextest.toml`.
     command.output().expect("spawn firma run")
 }
@@ -151,8 +157,10 @@ fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
 
     let output = run_vscode_profile(
         &config_dir.join("firma.toml"),
+        &state_dir,
         &workspace,
         Some(prepend_path(&host_bin)),
+        None,
         &["."],
     );
     assert_run_succeeded(&output);
@@ -184,6 +192,37 @@ fn fake_vscode_receives_managed_launch_contract_through_firma_run() {
     assert_eq!(parsed["github-authentication.preferDeviceCodeFlow"], true);
 }
 
+#[test]
+#[ignore = "requires a bubblewrap-capable sandbox host"]
+fn fake_vscode_connection_store_cannot_overlap_the_protected_state_mount() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let config_dir = workspace.join(".firma");
+    let state_dir = tmp.path().join("state");
+    let host_bin = workspace.join("host-bin");
+    std::fs::create_dir_all(&host_bin).expect("create fake code directory");
+    write_fake_code(&host_bin.join("code"));
+    scaffold_vscode_config(&config_dir, &state_dir, &workspace);
+    let connection_dir = config_dir.join("vscode");
+
+    let output = run_vscode_profile(
+        &config_dir.join("firma.toml"),
+        &state_dir,
+        &workspace,
+        Some(prepend_path(&host_bin)),
+        Some(&connection_dir),
+        &["."],
+    );
+    let (stdout, stderr) = output_text(&output);
+
+    assert!(!output.status.success(), "{stdout}\n{stderr}");
+    assert!(
+        stderr.contains("overlaps required sandbox mount"),
+        "{stderr}"
+    );
+    assert!(!workspace.join("vscode-invocation.txt").exists());
+}
+
 // `#[ignore]` is the only gate: selecting this test is an explicit opt-in, so
 // it must never report success without exercising a real VS Code binary.
 #[test]
@@ -203,7 +242,9 @@ fn real_vscode_accepts_managed_launch_contract() {
 
     let output = run_vscode_profile(
         &config_dir.join("firma.toml"),
+        &state_dir,
         &workspace,
+        None,
         None,
         &["--version"],
     );

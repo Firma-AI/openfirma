@@ -90,11 +90,12 @@ guest launch path.
 
 **Bypassed by:**
 
-- Hosts not in any mapping rule, when `default_protected = false`. Such requests are PASSTHROUGH — no class, no enforcement.
 - Misconfigured rules that put a sensitive path under the wrong class.
 - Path-traversal-shaped tricks if a rule uses overly wide wildcards.
 
-**Mitigations:** set `default_protected = true` in production. Review the mapping rules as security-sensitive code. Avoid `path = "*"` rules for hosts that have multiple sensitive endpoints — be specific.
+**Mitigations:** Authority snapshots deny unmatched traffic by default; Sidecars
+cannot disable this posture. Review Authority mapping rules as security-sensitive
+code. Avoid `path = "*"` rules for hosts with multiple sensitive endpoints.
 
 ### Layer 4: Capability validation (Stage 1)
 

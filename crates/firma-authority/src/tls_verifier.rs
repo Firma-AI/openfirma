@@ -167,7 +167,7 @@ mod tests {
 
         let mut f = NamedTempFile::new().unwrap();
         for id in ids {
-            writeln!(f, "[[authorized]]\ncn = \"{id}\"").unwrap();
+            writeln!(f, "[[clients]]\nidentity = \"{id}\"").unwrap();
         }
         Arc::new(AuthorizedClientSet::load(f.path()).unwrap())
     }

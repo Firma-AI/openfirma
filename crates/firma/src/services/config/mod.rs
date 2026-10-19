@@ -40,92 +40,14 @@ struct SidecarInputs {
 struct CollectedInputs {
     mode: Mode,
     keep_local_authority: bool,
+    preserve_authority_mappings: bool,
+    reset_remote_connection: bool,
     authority: AuthorityInputs,
     sidecar: SidecarInputs,
     config_dir: PathBuf,
     state_dir: PathBuf,
     agent_id: Option<AgentId>,
     profile: String,
-}
-
-/// Files and directories owned by a local Authority instance.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AuthorityStateLayout {
-    root: PathBuf,
-}
-
-impl AuthorityStateLayout {
-    /// Construct an Authority state layout from an already resolved root.
-    fn from_root(root: &Path) -> Self {
-        Self {
-            root: root.to_path_buf(),
-        }
-    }
-
-    /// Return the Authority state root.
-    fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Return the Authority private signing-key path.
-    fn authority_private_key(&self) -> PathBuf {
-        self.root.join("authority.key")
-    }
-
-    /// Return the Authority public signing-key path.
-    fn authority_public_key(&self) -> PathBuf {
-        self.root.join("authority.pub")
-    }
-
-    /// Return the audit signing-key path.
-    fn audit_key(&self) -> PathBuf {
-        self.root.join("audit.key")
-    }
-
-    /// Return the revocation-list path.
-    fn revocations(&self) -> PathBuf {
-        self.root.join("revocations.txt")
-    }
-
-    /// Return the generated certificate-authority directory.
-    fn generated_ca(&self) -> PathBuf {
-        self.root.join("generated-firma-ca")
-    }
-
-    /// Return the TLS material directory.
-    fn tls_directory(&self) -> PathBuf {
-        self.root.join("tls")
-    }
-
-    /// Return the Authority TLS certificate path.
-    fn tls_certificate(&self) -> PathBuf {
-        self.tls_directory().join("authority.crt")
-    }
-
-    /// Return the Authority TLS private-key path.
-    fn tls_private_key(&self) -> PathBuf {
-        self.tls_directory().join("authority.key")
-    }
-
-    /// Return the TLS certificate-authority certificate path.
-    fn tls_ca_certificate(&self) -> PathBuf {
-        self.tls_directory().join("authority-ca.crt")
-    }
-
-    /// Return the TLS certificate-authority private-key path.
-    fn tls_ca_private_key(&self) -> PathBuf {
-        self.tls_directory().join("authority-ca.key")
-    }
-
-    /// Return every generated TLS material path.
-    fn tls_files(&self) -> [PathBuf; 4] {
-        [
-            self.tls_certificate(),
-            self.tls_private_key(),
-            self.tls_ca_certificate(),
-            self.tls_ca_private_key(),
-        ]
-    }
 }
 
 #[derive(Debug, Default)]
@@ -160,7 +82,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     let inputs = collect_inputs(args)?;
     let cfg = &inputs.config_dir;
     let state = &inputs.state_dir;
-    let authority_layout = AuthorityStateLayout::from_root(state);
+    let authority_layout = RuntimeLayout::from_root(state);
 
     let files = generate_files(&inputs)?;
 
@@ -172,6 +94,9 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    upgrade_connect_only_mappings(cfg, &inputs, args.force)?;
+
+    warn_on_non_default_state_dir(state);
     create_scaffold_dirs(cfg, &authority_layout)?;
     write_scaffold_files(&files, cfg, args.force, inputs.sidecar.overwrite_policy)?;
 
@@ -220,7 +145,21 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn write_revocations(layout: &AuthorityStateLayout, force: bool) -> Result<()> {
+/// Every TLS artifact `firma config` generates for a local Authority.
+///
+/// Grouped here rather than in [`RuntimeLayout`] because "the files this
+/// command writes" is a scaffolding concern, not part of the runtime layout
+/// every component shares.
+fn tls_files(layout: &RuntimeLayout) -> [PathBuf; 4] {
+    [
+        layout.authority_tls_certificate(),
+        layout.authority_tls_private_key(),
+        layout.authority_tls_ca_certificate(),
+        layout.authority_tls_ca_private_key(),
+    ]
+}
+
+fn write_revocations(layout: &RuntimeLayout, force: bool) -> Result<()> {
     let path = layout.revocations();
     if force {
         Ok(firma_fs::write_file(&path, b"", 0o600)?)
@@ -235,16 +174,98 @@ fn write_revocations(layout: &AuthorityStateLayout, force: bool) -> Result<()> {
     }
 }
 
-fn create_scaffold_dirs(cfg: &Path, authority_layout: &AuthorityStateLayout) -> Result<()> {
+fn create_scaffold_dirs(cfg: &Path, authority_layout: &RuntimeLayout) -> Result<()> {
     for dir in [
         cfg,
         &cfg.join("policies"),
         &cfg.join("issuance-policies"),
         &cfg.join("mappings"),
         authority_layout.root(),
-        &authority_layout.generated_ca(),
+        &authority_layout.generated_ca_dir(),
     ] {
         create_private_dir_all(dir)?;
+    }
+    Ok(())
+}
+
+/// Upgrades an existing mapping file that only classifies its hosts at CONNECT
+/// level, keeping the operator's copy beside it.
+///
+/// Mapping files are not merged: an existing one is left untouched unless
+/// `--force` is passed, so a directory scaffolded before interception became
+/// the default keeps CONNECT-only rules while the Sidecar starts decrypting —
+/// and every decrypted request to those hosts is then denied as unclassified,
+/// which takes the agent down. Replacing only the files with that defect keeps
+/// a working configuration working, and the displaced file is renamed rather
+/// than discarded, so an operator's edits survive even when they are the reason
+/// the file is incompatible.
+///
+/// A file matching the shipped mapping needs no upgrade, one that does not parse
+/// is left to the Sidecar's own validation, and a host the selected mappings
+/// bypass is exempt because it is never decrypted.
+///
+/// # Errors
+///
+/// Surfaces the I/O failures of moving the old file aside.
+fn upgrade_connect_only_mappings(cfg: &Path, inputs: &CollectedInputs, force: bool) -> Result<()> {
+    use std::collections::BTreeSet;
+
+    use firma_core::normalize_mapping_host;
+
+    if force {
+        // `--force` rewrites every scaffold file anyway.
+        return Ok(());
+    }
+    let bypassed: BTreeSet<String> = inputs
+        .sidecar
+        .mappings
+        .iter()
+        .flat_map(Mapping::mitm_bypass_hosts)
+        .map(|host| normalize_mapping_host(host))
+        .collect();
+    for mapping in &inputs.sidecar.mappings {
+        let rel = format!("mappings/{}.toml", mapping.as_str());
+        let path = cfg.join(&rel);
+        let Ok(existing) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if existing == mapping.static_content() {
+            continue;
+        }
+        let Ok(parsed) = toml::from_str::<firma_sidecar::config::MappingRulesFile>(&existing)
+        else {
+            continue;
+        };
+        let is_connect = |rule: &firma_sidecar::config::MappingRuleConfig| {
+            rule.method.as_ref() == Some(&firma_http::Method::CONNECT)
+        };
+        let unclassified: BTreeSet<String> = parsed
+            .rules
+            .iter()
+            .filter(|rule| is_connect(rule))
+            .map(|rule| normalize_mapping_host(&rule.host))
+            .filter(|host| !bypassed.contains(host))
+            .filter(|host| {
+                !parsed
+                    .rules
+                    .iter()
+                    .any(|other| !is_connect(other) && normalize_mapping_host(&other.host) == *host)
+            })
+            .collect();
+        if unclassified.is_empty() {
+            continue;
+        }
+        // Remove it so the normal scaffold write recreates it from the shipped
+        // content; the copy keeps whatever the operator had.
+        let displaced = path.with_extension("toml.bak");
+        fs::rename(&path, &displaced).with_context(|| format!("move {} aside", path.display()))?;
+        crate::output::warn(format!(
+            "replaced {rel}: it classified {} at CONNECT level only, and every host is \
+             intercepted by default, so their decrypted requests were denied as unclassified. \
+             The previous file is at {}",
+            unclassified.into_iter().collect::<Vec<_>>().join(", "),
+            displaced.display()
+        ));
     }
     Ok(())
 }
@@ -284,8 +305,8 @@ fn write_scaffold_files(
     Ok(())
 }
 
-fn write_server_material(layout: &AuthorityStateLayout, force: bool) -> Result<()> {
-    let key_path = layout.authority_private_key();
+fn write_server_material(layout: &RuntimeLayout, force: bool) -> Result<()> {
+    let key_path = layout.authority_key();
     if force && key_path.exists() {
         fs::remove_file(&key_path).with_context(|| format!("remove {}", key_path.display()))?;
         let pub_path = layout.authority_public_key();
@@ -301,10 +322,10 @@ fn write_server_material(layout: &AuthorityStateLayout, force: bool) -> Result<(
         println!("  generated authority keypair → {}", key_path.display());
     }
 
-    let tls_dir = layout.tls_directory();
-    let tls_cert = layout.tls_certificate();
+    let tls_dir = layout.tls_dir();
+    let tls_cert = layout.authority_tls_certificate();
     if force && tls_dir.exists() {
-        for p in layout.tls_files() {
+        for p in tls_files(layout) {
             if p.exists() {
                 fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
@@ -320,20 +341,11 @@ fn write_server_material(layout: &AuthorityStateLayout, force: bool) -> Result<(
 }
 
 fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
-    let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
-
     let mapping_paths: Vec<String> = inputs
         .sidecar
         .mappings
         .iter()
         .map(|m| format!("mappings/{}.toml", m.as_str()))
-        .collect();
-    let mitm_hosts: Vec<&str> = inputs
-        .sidecar
-        .mappings
-        .iter()
-        .flat_map(Mapping::mitm_hosts)
-        .copied()
         .collect();
     let mitm_bypass_hosts: Vec<&str> = inputs
         .sidecar
@@ -343,37 +355,23 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         .copied()
         .collect();
 
-    let state_dir = &inputs.state_dir;
-    let authority_layout = AuthorityStateLayout::from_root(state_dir);
-    let revocation_file = path_display(&authority_layout.revocations());
-    let key_file = path_display(&authority_layout.authority_private_key());
-    let ca_dir = path_display(&authority_layout.generated_ca());
-    let audit_file = path_display(&RuntimeLayout::from_root(state_dir).audit_log());
-    let audit_key = path_display(&authority_layout.audit_key());
-    let tls_cert_path = path_display(&authority_layout.tls_certificate());
-    let tls_key_path = path_display(&authority_layout.tls_private_key());
     let workspace_display = path_display(&inputs.sidecar.workspace);
 
     let doc_inputs = DocInputs {
         mode: &inputs.mode,
         keep_local_authority: inputs.keep_local_authority,
+        preserve_authority_mappings: inputs.preserve_authority_mappings,
+        reset_remote_connection: inputs.reset_remote_connection,
         profile: &inputs.profile,
         agent_id: inputs.agent_id.as_ref(),
         authority_listen: &inputs.authority.listen,
         authority_url: &inputs.authority.connect_url,
         authority_ca_cert: &inputs.authority.connect_ca_cert,
         authority_pub_key: &inputs.authority.connect_pub_key,
-        revocation_file: &revocation_file,
-        key_file: &key_file,
-        ca_dir: &ca_dir,
-        audit_file: &audit_file,
-        audit_key: &audit_key,
-        tls_cert_path: &tls_cert_path,
-        tls_key_path: &tls_key_path,
         mapping_paths: &mapping_paths,
-        mitm_hosts: &mitm_hosts,
         mitm_bypass_hosts: &mitm_bypass_hosts,
         workspace: &workspace_display,
+        config_dir: &inputs.config_dir,
         extra_hosts: &inputs.sidecar.extra_hosts,
     };
 
@@ -394,7 +392,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         ),
     ];
 
-    if has_sidecar {
+    if has_server(inputs) {
         let mapping_rules = render_for(&inputs.config_dir, "mapping-rules.toml", |text| {
             doc::render_mapping_rules_toml(text, &doc_inputs)
         })?;
@@ -461,20 +459,33 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
 
     let profile = collect_profile(args, &existing, interactive, &theme)?;
 
-    let has_sidecar = matches!(mode, Mode::AgentLocal | Mode::AgentRemote);
     let sidecar = collect_sidecar_inputs(
         args,
         &existing,
-        has_sidecar,
+        &mode,
         interactive,
         &theme,
         &config_dir,
         &profile,
     )?;
+    let reset_remote_connection = matches!(mode, Mode::AgentLocal)
+        && (matches!(existing.mode, Some(Mode::AgentRemote))
+            || existing
+                .authority_url
+                .as_deref()
+                .is_some_and(|old| !same_authority_endpoint(old, &authority.connect_url)));
+    // Remote mode never collects a mapping selection: `collect_sidecar_inputs`
+    // rejects `--mapping` there, so a kept local Authority list must survive
+    // rather than be clobbered with just the primary. Local modes re-derive the
+    // existing selection when none is requested, so rewriting keeps authored
+    // paths and normalizes duplicate entries.
+    let preserve_authority_mappings = matches!(mode, Mode::AgentRemote);
 
     Ok(CollectedInputs {
         mode,
         keep_local_authority,
+        preserve_authority_mappings,
+        reset_remote_connection,
         authority,
         sidecar,
         config_dir,
@@ -486,6 +497,18 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
 
 fn has_server(inputs: &CollectedInputs) -> bool {
     inputs.keep_local_authority || matches!(inputs.mode, Mode::AgentLocal | Mode::Authority)
+}
+
+/// Preserve operator routing when only the URL spelling or scheme changes.
+/// Compare parsed hosts and effective ports so equivalent IPv6 spellings and
+/// implicit default ports do not discard a same-endpoint route or mTLS identity.
+fn same_authority_endpoint(left: &str, right: &str) -> bool {
+    let (Ok(left), Ok(right)) = (url::Url::parse(left), url::Url::parse(right)) else {
+        return false;
+    };
+    left.host().is_some()
+        && left.host() == right.host()
+        && left.port_or_known_default() == right.port_or_known_default()
 }
 
 /// Decide whether to retain the existing local `[authority]` section
@@ -569,7 +592,7 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
     let has_server = value
         .get("authority")
         .and_then(toml::Value::as_table)
-        .is_some_and(|t| t.contains_key("listen_addr"));
+        .is_some();
     let has_connect = value
         .get("sidecar")
         .and_then(|v| v.get("authority"))
@@ -586,12 +609,14 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
         _ => None,
     };
 
-    defaults.authority_listen = get_str(&value, &["authority", "listen_addr"]);
+    defaults.authority_listen = get_str(&value, &["authority", "listen_addr"]).or_else(|| {
+        has_server.then(|| firma_config_schema::authority::AuthorityConfig::default().listen_addr)
+    });
     defaults.authority_url = get_str(&value, &["sidecar", "authority", "url"]);
     defaults.authority_ca_cert = get_path(&value, &["sidecar", "authority", "ca_cert_path"]);
     defaults.authority_pub_key = get_path(&value, &["sidecar", "authority", "public_key_path"]);
     defaults.posture = posture_from_policy_dir(config_dir);
-    defaults.mappings = mappings_from_rules_paths(&value);
+    defaults.mappings = mappings_from_rules_paths(&value, config_dir);
     defaults.state_dir = infer_state_dir(&value);
 
     defaults.workspace = workspace_from_firma_toml(&value);
@@ -678,25 +703,41 @@ fn posture_from_policy_dir(config_dir: &Path) -> Option<Posture> {
     None
 }
 
-fn mappings_from_rules_paths(value: &toml::Value) -> Option<Vec<Mapping>> {
+fn mappings_from_rules_paths(value: &toml::Value, config_dir: &Path) -> Option<Vec<Mapping>> {
     let paths = value
-        .get("sidecar")?
-        .get("mapping")?
-        .get("rules_paths")?
+        .get("authority")?
+        .get("mapping_rules_paths")?
         .as_array()?;
-    let mut mappings = Vec::new();
+    let mut mappings: Vec<Mapping> = Vec::new();
     for path in paths {
         let Some(path) = path.as_str() else {
             continue;
         };
-        let Some(stem) = Path::new(path).file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if let Ok(mapping) = Mapping::from_str(stem, true) {
+        if let Some(mapping) = shipped_mapping_path(config_dir, path)
+            && !mappings
+                .iter()
+                .any(|existing| existing.as_str() == mapping.as_str())
+        {
             mappings.push(mapping);
         }
     }
     Some(mappings)
+}
+
+/// Recognize any spelling of the generated path, never a custom same-basename file.
+fn shipped_mapping_path(config_dir: &Path, path: &str) -> Option<Mapping> {
+    let stem = Path::new(path).file_stem()?.to_str()?;
+    let mapping = Mapping::from_str(stem, true).ok()?;
+    let generated = format!("mappings/{}.toml", mapping.as_str());
+    (resolve_mapping_path(config_dir, path) == resolve_mapping_path(config_dir, &generated))
+        .then_some(mapping)
+}
+
+/// The file a `mapping_rules_paths` entry names, for comparing spellings.
+fn resolve_mapping_path(config_dir: &Path, path: &str) -> PathBuf {
+    let path = config_dir.join(path);
+    path.canonicalize()
+        .unwrap_or_else(|_| firma_fs::normalize_absolute_path(&path))
 }
 
 fn infer_state_dir(value: &toml::Value) -> Option<PathBuf> {
@@ -736,8 +777,11 @@ fn workspace_from_firma_toml(value: &toml::Value) -> Option<PathBuf> {
 
 fn collect_local_connect_inputs(listen: &str, state_dir: &Path) -> (String, String, String) {
     let url = format!("https://{listen}");
-    let layout = AuthorityStateLayout::from_root(state_dir);
-    let tls_ca = layout.tls_ca_certificate().to_string_lossy().into_owned();
+    let layout = RuntimeLayout::from_root(state_dir);
+    let tls_ca = layout
+        .authority_tls_ca_certificate()
+        .to_string_lossy()
+        .into_owned();
     let pub_key = layout.authority_public_key().to_string_lossy().into_owned();
     (url, tls_ca, pub_key)
 }
@@ -910,7 +954,7 @@ fn collect_workspace(
 fn collect_sidecar_inputs(
     args: &InitArgs,
     existing: &ExistingConfigDefaults,
-    has_sidecar: bool,
+    mode: &Mode,
     interactive: bool,
     theme: &ColorfulTheme,
     config_dir: &Path,
@@ -925,13 +969,19 @@ fn collect_sidecar_inputs(
         (None, _) => Posture::Dev,
     };
 
-    if !has_sidecar {
+    if matches!(mode, Mode::AgentRemote) && (!args.mapping.is_empty() || args.extra_hosts.is_some())
+    {
+        anyhow::bail!(
+            "--mapping and --extra-hosts are local Authority options; manage remote Authority mappings centrally"
+        );
+    }
+    if matches!(mode, Mode::AgentRemote) {
         return Ok(SidecarInputs {
             posture,
             overwrite_policy,
             mappings: vec![],
             extra_hosts: vec![],
-            workspace: config_dir.to_path_buf(),
+            workspace: collect_workspace(args, existing, interactive, theme)?,
         });
     }
 
@@ -968,7 +1018,13 @@ fn collect_sidecar_inputs(
         .map(String::from)
         .collect();
 
-    let workspace = collect_workspace(args, existing, interactive, theme)?;
+    // The Authority is the only mapping consumer, so a standalone Authority
+    // scaffold publishes the selection too; only its workspace is moot.
+    let workspace = if matches!(mode, Mode::Authority) {
+        config_dir.to_path_buf()
+    } else {
+        collect_workspace(args, existing, interactive, theme)?
+    };
 
     Ok(SidecarInputs {
         posture,
@@ -1127,11 +1183,17 @@ fn config_profile_choices() -> &'static [AgentProfile] {
     ]
 }
 
+/// Mappings a profile selects when the operator names none.
+///
+/// `vscode` takes `github` as well: the `vscode` mapping reaches github.com and
+/// api.github.com but deliberately leaves their endpoints to `github`, which
+/// classifies each one. Without it every decrypted repository request is denied
+/// as unclassified, because interception is on for every host.
 fn profile_default_mappings(profile: &str) -> Vec<Mapping> {
     match profile {
         "codex" => vec![Mapping::Openai, Mapping::Github],
         "copilot" => vec![Mapping::Copilot],
-        "vscode" => vec![Mapping::Vscode],
+        "vscode" => vec![Mapping::Vscode, Mapping::Github],
         _ => vec![Mapping::Anthropic],
     }
 }
@@ -1280,6 +1342,36 @@ fn resolve_config_relative_path(config_dir: &Path, path: &str) -> PathBuf {
     }
 }
 
+/// Warn when the material is being written somewhere the processes will not
+/// look by default.
+///
+/// `firma.toml` no longer carries artifact paths, so nothing in the generated
+/// file points at a custom state directory. The Authority and Sidecar resolve
+/// it from `FIRMA_STATE_DIR` or the platform runtime directory, and a config
+/// scaffolded elsewhere fails at startup on material it cannot find.
+///
+/// Both roots are compared absolute: the resolved default always is, while
+/// `--state-dir` and `FIRMA_STATE_DIR` are taken verbatim, so a relative form
+/// of the very directory the processes will use must not warn.
+fn warn_on_non_default_state_dir(state_dir: &Path) {
+    let (Ok(default), Ok(state_dir)) = (
+        firma_runtime_state::resolve_state_dir(None),
+        std::path::absolute(state_dir),
+    ) else {
+        return;
+    };
+    if state_dir == default {
+        return;
+    }
+    crate::output::warn(format!(
+        "state dir {} is not the default {}; export FIRMA_STATE_DIR={} so the \
+         Authority and Sidecar resolve the material generated here",
+        state_dir.display(),
+        default.display(),
+        state_dir.display()
+    ));
+}
+
 fn resolve_state_dir_with_default(
     flag: Option<PathBuf>,
     default: Option<PathBuf>,
@@ -1305,12 +1397,12 @@ fn resolve_state_dir_with_default(
 /// Returns a formatted string on any filesystem or key-generation failure.
 pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     let mappings = provider_to_mappings(&plan.provider);
-    let authority_layout = AuthorityStateLayout::from_root(&plan.state_dir);
+    let authority_layout = RuntimeLayout::from_root(&plan.state_dir);
     let (mode, authority) = match &plan.authority {
         AuthorityShape::Local => {
             let connect_url = format!("https://{}", plan.authority_listen);
             let connect_ca_cert = authority_layout
-                .tls_ca_certificate()
+                .authority_tls_ca_certificate()
                 .to_string_lossy()
                 .into_owned();
             (
@@ -1330,6 +1422,8 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     let inputs = CollectedInputs {
         mode,
         keep_local_authority: false,
+        preserve_authority_mappings: false,
+        reset_remote_connection: false,
         authority,
         sidecar: SidecarInputs {
             posture: Posture::Dev,
@@ -1354,7 +1448,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         &plan.config_dir.join("issuance-policies"),
         &plan.config_dir.join("mappings"),
         authority_layout.root(),
-        &authority_layout.generated_ca(),
+        &authority_layout.generated_ca_dir(),
     ] {
         create_private_dir_all(dir)?;
     }
@@ -1376,20 +1470,20 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         plan.force,
     )?;
 
-    let key_path = authority_layout.authority_private_key();
+    let key_path = authority_layout.authority_key();
     if plan.force || !key_path.exists() {
         crate::services::authority::run_generate_key(&key_path)?;
     }
 
-    let tls_dir = authority_layout.tls_directory();
+    let tls_dir = authority_layout.tls_dir();
     if plan.force && tls_dir.exists() {
-        for p in authority_layout.tls_files() {
+        for p in tls_files(&authority_layout) {
             if p.exists() {
                 fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
     }
-    if !authority_layout.tls_certificate().exists() {
+    if !authority_layout.authority_tls_certificate().exists() {
         crate::services::authority::run_bootstrap_tls(&tls_dir, &[])
             .context("generate TLS material")?;
     }
@@ -1401,7 +1495,9 @@ fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
     match provider {
         "openai" => vec![Mapping::Openai],
         "github" => vec![Mapping::Copilot],
-        "vscode" => vec![Mapping::Vscode],
+        // Pairs with `profile_default_mappings`: `github` classifies the
+        // repository endpoints the `vscode` mapping only tunnels.
+        "vscode" => vec![Mapping::Vscode, Mapping::Github],
         _ => vec![Mapping::Anthropic],
     }
 }
@@ -1421,6 +1517,7 @@ fn provider_to_profile(provider: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use firma_core::normalize_mapping_host;
     use firma_http::Method;
     use strum::IntoEnumIterator;
 
@@ -1459,13 +1556,13 @@ mod tests {
     }
 
     #[test]
-    fn vscode_profile_scaffolds_vscode_mapping() {
+    fn vscode_profile_scaffolds_vscode_and_github_mappings() {
         assert_eq!(
             super::profile_default_mappings("vscode")
                 .iter()
                 .map(Mapping::as_str)
                 .collect::<Vec<_>>(),
-            vec!["vscode"]
+            vec!["vscode", "github"]
         );
         assert_eq!(super::provider_to_profile("vscode"), "vscode");
         assert_eq!(
@@ -1473,7 +1570,7 @@ mod tests {
                 .iter()
                 .map(Mapping::as_str)
                 .collect::<Vec<_>>(),
-            vec!["vscode"]
+            vec!["vscode", "github"]
         );
     }
 
@@ -1485,6 +1582,8 @@ mod tests {
         let inputs = CollectedInputs {
             mode: Mode::AgentLocal,
             keep_local_authority: false,
+            preserve_authority_mappings: false,
+            reset_remote_connection: false,
             authority: AuthorityInputs {
                 listen: "127.0.0.1:50051".to_string(),
                 connect_url: "http://127.0.0.1:50051".to_string(),
@@ -1504,6 +1603,127 @@ mod tests {
             profile: "generic".to_string(),
         };
         generate_files(&inputs).unwrap()
+    }
+
+    fn make_inputs(mappings: &[Mapping], config_dir: PathBuf) -> CollectedInputs {
+        CollectedInputs {
+            mode: Mode::AgentLocal,
+            keep_local_authority: false,
+            preserve_authority_mappings: false,
+            reset_remote_connection: false,
+            authority: AuthorityInputs {
+                listen: "127.0.0.1:50051".to_string(),
+                connect_url: "http://127.0.0.1:50051".to_string(),
+                connect_ca_cert: "/tmp/test-state/tls/authority-ca.crt".to_string(),
+                connect_pub_key: "/tmp/test-state/authority.pub".to_string(),
+            },
+            sidecar: SidecarInputs {
+                posture: Posture::Dev,
+                overwrite_policy: false,
+                mappings: mappings.to_vec(),
+                extra_hosts: Vec::new(),
+                workspace: PathBuf::from(TEST_WORKSPACE),
+            },
+            config_dir,
+            state_dir: PathBuf::from("/tmp/test-state"),
+            agent_id: Some("agt_01j0000000e008000000000001".parse().unwrap()),
+            profile: "generic".to_string(),
+        }
+    }
+
+    fn write_mapping(cfg: &Path, mapping: &Mapping, content: &str) {
+        let dir = cfg.join("mappings");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{}.toml", mapping.as_str())), content).unwrap();
+    }
+
+    /// A directory scaffolded before interception became the default keeps its
+    /// CONNECT-only mapping, because mapping files are replaced only under
+    /// `--force`. Leaving it would deny every decrypted request on those hosts,
+    /// so the re-run moves it aside and lets the shipped mapping be written.
+    #[test]
+    fn a_connect_only_mapping_left_on_disk_is_upgraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = "[[rules]]\nmethod = \"CONNECT\"\nhost = \"api.anthropic.com\"\n\
+                        action_class = \"communication.external.send\"\n";
+        write_mapping(dir.path(), &Mapping::Anthropic, previous);
+        let inputs = make_inputs(&[Mapping::Anthropic], dir.path().to_path_buf());
+
+        upgrade_connect_only_mappings(dir.path(), &inputs, false).unwrap();
+
+        let mappings = dir.path().join("mappings");
+        assert!(
+            !mappings.join("anthropic.toml").exists(),
+            "the incompatible file must make way for the shipped mapping"
+        );
+        assert_eq!(
+            fs::read_to_string(mappings.join("anthropic.toml.bak")).unwrap(),
+            previous,
+            "the displaced file keeps the operator's rules"
+        );
+    }
+
+    /// `--force` rewrites every scaffold file, so nothing is displaced.
+    #[test]
+    fn a_forced_rerun_leaves_the_upgrade_to_the_scaffold_write() {
+        let dir = tempfile::tempdir().unwrap();
+        write_mapping(
+            dir.path(),
+            &Mapping::Anthropic,
+            "[[rules]]\nmethod = \"CONNECT\"\nhost = \"api.anthropic.com\"\n\
+             action_class = \"communication.external.send\"\n",
+        );
+        let inputs = make_inputs(&[Mapping::Anthropic], dir.path().to_path_buf());
+
+        upgrade_connect_only_mappings(dir.path(), &inputs, true).unwrap();
+
+        assert!(dir.path().join("mappings/anthropic.toml").exists());
+        assert!(!dir.path().join("mappings/anthropic.toml.bak").exists());
+    }
+
+    #[test]
+    fn a_bypassed_connect_only_host_is_left_alone() {
+        // The `copilot` mapping classifies the GitHub hosts at CONNECT level on
+        // purpose and exempts them from interception, so they are never
+        // decrypted and need no rule.
+        let dir = tempfile::tempdir().unwrap();
+        write_mapping(
+            dir.path(),
+            &Mapping::Copilot,
+            "[[rules]]\nmethod = \"CONNECT\"\nhost = \"api.github.com\"\n\
+             action_class = \"code.write\"\n",
+        );
+        let inputs = make_inputs(&[Mapping::Copilot], dir.path().to_path_buf());
+
+        upgrade_connect_only_mappings(dir.path(), &inputs, false).unwrap();
+
+        assert!(dir.path().join("mappings/copilot.toml").exists());
+        assert!(!dir.path().join("mappings/copilot.toml.bak").exists());
+    }
+
+    /// The shipped mappings are what a re-run would write, so none of them may
+    /// trip the upgrade.
+    #[test]
+    fn the_shipped_mappings_are_accepted_as_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        for mapping in Mapping::iter() {
+            write_mapping(dir.path(), &mapping, mapping.static_content());
+        }
+        let inputs = make_inputs(
+            &Mapping::iter().collect::<Vec<_>>(),
+            dir.path().to_path_buf(),
+        );
+
+        upgrade_connect_only_mappings(dir.path(), &inputs, false).unwrap();
+        for mapping in Mapping::iter() {
+            assert!(
+                !dir.path()
+                    .join(format!("mappings/{}.toml.bak", mapping.as_str()))
+                    .exists(),
+                "{} must not be displaced",
+                mapping.as_str()
+            );
+        }
     }
 
     fn get<'a>(files: &'a [(String, String)], name: &str) -> &'a str {
@@ -1587,10 +1807,14 @@ mod tests {
         let path = dir.path().join(CONFIG_FILE_NAME);
         fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
         let body = firma_config_loader::load_section(&path, "authority").unwrap();
-        firma_authority::AuthorityConfigBuilder::from_toml_str(&body)
-            .unwrap()
-            .build()
-            .unwrap();
+        firma_authority::AuthorityConfigBuilder::from_toml_str(
+            &body,
+            &firma_runtime_state::RuntimeLayout::from_root(dir.path()),
+        )
+        .unwrap()
+        .without_tls()
+        .build()
+        .unwrap();
     }
 
     #[test]
@@ -1608,43 +1832,34 @@ mod tests {
                 let body = firma_config_loader::load_section(&path, "sidecar").unwrap();
                 let schema: firma_config_schema::sidecar::SidecarConfig =
                     toml::from_str(&body).unwrap();
-                let _ = firma_sidecar::config::SidecarConfig::try_from(schema).unwrap();
+                let state = firma_runtime_state::RuntimeLayout::from_root(dir.path());
+                let _ = firma_sidecar::config::SidecarConfig::resolve(schema, &state).unwrap();
             }
         }
     }
 
     #[test]
-    fn firma_toml_mitm_hosts_populated_for_github_gmail() {
-        let files = make_files(
-            &Posture::Dev,
-            &[Mapping::Anthropic, Mapping::Github, Mapping::Gmail],
-            &[],
-        );
-        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
-        let hosts = t["sidecar"]["interceptor"]["https_mitm"]["intercept_hosts"]
-            .as_array()
-            .unwrap();
-        let host_strs: Vec<_> = hosts.iter().filter_map(|v| v.as_str()).collect();
-        assert!(host_strs.contains(&"api.github.com"));
-        assert!(host_strs.contains(&"gmail.googleapis.com"));
-        assert!(!host_strs.contains(&"api.anthropic.com"));
-    }
-
-    #[test]
-    fn firma_toml_no_mitm_hosts_when_only_anthropic() {
-        let files = make_files(&Posture::Dev, &[Mapping::Anthropic], &[]);
-        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
-        let https_mitm = &t["sidecar"]["interceptor"]["https_mitm"];
-        // No MITM hosts → MITM disabled, host lists absent.
-        assert_eq!(https_mitm["enabled"].as_bool(), Some(false));
-        assert!(https_mitm.get("intercept_hosts").is_none());
+    fn firma_toml_leaves_interception_to_the_sidecar_default() {
+        // Interception is not a per-mapping selection: the sidecar intercepts
+        // every host by default, so the generated config pins nothing.
+        for mappings in [
+            vec![Mapping::Anthropic],
+            vec![Mapping::Anthropic, Mapping::Github, Mapping::Gmail],
+        ] {
+            let files = make_files(&Posture::Dev, &mappings, &[]);
+            let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
+            assert!(
+                t["sidecar"]["interceptor"].get("https_mitm").is_none(),
+                "{mappings:?}"
+            );
+        }
     }
 
     #[test]
     fn firma_toml_rules_paths_contains_selected_mappings() {
         let files = make_files(&Posture::Dev, &[Mapping::Anthropic, Mapping::Github], &[]);
         let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
-        let paths = t["sidecar"]["mapping"]["rules_paths"].as_array().unwrap();
+        let paths = t["authority"]["mapping_rules_paths"].as_array().unwrap();
         let path_strs: Vec<_> = paths.iter().filter_map(|v| v.as_str()).collect();
         assert!(path_strs.contains(&"mappings/anthropic.toml"));
         assert!(path_strs.contains(&"mappings/github.toml"));
@@ -1663,12 +1878,49 @@ mod tests {
             .collect();
         assert!(bypass.contains(&"github.com"));
         assert!(bypass.contains(&"api.github.com"));
-        let paths = t["sidecar"]["mapping"]["rules_paths"].as_array().unwrap();
+        let paths = t["authority"]["mapping_rules_paths"].as_array().unwrap();
         assert!(
             paths
                 .iter()
                 .filter_map(|v| v.as_str())
                 .any(|p| p == "mappings/copilot.toml")
+        );
+    }
+
+    /// The `vscode` mapping leaves the GitHub endpoints to the `github`
+    /// mapping, so the profile has to select both — otherwise every decrypted
+    /// repository request is denied as unclassified. Neither host is exempted
+    /// from interception.
+    #[test]
+    fn the_vscode_profile_selects_github_instead_of_exempting_it() {
+        let mappings = super::profile_default_mappings("vscode");
+        assert_eq!(
+            mappings.iter().map(Mapping::as_str).collect::<Vec<_>>(),
+            vec!["vscode", "github"]
+        );
+        let files = make_files(&Posture::Dev, &mappings, &[]);
+        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
+        assert!(
+            t["sidecar"]["interceptor"]
+                .get("https_mitm")
+                .is_none_or(|https| https.get("bypass_hosts").is_none()),
+            "the vscode profile exempts no host: {}",
+            get(&files, CONFIG_FILE_NAME)
+        );
+        let paths: Vec<&str> = t["authority"]["mapping_rules_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "mapping-rules.toml",
+                "mappings/vscode.toml",
+                "mappings/github.toml"
+            ],
+            "{paths:?}"
         );
     }
 
@@ -1812,13 +2064,100 @@ mod tests {
         );
     }
 
+    /// Host patterns whose decrypted requests the `github` mapping classifies
+    /// per endpoint, leaving anything it does not cover denied as unclassified.
+    ///
+    /// No mapping may give them a catch-all fallback: every template's rules for
+    /// one host merge into a single standard set, and a catch-all there answers
+    /// the endpoints `github` deliberately leaves unmatched with one coarse
+    /// class. `*.github.com` is included because the matcher's wildcard spans
+    /// labels, so a fallback under it also answers for the exact subdomains.
+    ///
+    /// uploads.github.com is included even though no mapping classifies its
+    /// endpoints: it merges into the same owner set, so a catch-all for it is
+    /// read as GitHub coverage it does not have.
+    const GITHUB_CLASSIFIED_HOSTS: [&str; 4] = [
+        "github.com",
+        "*.github.com",
+        "api.github.com",
+        "uploads.github.com",
+    ];
+
+    /// Every CONNECT host needs a rule covering its decrypted inner requests.
+    ///
+    /// Interception is on for every host, so a template that classifies only the
+    /// tunnel preface leaves its own traffic matching nothing — and a protected
+    /// host with no matching rule is denied as unclassified. A CONNECT-only
+    /// mapping therefore denies exactly the agent it was selected for, which is
+    /// why this is checked for every template rather than the one that first hit
+    /// it.
+    #[test]
+    fn every_connect_host_is_classified_after_interception() {
+        for mapping in Mapping::iter() {
+            let rules = parse_rules(mapping.static_content()).rules;
+            let selection = mapping.as_str();
+            let bypassed: Vec<String> = mapping
+                .mitm_bypass_hosts()
+                .iter()
+                .map(|host| normalize_mapping_host(host))
+                .collect();
+            for rule in rules
+                .iter()
+                .filter(|rule| rule.method.as_ref() == Some(&Method::CONNECT))
+            {
+                // A CONNECT host may carry an explicit `:443`; the runtime
+                // normalizes it away, so its rules are matched the same way.
+                let host = normalize_mapping_host(&rule.host);
+                // A host the mapping exempts is never decrypted, so the CONNECT
+                // rule is the only one its traffic can match.
+                if bypassed.contains(&host) {
+                    continue;
+                }
+                let decrypted = rules.iter().filter(|other| {
+                    other.method.as_ref() != Some(&Method::CONNECT)
+                        && normalize_mapping_host(&other.host) == host
+                });
+                let catch_all = decrypted
+                    .clone()
+                    .find(|other| other.method.is_none() && other.path.as_deref() == Some("*"));
+                if GITHUB_CLASSIFIED_HOSTS.contains(&host.as_str()) {
+                    assert!(
+                        catch_all.is_none(),
+                        "{selection}: {host} must stay classified by the github mapping, \
+                         not by a catch-all"
+                    );
+                    continue;
+                }
+                assert!(
+                    decrypted.count() > 0,
+                    "{selection}: no rule classifies decrypted requests to CONNECT host {host}"
+                );
+                // A host classified endpoint by endpoint needs no catch-all;
+                // one that has it must not reclassify the host on the way.
+                if let Some(catch_all) = catch_all {
+                    assert_eq!(
+                        catch_all.action_class, rule.action_class,
+                        "{selection}: catch-all for {host} must not change the host's action class"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn vscode_mapping_has_core_connect_rules_and_copilot_hosts() {
         let rules = parse_rules(Mapping::Vscode.static_content()).rules;
-        assert!(
-            rules.iter().all(|rule| rule.path.is_none()),
-            "vscode mapping must stay CONNECT-level in v1"
-        );
+        // The two github.com hosts VS Code itself reaches are named instead of
+        // covered by a `*.github.com` fallback, which is what keeps every other
+        // subdomain fail-closed. See `GITHUB_CLASSIFIED_HOSTS`.
+        for host in ["collector.github.com", "copilot-reports.github.com"] {
+            assert!(
+                rules
+                    .iter()
+                    .any(|rule| rule.host == host && rule.path.as_deref() == Some("*")),
+                "{host} needs its own fallback once *.github.com has none"
+            );
+        }
         for copilot_host in [
             "*.githubcopilot.com",
             "*.individual.githubcopilot.com",
@@ -1895,8 +2234,12 @@ mod tests {
         }
     }
 
+    /// The ordinary layout — config in `<workspace>/.firma/` — needs no mount
+    /// entry, because `firma run` derives exactly this workspace from the
+    /// config's own location. The file must therefore carry no path from the
+    /// machine that generated it.
     #[test]
-    fn implicit_scaffold_uses_workspace_not_config_dir_for_mount() {
+    fn implicit_scaffold_omits_the_mount_it_can_derive() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("project");
         let config_dir = workspace.join(CONFIG_DIR_NAME);
@@ -1919,15 +2262,59 @@ mod tests {
         let text = fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).unwrap();
         let t: toml::Value = toml::from_str(&text).unwrap();
         // agent="generic" is a recognized profile → section is [run.profiles.generic]
+        let profile = &t["run"]["profiles"]["generic"];
+        // Absent, not empty: `firma run` merges `mounts` by replacement, so a
+        // serialized `mounts = []` would clear the derived default and leave
+        // the agent with no workspace at all.
+        assert!(
+            profile.get("mounts").is_none(),
+            "the derivable workspace must not be written: {profile:?}"
+        );
+        assert!(
+            !text.contains(workspace.to_string_lossy().as_ref()),
+            "scaffolded config must carry no path from this checkout:\n{text}"
+        );
+        // ...and the value it omits is the one `firma run` resolves.
+        assert_eq!(
+            firma_run::config::workspace_root(
+                Some(&config_dir.join(CONFIG_FILE_NAME)),
+                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+            )
+            .as_deref(),
+            Some(workspace.as_path()),
+        );
+    }
+
+    /// A workspace the run-time default would not produce — here because the
+    /// config directory is not named `.firma` — must still be written out, or
+    /// the agent silently loses it.
+    #[test]
+    fn scaffold_records_a_workspace_it_cannot_derive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("project");
+        let config_dir = tmp.path().join("elsewhere");
+        fs::create_dir_all(&workspace).unwrap();
+
+        scaffold_from_plan(&ScaffoldPlan {
+            config_dir: config_dir.clone(),
+            state_dir: tmp.path().join("state"),
+            workspace: workspace.clone(),
+            force: false,
+            authority_listen: "127.0.0.1:50051".into(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
+            agent: "generic".into(),
+            provider: "anthropic".into(),
+            authority: AuthorityShape::Local,
+        })
+        .unwrap();
+
+        let text = fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).unwrap();
+        let t: toml::Value = toml::from_str(&text).unwrap();
         let mounts = t["run"]["profiles"]["generic"]["mounts"]
             .as_array()
             .unwrap();
         assert_eq!(
             mounts[0]["source"].as_str(),
-            Some(workspace.to_string_lossy().as_ref())
-        );
-        assert_eq!(
-            mounts[0]["target"].as_str(),
             Some(workspace.to_string_lossy().as_ref())
         );
     }
@@ -1987,7 +2374,7 @@ mod tests {
     #[test]
     fn posture_cedar_files_are_non_empty() {
         for posture in [Posture::Strict, Posture::Dev, Posture::DevWithDeleteWatch] {
-            assert!(!posture.cedar_content().is_empty());
+            assert_ne!(posture.cedar_content(), "");
         }
     }
 

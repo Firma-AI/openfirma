@@ -26,7 +26,7 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
         plan.socket_devices[0].kind,
         SocketDeviceKind::VirtioVsockSidecar
     );
-    assert_eq!(plan.socket_devices[0].sidecar_port, 18080);
+    assert_eq!(plan.socket_devices[0].sidecar_port.get(), 18080);
     assert_eq!(
         plan.socket_devices[0].sidecar_host_addr,
         "127.0.0.1:19080".parse()?
@@ -91,13 +91,56 @@ fn vm_plan_records_command_pty_vsock_listeners_when_requested() -> Result<()> {
     assert_eq!(plan.rows, Some(40));
     assert_eq!(plan.cols, Some(120));
     assert_eq!(plan.socket_devices.len(), 1);
-    assert_eq!(plan.socket_devices[0].sidecar_port, 18080);
+    assert_eq!(plan.socket_devices[0].sidecar_port.get(), 18080);
     let command_pty = plan.socket_devices[0]
         .command_pty
         .ok_or_else(|| anyhow::anyhow!("VM plan should expose command PTY plan"))?;
     assert_eq!(command_pty.data_port.get(), 18081);
     assert_eq!(command_pty.control_port.get(), 18082);
 
+    Ok(())
+}
+
+#[test]
+fn vm_plan_carries_optional_secret_broker_transport() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let runtime_dir = temp.path().join("runtime");
+    let workspace = temp.path().join("workspace");
+    let shim_dir = temp.path().join("secret-shims");
+    std::fs::create_dir(&workspace)?;
+    std::fs::create_dir(&shim_dir)?;
+    std::fs::write(temp.path().join("broker.sock"), [])?;
+    let contract_path = VzGuestLayout::from_runtime_dir(&runtime_dir).launch_contract();
+    let mut json = valid_contract_json(temp.path())?;
+    json["mounts"][0]["source"] = json!(workspace);
+    json["secret_shims"] = json!({
+        "guest_target_triple": "x86_64-unknown-linux-musl",
+        "provider_names": ["vault"],
+        "broker_vsock_port": 18083,
+        "shim_share_directory": shim_dir,
+        "broker_socket_path": temp.path().join("broker.sock"),
+        "guest_broker_addr": "127.0.0.1:18084",
+    });
+    let contract_dir = contract_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("contract path should have parent"))?;
+    std::fs::create_dir_all(contract_dir)?;
+    std::fs::write(&contract_path, serde_json::to_vec(&json)?)?;
+
+    let contract = read_contract_without_custody(&contract_path)?;
+    let plan = VmPlan::from_contract(&contract)?;
+    let broker = plan
+        .broker
+        .ok_or_else(|| anyhow::anyhow!("broker plan should be present"))?;
+
+    assert_eq!(broker.vsock_port.get(), 18083);
+    assert_eq!(
+        broker.socket_path,
+        std::fs::canonicalize(temp.path().join("broker.sock"))?
+    );
+    assert_eq!(broker.guest_addr, "127.0.0.1:18084".parse()?);
+    assert_eq!(plan.directory_shares[2].name, "secret-shims");
+    assert!(plan.directory_shares[2].read_only);
     Ok(())
 }
 

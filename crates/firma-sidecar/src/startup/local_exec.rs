@@ -35,7 +35,7 @@ pub fn spawn_local_exec_endpoint(
     tracing::info!(
         socket_path = %socket_path,
         default_action = ?le_config.default_action,
-        token_ttl_secs = le_config.token_ttl.as_secs(),
+        token_ttl_secs = le_config.token_ttl.duration().as_secs(),
         "spawning local-exec governance endpoint"
     );
 
@@ -53,6 +53,6 @@ fn build_handler(config: &LocalExecConfig, sandbox_id: Option<SandboxId>) -> Loc
         default_action: config.default_action,
         expected_sandbox_id: sandbox_id,
         token_ttl: config.token_ttl,
-        retry_after_ms: u64::try_from(config.retry_after.as_millis()).unwrap_or(u64::MAX),
+        retry_after_ms: config.retry_after_ms,
     })
 }

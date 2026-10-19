@@ -7,8 +7,8 @@
 //!
 //! The top-level [`SidecarConfig`] groups the enforcement-specific
 //! [`EnforcementConfig`] after the behavior-free schema has deserialized its
-//! three direct tables (`[sidecar.mapping]`, `[sidecar.capability_validation]`,
-//! and `[sidecar.constraint_enforcement]`).
+//! `[sidecar.constraint_enforcement]` table. Mapping sources belong to the
+//! Authority, not Sidecar configuration.
 //!
 //! Validation runs eagerly when the schema is converted at startup, so
 //! misconfigurations surface before the first request arrives.
@@ -20,7 +20,7 @@ mod connector;
 mod enforcement;
 mod revocation;
 
-pub use self::audit::{AuditConfig, AuditConfigError};
+pub use self::audit::{AuditConfig, AuditConfigError, AuditSigningKey};
 pub use self::authority::{
     AuthorityConfig, AuthorityConfigError, AuthorityEndpoint, AuthorityEndpointError,
 };
@@ -34,28 +34,23 @@ pub use crate::authority_credentials::SidecarCredentialsConfig;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bytesize::ByteSize;
 use firma_config_schema::gateway::GatewayConfig;
 use firma_config_schema::sidecar::infra as schema_infra;
 use firma_config_schema::sidecar::interceptor as schema_ic;
 use firma_config_schema::sidecar::local_exec as schema_le;
+use firma_config_utils::NonZeroDuration;
 use firma_core::SecretMatcher;
 use firma_http::HeaderName;
 use firma_secret_provider::spec::http::HttpIntegrationSpec;
 // One-to-one config enums live in `firma_config_schema` and are imported for
 // in-crate use only; they are never re-exported, so `firma_config_schema`
 // stays the single owner and every consumer imports them from there directly.
-use firma_config_schema::sidecar::infra::{CredentialMode, CredentialTransform, SidecarMode};
+use firma_config_schema::sidecar::infra::{CredentialMode, CredentialTransform};
 use firma_config_schema::sidecar::interceptor::InterceptorMode;
-use firma_config_schema::sidecar::tenancy::TenancyConfig;
-
-pub(crate) enum AuthorityTarget {
-    Disabled,
-    Enabled(AuthorityEndpoint),
-}
 
 // ---------------------------------------------------------------------------
 // Top-level sidecar configuration
@@ -64,18 +59,19 @@ pub(crate) enum AuthorityTarget {
 /// Top-level sidecar configuration deserialized from TOML.
 ///
 /// Contains both infrastructure settings (interceptor, policy, CA,
-/// credentials) and enforcement-engine settings (mapping,
+/// credentials) and enforcement-engine settings (
 /// capability validation, constraint enforcement) via
 /// [`EnforcementConfig`].
-#[derive(Debug, Clone, Default)]
+///
+/// Built only by [`SidecarConfig::resolve`]: there is deliberately no
+/// [`Default`] and no `TryFrom`, because a config whose state-directory
+/// defaults have not been filled in is not one any component can run on.
+#[derive(Debug, Clone)]
 pub struct SidecarConfig {
-    /// Enforcement mode: `"enforce"` (default) or `"monitor"`. Never use
-    /// `monitor` in production.
-    pub mode: SidecarMode,
     /// Interceptor settings (mode, listen address or socket path, drain timeout).
     pub interceptor: InterceptorConfig,
     /// Policy directory.
-    pub policy: PolicyConfig,
+    policy: PolicyConfig,
     /// Certificate authority directory.
     pub(crate) ca: CaConfig,
     /// Per-target credential injection entries, keyed by an arbitrary label.
@@ -84,7 +80,7 @@ pub struct SidecarConfig {
     pub connector: ConnectorConfig,
     /// Background Authority stream client tuning.
     pub authority: AuthorityConfig,
-    /// Enforcement engine settings (mapping, capability validation, constraint
+    /// Enforcement engine settings (capability validation, constraint
     /// enforcement).
     pub(crate) enforcement: EnforcementConfig,
     /// Revocation cache settings (bloom filter + LRU sizing).
@@ -96,8 +92,6 @@ pub struct SidecarConfig {
     /// Local-exec governance endpoint configuration. When absent, the
     /// local-exec endpoint is not started.
     pub(crate) local_exec: Option<LocalExecConfig>,
-    /// Tenancy settings (agent isolation mode).
-    pub(crate) tenancy: TenancyConfig,
     /// HTTP secret-provider registry for MITM interception.
     pub http_secret_providers: Vec<HttpIntegrationSpec<SecretMatcher>>,
     /// Tunable timeouts and limits for the secret-gateway client.
@@ -176,9 +170,16 @@ pub enum SidecarConfigError {
     /// `sidecar.capability_seed.paths` was non-empty without an Authority public key.
     #[error("authority.public_key_path must be set when capability_seed.paths is non-empty")]
     MissingPublicKeyForSeeds,
-    /// An `https://` Authority URL was configured without a CA certificate.
-    #[error("authority.ca_cert_path must be set when authority.url uses https://")]
-    MissingCaCertForHttps,
+    /// An `https://` Authority URL was configured without a CA certificate,
+    /// and none was found at the state-directory default either.
+    #[error(
+        "authority.ca_cert_path must be set when authority.url uses https://; no CA certificate was readable at the state-directory default {}",
+        state_default.display()
+    )]
+    MissingCaCertForHttps {
+        /// Path the adopted default would have come from.
+        state_default: PathBuf,
+    },
     /// An insecure `http://` Authority URL targeted a non-loopback host.
     #[error(
         "authority.url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true"
@@ -187,13 +188,43 @@ pub enum SidecarConfigError {
 }
 
 impl SidecarConfig {
-    /// Load and validate a sidecar configuration from a TOML file.
+    /// Path of the Authority public key used to verify capability tokens, when
+    /// one is configured or was adopted.
+    #[must_use]
+    pub fn authority_public_key_path(&self) -> Option<&std::path::Path> {
+        self.authority.public_key_path.as_deref()
+    }
+
+    /// Directory the HTTPS MITM CA material is minted into.
+    #[must_use]
+    pub fn ca_dir(&self) -> &std::path::Path {
+        &self.ca.dir
+    }
+
+    /// Path the `file` audit sink appends to; `None` for every other sink.
+    #[must_use]
+    pub fn audit_file_path(&self) -> Option<&std::path::Path> {
+        self.audit.file_path.as_deref()
+    }
+
+    /// Path of the CA certificate the Authority's TLS identity is verified
+    /// against, when one is configured or was adopted.
+    #[must_use]
+    pub fn authority_ca_cert_path(&self) -> Option<&std::path::Path> {
+        self.authority.ca_cert_path.as_deref()
+    }
+
+    /// Load and validate a sidecar configuration from a TOML file, resolving
+    /// unset artifact paths against `state`.
     ///
     /// # Errors
     ///
     /// Returns [`SidecarConfigError`] if the file cannot be read, the TOML is
     /// invalid, or any section fails validation.
-    pub fn load_from_path(path: &std::path::Path) -> Result<Self, SidecarConfigError> {
+    pub fn load_from_path(
+        path: &std::path::Path,
+        state: &firma_runtime_state::RuntimeLayout,
+    ) -> Result<Self, SidecarConfigError> {
         let text = std::fs::read_to_string(path).map_err(|source| SidecarConfigError::Read {
             path: path.to_path_buf(),
             source,
@@ -203,22 +234,28 @@ impl SidecarConfig {
                 path: path.to_path_buf(),
                 source,
             })?;
-        Self::try_from(schema)
+        Self::resolve(schema, state)
     }
 
     /// Cross-section validations that span more than one config section.
-    fn validate_cross_fields(&self) -> Result<(), SidecarConfigError> {
+    fn validate_cross_fields(
+        &self,
+        state: &firma_runtime_state::RuntimeLayout,
+    ) -> Result<(), SidecarConfigError> {
         if !self.capability_seed.paths.is_empty() && self.authority.public_key_path.is_none() {
             return Err(SidecarConfigError::MissingPublicKeyForSeeds);
         }
-        if let AuthorityTarget::Enabled(endpoint) = self.authority.target()? {
+        {
+            let endpoint = self.authority.target()?;
             let host = endpoint
                 .origin()
                 .host()
                 .ok_or(SidecarConfigError::AuthorityEndpointMissingHost)?;
             if endpoint.is_https() {
                 if self.authority.ca_cert_path.is_none() {
-                    return Err(SidecarConfigError::MissingCaCertForHttps);
+                    return Err(SidecarConfigError::MissingCaCertForHttps {
+                        state_default: state.authority_tls_ca_certificate(),
+                    });
                 }
             } else {
                 let is_loopback = endpoint.connect_addr().map_or_else(
@@ -275,23 +312,100 @@ impl SidecarConfig {
                 rebase(p);
             }
         }
-        if let Some(p) = self.audit.signing_key_path.as_mut() {
+        // A key adopted from the state directory is already absolute; only an
+        // operator-supplied path can be relative to the config file.
+        if let AuditSigningKey::Path(p) = &mut self.audit.signing_key {
             rebase(p);
         }
         if let Some(p) = self.audit.file_path.as_mut() {
             rebase(p);
         }
+        if let Some(p) = self.audit.buffer_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.audit.wal_path.as_mut() {
+            rebase(p);
+        }
         for p in &mut self.capability_seed.paths {
             rebase(p);
         }
-        self.enforcement.rebase_defaults(config_dir);
     }
 }
 
-impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
-    type Error = SidecarConfigError;
+/// Fill in the Authority trust anchors from `state` when the config names none
+/// and the material is actually there.
+///
+/// `firma config` writes `authority.pub` and `tls/authority-ca.crt` into the
+/// state directory and pins both paths in `firma.toml`. Adopting them as the
+/// default keeps a deployment that pins neither verifying capability tokens and
+/// the Authority's TLS identity without naming a host path.
+///
+/// The existence check is what keeps the other direction safe: a deployment that
+/// never generated this material keeps its reject-all token verifier and its
+/// rejection of an `https://` Authority, instead of failing on a file nobody
+/// wrote.
+///
+/// What counts as present is
+/// [`firma_runtime_state::is_material_present`]: every consumer of a
+/// state-directory default has to answer that question the same way, including
+/// `firma run`, which resolves these positions before spawning this process.
+fn adopt_authority_trust_anchors(
+    schema: &mut firma_config_schema::sidecar::SidecarConfig,
+    state: &firma_runtime_state::RuntimeLayout,
+) {
+    if schema.authority.public_key_path.is_none() {
+        let candidate = state.authority_public_key();
+        if firma_runtime_state::is_material_present(&candidate) {
+            schema.authority.public_key_path = Some(candidate);
+        }
+    }
+    if schema.authority.ca_cert_path.is_none() {
+        let candidate = state.authority_tls_ca_certificate();
+        if firma_runtime_state::is_material_present(&candidate) {
+            schema.authority.ca_cert_path = Some(candidate);
+        }
+    }
+}
 
-    fn try_from(s: firma_config_schema::sidecar::SidecarConfig) -> Result<Self, Self::Error> {
+impl SidecarConfig {
+    /// Validate `schema` against `state`, the state directory this process and
+    /// its children resolve their artifacts from.
+    ///
+    /// This is the only way to build a [`SidecarConfig`]. Resolution and
+    /// validation are one step because they are not independent: the validator
+    /// rejects an `https://` Authority with no CA certificate, so an anchor
+    /// adopted from the state directory has to be in place before the check
+    /// runs. Splitting them is what let `firma doctor` reject configurations
+    /// the Sidecar accepts.
+    ///
+    /// What `state` supplies, for each field the config leaves unset:
+    ///
+    /// | Field | Default |
+    /// |-------|---------|
+    /// | `authority.public_key_path` | `authority.pub`, if present |
+    /// | `authority.ca_cert_path` | `tls/authority-ca.crt`, if present |
+    /// | `ca.dir` | `generated-firma-ca` |
+    /// | `audit.file_path` | `audit.jsonl` |
+    /// | `audit.signing_key_path` | `audit.key` |
+    ///
+    /// Each is the path `firma config` generates, so a config that names
+    /// nothing and a scaffolded one drive the same files.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SidecarConfigError`] when any section fails validation.
+    pub fn resolve(
+        mut schema: firma_config_schema::sidecar::SidecarConfig,
+        state: &firma_runtime_state::RuntimeLayout,
+    ) -> Result<Self, SidecarConfigError> {
+        adopt_authority_trust_anchors(&mut schema, state);
+        Self::from_schema(schema, state)
+    }
+
+    fn from_schema(
+        s: firma_config_schema::sidecar::SidecarConfig,
+        state: &firma_runtime_state::RuntimeLayout,
+    ) -> Result<Self, SidecarConfigError> {
         let mut credentials = HashMap::with_capacity(s.credentials.len());
         for (label, cred) in s.credentials {
             let validated = CredentialConfig::try_from(cred).map_err(|source| {
@@ -308,29 +422,25 @@ impl TryFrom<firma_config_schema::sidecar::SidecarConfig> for SidecarConfig {
             .map(HttpIntegrationSpec::try_from)
             .collect::<Result<Vec<_>, _>>()?;
         let enforcement = firma_config_schema::sidecar::EnforcementConfig {
-            mapping: s.mapping,
-            capability_validation: s.capability_validation,
             constraint_enforcement: s.constraint_enforcement,
         }
         .try_into()?;
         let config = Self {
-            mode: s.mode,
             interceptor: s.interceptor.try_into()?,
             policy: s.policy.try_into()?,
-            ca: s.ca.try_into()?,
+            ca: CaConfig::resolve(s.ca, state)?,
             credentials,
             connector: s.connector.try_into()?,
             authority: s.authority.try_into()?,
             enforcement,
             revocation: s.revocation.try_into()?,
             capability_seed: s.capability_seed.try_into()?,
-            audit: s.audit.try_into()?,
+            audit: AuditConfig::resolve(s.audit, state)?,
             local_exec: s.local_exec.map(LocalExecConfig::try_from).transpose()?,
-            tenancy: s.tenancy,
             http_secret_providers,
             secret_gateway: s.secret_gateway,
         };
-        config.validate_cross_fields()?;
+        config.validate_cross_fields(state)?;
         Ok(config)
     }
 }
@@ -367,14 +477,14 @@ pub struct InterceptorConfig {
         not(test),
         expect(dead_code, reason = "not yet consumed by interceptor shutdown")
     )]
-    drain_timeout: Duration,
+    drain_timeout: NonZeroDuration,
     /// Maximum request body size accepted by proxy interceptors.
-    pub(crate) max_request_body_bytes: usize,
+    pub(crate) max_request_body_bytes: NonZeroUsize,
     /// Maximum size a single request or response body may expand to when
     /// decompressed for secret placeholder rehydration or masking. Bounds
     /// the memory a decompression bomb (e.g. a small `gzip`/`br`/`zstd`
     /// payload that expands enormously) can force the Sidecar to allocate.
-    max_decompressed_body_size: ByteSize,
+    max_decompressed_body_bytes: NonZeroUsize,
     /// CONNECT/MITM relay timeout controls.
     pub(crate) connect_relay: ConnectRelayConfig,
     /// HTTPS MITM settings used by the HTTP proxy interceptor.
@@ -384,7 +494,7 @@ pub struct InterceptorConfig {
     /// budget is full, new requests receive an immediate 403 denial
     /// with an audit trail rather than silently unbounded buffering
     /// that could OOM-kill the enforcer.
-    pub(crate) total_body_budget_bytes: usize,
+    pub(crate) total_body_budget_bytes: NonZeroUsize,
 }
 
 /// Error validating an [`InterceptorConfig`].
@@ -428,29 +538,32 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
             .map_err(|_| InterceptorConfigError::MaxRequestBodyTooLarge)?;
         let total_body_budget_bytes = usize::try_from(s.total_body_budget.as_u64())
             .map_err(|_| InterceptorConfigError::TotalBodyBudgetTooLarge)?;
+        let https_mitm = HttpsMitmConfig::try_from(s.https_mitm)?;
+        let max_request_body_bytes = NonZeroUsize::new(max_request_body_bytes)
+            .ok_or(InterceptorConfigError::ZeroMaxRequestBody)?;
+        if s.max_decompressed_body_size.as_u64() == 0 {
+            return Err(InterceptorConfigError::ZeroMaxDecompressedBody);
+        }
+        // The decoder reads one byte past the limit to detect overflow, so
+        // `usize::MAX` is rejected along with sizes that do not fit `usize`.
+        let max_decompressed_body_bytes = usize::try_from(s.max_decompressed_body_size.as_u64())
+            .ok()
+            .filter(|&bytes| bytes != usize::MAX)
+            .and_then(NonZeroUsize::new)
+            .ok_or(InterceptorConfigError::MaxDecompressedBodyTooLarge)?;
+        let total_body_budget_bytes = NonZeroUsize::new(total_body_budget_bytes)
+            .ok_or(InterceptorConfigError::ZeroTotalBodyBudget)?;
         let config = Self {
             mode: s.mode,
             listen_addr: s.listen_addr,
             socket_path: s.socket_path,
-            drain_timeout: s.drain_timeout.duration(),
+            drain_timeout: s.drain_timeout,
             max_request_body_bytes,
-            max_decompressed_body_size: s.max_decompressed_body_size,
+            max_decompressed_body_bytes,
             connect_relay: s.connect_relay.into(),
-            https_mitm: HttpsMitmConfig::try_from(s.https_mitm)?,
+            https_mitm,
             total_body_budget_bytes,
         };
-        if config.max_request_body_bytes == 0 {
-            return Err(InterceptorConfigError::ZeroMaxRequestBody);
-        }
-        if config.max_decompressed_body_size.as_u64() == 0 {
-            return Err(InterceptorConfigError::ZeroMaxDecompressedBody);
-        }
-        if config.max_decompressed_body_bytes() == usize::MAX {
-            return Err(InterceptorConfigError::MaxDecompressedBodyTooLarge);
-        }
-        if config.total_body_budget_bytes == 0 {
-            return Err(InterceptorConfigError::ZeroTotalBodyBudget);
-        }
         if config.total_body_budget_bytes < config.max_request_body_bytes {
             return Err(InterceptorConfigError::TotalBodyBudgetBelowRequest);
         }
@@ -471,13 +584,8 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
 
 impl InterceptorConfig {
     #[must_use]
-    pub fn max_decompressed_body_bytes(&self) -> usize {
-        // the only way this conversion can fail is that we're running on a 32bit system and
-        // we're using a max_decompressed_body_size > u32::MAX (or, even worse, on a 16bit system)
-        //
-        // fallback value is usize::MAX, but this value will fail validation, because when we read,
-        // we read one more byte to know if the limit has been overflowed
-        usize::try_from(self.max_decompressed_body_size.as_u64()).unwrap_or(usize::MAX)
+    pub fn max_decompressed_body_bytes(&self) -> NonZeroUsize {
+        self.max_decompressed_body_bytes
     }
 }
 
@@ -488,14 +596,21 @@ impl Default for InterceptorConfig {
             mode: d.mode,
             listen_addr: d.listen_addr,
             socket_path: d.socket_path,
-            drain_timeout: d.drain_timeout.duration(),
+            drain_timeout: d.drain_timeout,
             max_request_body_bytes: usize::try_from(d.max_request_body_size.as_u64())
-                .unwrap_or(4 * 1024 * 1024),
-            max_decompressed_body_size: d.max_decompressed_body_size,
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .unwrap_or(const { NonZeroUsize::new(4 * 1024 * 1024).unwrap() }),
+            max_decompressed_body_bytes: usize::try_from(d.max_decompressed_body_size.as_u64())
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .unwrap_or(const { NonZeroUsize::new(16 * 1024 * 1024).unwrap() }),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
             total_body_budget_bytes: usize::try_from(d.total_body_budget.as_u64())
-                .unwrap_or(64 * 1024 * 1024),
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .unwrap_or(const { NonZeroUsize::new(64 * 1024 * 1024).unwrap() }),
         }
     }
 }
@@ -504,16 +619,16 @@ impl Default for InterceptorConfig {
 #[derive(Debug, Clone)]
 pub struct ConnectRelayConfig {
     /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
-    pub(crate) setup_timeout: Duration,
+    pub(crate) setup_timeout: NonZeroDuration,
     /// Hard cap for the full tunnel/MITM session lifetime.
-    pub(crate) session_max: Duration,
+    pub(crate) session_max: NonZeroDuration,
 }
 
 impl From<schema_ic::ConnectRelayConfig> for ConnectRelayConfig {
     fn from(s: schema_ic::ConnectRelayConfig) -> Self {
         Self {
-            setup_timeout: s.setup_timeout.duration(),
-            session_max: s.session_max.duration(),
+            setup_timeout: s.setup_timeout,
+            session_max: s.session_max,
         }
     }
 }
@@ -522,8 +637,8 @@ impl Default for ConnectRelayConfig {
     fn default() -> Self {
         let d = schema_ic::ConnectRelayConfig::default();
         Self {
-            setup_timeout: d.setup_timeout.duration(),
-            session_max: d.session_max.duration(),
+            setup_timeout: d.setup_timeout,
+            session_max: d.session_max,
         }
     }
 }
@@ -581,9 +696,18 @@ impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
         validate_host_patterns(
             "interceptor.https_mitm.intercept_hosts",
             &config.intercept_hosts,
+            HostSyntax::Dns,
         )?;
-        validate_host_patterns("interceptor.https_mitm.bypass_hosts", &config.bypass_hosts)?;
-        validate_host_patterns("interceptor.https_mitm.strict_hosts", &config.strict_hosts)?;
+        validate_host_patterns(
+            "interceptor.https_mitm.bypass_hosts",
+            &config.bypass_hosts,
+            HostSyntax::DnsOrUnderscore,
+        )?;
+        validate_host_patterns(
+            "interceptor.https_mitm.strict_hosts",
+            &config.strict_hosts,
+            HostSyntax::Dns,
+        )?;
         // Empty intercept_hosts → MITM inactive (see `is_active`); skip the
         // active-only invariants below instead of rejecting the config.
         if config.is_active() {
@@ -604,10 +728,20 @@ impl HttpsMitmConfig {
     /// MITM is active only when explicitly enabled *and* at least one
     /// `intercept_hosts` pattern is configured. An enabled MITM with an
     /// empty host list has nothing to intercept, so it is treated as
-    /// disabled rather than as a fatal misconfiguration:
-    /// this lets a `firma config`-scaffolded `firma.toml` — which emits an
-    /// empty `intercept_hosts` — start cleanly under standalone
-    /// `firma sidecar --config`.
+    /// disabled rather than as a fatal misconfiguration.
+    ///
+    /// Nothing generates that shape: `firma config` writes no `intercept_hosts`
+    /// at all, and the default is every host. Writing `intercept_hosts = []` by
+    /// hand is therefore a deliberate opt-out of interception for every host,
+    /// and the only one that `enabled` does not spell out — it is kept because
+    /// an empty selection is not ambiguous, not because a generated file needs
+    /// it.
+    ///
+    /// Neither spelling survives `firma config`, which strips `enabled`,
+    /// `intercept_hosts` and `strict_hosts` on every run. The global opt-out
+    /// that does is `bypass_hosts = ["*"]`: the pattern matches every host and
+    /// is checked before interception, so every tunnel is relayed uninspected
+    /// while the key itself is merged rather than removed.
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.enabled && !self.intercept_hosts.is_empty()
@@ -660,7 +794,7 @@ impl Default for HttpsMitmConfig {
 #[derive(Debug, Clone)]
 pub struct PolicyConfig {
     /// Directory containing `.cedar` policy files.
-    pub dir: PathBuf,
+    dir: PathBuf,
 }
 
 /// Error validating a [`PolicyConfig`].
@@ -693,33 +827,41 @@ impl Default for PolicyConfig {
 /// Certificate authority directory settings.
 #[derive(Debug, Clone)]
 pub struct CaConfig {
-    /// Directory containing CA key material.
+    /// Directory containing the HTTPS MITM CA key material.
+    ///
+    /// Always resolved: an unset `sidecar.ca.dir` becomes the state
+    /// directory's `generated-firma-ca`.
     pub(crate) dir: PathBuf,
 }
 
 /// Error validating a [`CaConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CaConfigError {
-    /// `sidecar.ca.dir` was empty.
-    #[error("ca.dir must not be empty")]
+    /// `sidecar.ca.dir` was set but empty.
+    #[error("ca.dir must not be empty when set")]
     EmptyDir,
 }
 
-impl TryFrom<schema_infra::CaConfig> for CaConfig {
-    type Error = CaConfigError;
-
-    fn try_from(s: schema_infra::CaConfig) -> Result<Self, Self::Error> {
-        if s.dir.as_os_str().is_empty() {
-            return Err(CaConfigError::EmptyDir);
-        }
-        Ok(Self { dir: s.dir })
-    }
-}
-
-impl Default for CaConfig {
-    fn default() -> Self {
-        Self {
-            dir: schema_infra::CaConfig::default().dir,
+impl CaConfig {
+    /// Validate `schema`, defaulting an unset directory to the state
+    /// directory's generated CA.
+    ///
+    /// `firma config` writes that same path into `firma.toml`, so a
+    /// hand-written config and a scaffolded one mint one CA rather than two.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaConfigError::EmptyDir`] when the directory is set but empty.
+    fn resolve(
+        schema: schema_infra::CaConfig,
+        state: &firma_runtime_state::RuntimeLayout,
+    ) -> Result<Self, CaConfigError> {
+        match schema.dir {
+            Some(dir) if dir.as_os_str().is_empty() => Err(CaConfigError::EmptyDir),
+            Some(dir) => Ok(Self { dir }),
+            None => Ok(Self {
+                dir: state.generated_ca_dir(),
+            }),
         }
     }
 }
@@ -884,9 +1026,31 @@ pub enum HostPatternError {
     },
 }
 
+/// Which host literals a host-pattern field accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostSyntax {
+    /// Strict DNS names only.
+    ///
+    /// Used by the fields that select hosts *for* interception, and by leaf
+    /// certificate issuance itself: the Sidecar has to issue a certificate for
+    /// a host it intercepts, and a name outside strict DNS has no certificate
+    /// to carry it.
+    Dns,
+    /// Strict DNS names plus underscore labels.
+    ///
+    /// Used by `bypass_hosts`, which is the only way out of the
+    /// intercept-everything default. It must be able to name a host the
+    /// Sidecar *cannot* intercept, and the underscore names common in
+    /// internal DNS are exactly that: [`HostSyntax::Dns`] rejects them and
+    /// certificate issuance fails on them, so with no way to list one the
+    /// host would be denied with no escape hatch.
+    DnsOrUnderscore,
+}
+
 fn validate_host_patterns(
     field: &'static str,
     patterns: &[String],
+    syntax: HostSyntax,
 ) -> Result<(), HostPatternError> {
     for (index, pattern) in patterns.iter().enumerate() {
         let normalized = pattern.trim().trim_end_matches('.').to_ascii_lowercase();
@@ -909,7 +1073,7 @@ fn validate_host_patterns(
             if suffix.split('.').count() < 2 {
                 return Err(HostPatternError::WildcardTooFewLabels { field, index });
             }
-            validate_dns_hostname(suffix).map_err(|source| HostPatternError::Dns {
+            validate_dns_hostname(suffix, syntax).map_err(|source| HostPatternError::Dns {
                 field,
                 index,
                 source,
@@ -922,7 +1086,7 @@ fn validate_host_patterns(
         if normalized.parse::<IpAddr>().is_ok() {
             continue;
         }
-        validate_dns_hostname(&normalized).map_err(|source| HostPatternError::Dns {
+        validate_dns_hostname(&normalized, syntax).map_err(|source| HostPatternError::Dns {
             field,
             index,
             source,
@@ -963,7 +1127,18 @@ pub enum DnsHostnameError {
     },
 }
 
-fn validate_dns_hostname(host: &str) -> Result<(), DnsHostnameError> {
+/// Checks `host` against the DNS label rules `syntax` admits.
+///
+/// Shared with leaf certificate issuance
+/// (`interceptor::https_mitm::leaf_certificate_params`), which validates the
+/// name it is about to put in a SAN. The length limits, hyphen rules and
+/// allowed characters are the same question there, asked of a single host
+/// rather than of a configured pattern, so there is one implementation and
+/// `syntax` is the only thing that varies.
+pub(crate) fn validate_dns_hostname(
+    host: &str,
+    syntax: HostSyntax,
+) -> Result<(), DnsHostnameError> {
     if host.is_empty() {
         return Err(DnsHostnameError::Empty);
     }
@@ -985,7 +1160,11 @@ fn validate_dns_hostname(host: &str) -> Result<(), DnsHostnameError> {
                 label: label.to_string(),
             });
         }
-        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        let label_is_valid = label.chars().all(|c| match c {
+            '_' => syntax == HostSyntax::DnsOrUnderscore,
+            c => c.is_ascii_alphanumeric() || c == '-',
+        });
+        if !label_is_valid {
             return Err(DnsHostnameError::LabelInvalidChars {
                 label: label.to_string(),
             });
@@ -1012,10 +1191,10 @@ pub struct LocalExecConfig {
     /// Policy applied to every fresh local-exec request.
     pub(crate) default_action: firma_config_schema::sidecar::local_exec::DefaultAction,
     /// Approval token time-to-live.
-    pub(crate) token_ttl: Duration,
+    pub(crate) token_ttl: NonZeroDuration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
-    /// responses (milliseconds, default: 500).
-    pub(crate) retry_after: Duration,
+    /// responses, in the millisecond wire unit (default: 500).
+    pub(crate) retry_after_ms: NonZeroU64,
 }
 
 /// Error validating a [`LocalExecConfig`].
@@ -1042,20 +1221,17 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         if !s.socket_path.is_absolute() {
             return Err(LocalExecConfigError::SocketPathNotAbsolute(s.socket_path));
         }
-        if s.token_ttl.is_zero() {
-            return Err(LocalExecConfigError::ZeroTokenTtl);
-        }
-        let retry_after = s.retry_after.duration();
-        let retry_after_ms = u64::try_from(retry_after.as_millis())
+        let token_ttl =
+            NonZeroDuration::new(s.token_ttl).map_err(|_| LocalExecConfigError::ZeroTokenTtl)?;
+        let retry_after_ms = u64::try_from(s.retry_after.duration().as_millis())
             .map_err(|_| LocalExecConfigError::RetryAfterTooLarge)?;
-        if retry_after_ms == 0 {
-            return Err(LocalExecConfigError::RetryAfterBelowOneMillisecond);
-        }
+        let retry_after_ms = NonZeroU64::new(retry_after_ms)
+            .ok_or(LocalExecConfigError::RetryAfterBelowOneMillisecond)?;
         Ok(Self {
             socket_path: s.socket_path,
             default_action: s.default_action,
-            token_ttl: s.token_ttl,
-            retry_after,
+            token_ttl,
+            retry_after_ms,
         })
     }
 }
@@ -1066,14 +1242,28 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use firma_config_schema::sidecar::{AuditSink, SessionStateBackend};
 
     use super::*;
 
     /// A default schema-level sidecar config, the deserialize target that the
-    /// validated [`SidecarConfig`] is built from via `TryFrom`.
+    /// validated [`SidecarConfig`] is built from by [`SidecarConfig::resolve`].
     fn schema_sidecar() -> firma_config_schema::sidecar::SidecarConfig {
-        firma_config_schema::sidecar::SidecarConfig::default()
+        let mut schema = firma_config_schema::sidecar::SidecarConfig::default();
+        schema.authority.url = Some("http://127.0.0.1:50051".to_string());
+        schema
+    }
+
+    /// A fixed state root. These cases are about validation and re-basing, so
+    /// the resolved defaults only need to be predictable and absolute.
+    fn state() -> firma_runtime_state::RuntimeLayout {
+        firma_runtime_state::RuntimeLayout::from_root("/state")
+    }
+
+    /// A validated config with nothing configured.
+    fn resolved_default() -> SidecarConfig {
+        SidecarConfig::resolve(schema_sidecar(), &state()).expect("defaults are valid")
     }
 
     // -- SidecarConfig ------------------------------------------------------
@@ -1081,7 +1271,7 @@ mod tests {
     #[test]
     fn rebase_rewrites_default_policy_dir_only() {
         use std::path::PathBuf;
-        let mut c = SidecarConfig::default();
+        let mut c = resolved_default();
         c.rebase_defaults(&PathBuf::from("/cfg"));
         assert_eq!(c.policy.dir, PathBuf::from("/cfg/policies"));
     }
@@ -1089,7 +1279,7 @@ mod tests {
     #[test]
     fn rebase_preserves_explicit_policy_dir() {
         use std::path::PathBuf;
-        let mut c = SidecarConfig::default();
+        let mut c = resolved_default();
         c.policy.dir = PathBuf::from("/explicit/policies");
         c.rebase_defaults(&PathBuf::from("/cfg"));
         assert_eq!(c.policy.dir, PathBuf::from("/explicit/policies"));
@@ -1098,7 +1288,7 @@ mod tests {
     #[test]
     fn rebase_leaves_ca_dir_alone() {
         use std::path::PathBuf;
-        let mut c = SidecarConfig::default();
+        let mut c = resolved_default();
         let before = c.ca.dir.clone();
         c.rebase_defaults(&PathBuf::from("/cfg"));
         assert_eq!(c.ca.dir, before);
@@ -1107,7 +1297,7 @@ mod tests {
     #[test]
     fn rebase_rewrites_relative_authority_ca_cert_path() {
         use std::path::PathBuf;
-        let mut c = SidecarConfig::default();
+        let mut c = resolved_default();
         c.authority.ca_cert_path = Some(PathBuf::from("authority-ca.crt"));
         c.rebase_defaults(&PathBuf::from("/cfg"));
         assert_eq!(
@@ -1118,7 +1308,7 @@ mod tests {
 
     #[test]
     fn rebase_rewrites_resource_paths_and_preserves_state_paths() {
-        let mut c = SidecarConfig::default();
+        let mut c = resolved_default();
         c.authority.tls_client_cert_path = Some(PathBuf::from("tls/client.crt"));
         c.authority.tls_client_key_path = Some(PathBuf::from("tls/client.key"));
         c.credentials.insert(
@@ -1133,10 +1323,8 @@ mod tests {
                 secret_path: Some(PathBuf::from("secrets/token")),
             },
         );
-        c.enforcement.mapping.rules_path = PathBuf::from("mappings/main.toml");
-        c.enforcement.mapping.rules_paths = vec![PathBuf::from("mappings/extra.toml")];
         c.interceptor.socket_path = Some(PathBuf::from("runtime/sidecar.sock"));
-        c.audit.wal_path = Some(PathBuf::from("state/wal"));
+        c.audit.buffer_path = Some(PathBuf::from("state/audit-buffer.jsonl"));
         c.enforcement.constraint_enforcement.path = Some(PathBuf::from("state/sessions"));
         c.ca.dir = PathBuf::from("state/ca");
 
@@ -1155,18 +1343,13 @@ mod tests {
             Some(PathBuf::from("/cfg/secrets/token"))
         );
         assert_eq!(
-            c.enforcement.mapping.rules_path,
-            PathBuf::from("/cfg/mappings/main.toml")
-        );
-        assert_eq!(
-            c.enforcement.mapping.rules_paths,
-            vec![PathBuf::from("/cfg/mappings/extra.toml")]
-        );
-        assert_eq!(
             c.interceptor.socket_path,
             Some(PathBuf::from("runtime/sidecar.sock"))
         );
-        assert_eq!(c.audit.wal_path, Some(PathBuf::from("state/wal")));
+        assert_eq!(
+            c.audit.buffer_path,
+            Some(PathBuf::from("/cfg/state/audit-buffer.jsonl"))
+        );
         assert_eq!(
             c.enforcement.constraint_enforcement.path,
             Some(PathBuf::from("state/sessions"))
@@ -1176,42 +1359,53 @@ mod tests {
 
     #[test]
     fn test_sidecar_config_defaults_valid() {
-        let config = SidecarConfig::try_from(schema_sidecar()).expect("defaults valid");
+        let config = SidecarConfig::resolve(schema_sidecar(), &state()).expect("defaults valid");
         assert!(
             config.interceptor.https_mitm.enabled,
             "MITM should be enabled by default"
         );
-        assert!(
-            !config.interceptor.https_mitm.intercept_hosts.is_empty(),
-            "default MITM intercept list should not be empty"
+        assert_eq!(
+            config.interceptor.https_mitm.intercept_hosts,
+            vec!["*".to_string()],
+            "every host is intercepted by default"
         );
-        assert!(
-            config
-                .interceptor
-                .https_mitm
-                .intercept_hosts
-                .contains(&"auth.openai.com".to_string()),
-            "default MITM intercept list should include auth.openai.com"
-        );
-        assert!(
-            config
-                .interceptor
-                .https_mitm
-                .intercept_hosts
-                .contains(&"platform.claude.com".to_string()),
-            "default MITM intercept list should include platform.claude.com"
-        );
-        assert!(
-            config
-                .interceptor
-                .https_mitm
-                .intercept_hosts
-                .contains(&"api.anthropic.com".to_string()),
-            "default MITM intercept list should include api.anthropic.com"
+        assert_eq!(
+            config.interceptor.https_mitm.strict_hosts,
+            vec!["*".to_string()],
+            "a host that cannot be intercepted is denied, not tunnelled"
         );
         assert!(
             config.interceptor.https_mitm.bypass_hosts.is_empty(),
-            "default MITM bypass list should be empty"
+            "narrowing the default is an explicit operator decision"
+        );
+    }
+
+    #[test]
+    fn bypass_hosts_accept_an_underscore_host_the_sidecar_cannot_intercept() {
+        // `intercept_hosts` defaults to every host, and certificate issuance
+        // fails on a name outside strict DNS. `bypass_hosts` is the only way
+        // out of that default, so it has to be able to name such a host —
+        // otherwise the host is denied with no escape hatch.
+        let mut schema = schema_sidecar();
+        schema.interceptor.https_mitm.bypass_hosts = vec!["my_service.internal".to_string()];
+        let config = SidecarConfig::resolve(schema, &state()).expect("underscore bypass accepted");
+        assert_eq!(
+            config.interceptor.https_mitm.bypass_hosts,
+            vec!["my_service.internal".to_string()]
+        );
+    }
+
+    #[test]
+    fn intercept_hosts_still_reject_an_underscore_host() {
+        // Selecting a host *for* interception commits the Sidecar to issuing a
+        // leaf certificate for it, which strict DNS has to allow.
+        let mut schema = schema_sidecar();
+        schema.interceptor.https_mitm.intercept_hosts = vec!["my_service.internal".to_string()];
+        let err =
+            SidecarConfig::resolve(schema, &state()).expect_err("underscore intercept rejected");
+        assert!(
+            format!("{err}").contains("non-DNS characters"),
+            "expected a DNS character error, got: {err}"
         );
     }
 
@@ -1220,7 +1414,7 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.capability_seed.paths = vec![std::path::PathBuf::from("./capability.toml")];
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::MissingPublicKeyForSeeds)
         ));
     }
@@ -1230,7 +1424,7 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.capability_seed.paths = vec![std::path::PathBuf::from("./capability.toml")];
         schema.authority.public_key_path = Some(std::path::PathBuf::from("./authority.pub"));
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     fn credential(mode: CredentialMode) -> schema_infra::CredentialConfig {
@@ -1257,7 +1451,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Credential { label, source: CredentialConfigError::EmptyTargetHost })
                 if label == "bad"
         ));
@@ -1270,7 +1464,7 @@ mod tests {
             .credentials
             .insert("noenv".to_string(), credential(CredentialMode::Basic));
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Credential {
                 source: CredentialConfigError::ValueFromEnvRequired,
                 ..
@@ -1292,7 +1486,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Credential {
                 source: CredentialConfigError::PrefixWithTransform,
                 ..
@@ -1307,7 +1501,7 @@ mod tests {
             .credentials
             .insert("novault".to_string(), credential(CredentialMode::Vault));
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Credential {
                 source: CredentialConfigError::SecretPathRequired,
                 ..
@@ -1320,7 +1514,7 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.interceptor.max_request_body_size = ByteSize::b(0);
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::ZeroMaxRequestBody
             ))
@@ -1332,7 +1526,7 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.interceptor.max_decompressed_body_size = ByteSize::b(0);
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::ZeroMaxDecompressedBody
             ))
@@ -1344,7 +1538,7 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.interceptor.total_body_budget = ByteSize::b(0);
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::ZeroTotalBodyBudget
             ))
@@ -1357,7 +1551,7 @@ mod tests {
         schema.interceptor.max_request_body_size = ByteSize::mib(8);
         schema.interceptor.total_body_budget = ByteSize::mib(4);
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::TotalBodyBudgetBelowRequest
             ))
@@ -1369,7 +1563,7 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.interceptor.max_request_body_size = ByteSize::mib(4);
         schema.interceptor.total_body_budget = ByteSize::mib(4);
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     #[test]
@@ -1390,7 +1584,7 @@ mod tests {
         schema.interceptor.https_mitm.enabled = true;
         schema.interceptor.https_mitm.intercept_hosts = Vec::new();
         assert!(
-            SidecarConfig::try_from(schema).is_ok(),
+            SidecarConfig::resolve(schema, &state()).is_ok(),
             "empty intercept_hosts must not be fatal"
         );
     }
@@ -1411,7 +1605,7 @@ mod tests {
         schema.interceptor.https_mitm.enabled = true;
         schema.interceptor.https_mitm.intercept_hosts = vec![" ".to_string()];
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::HttpsMitm(HttpsMitmConfigError::HostPattern(
                     HostPatternError::Empty {
@@ -1429,7 +1623,7 @@ mod tests {
         schema.interceptor.https_mitm.enabled = true;
         schema.interceptor.https_mitm.intercept_hosts = vec!["api.*.openai.com".to_string()];
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::HttpsMitm(HttpsMitmConfigError::HostPattern(
                     HostPatternError::WildcardNotLeading { .. }
@@ -1444,7 +1638,7 @@ mod tests {
         schema.interceptor.https_mitm.enabled = true;
         schema.interceptor.https_mitm.intercept_hosts = vec!["*.com".to_string()];
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::HttpsMitm(HttpsMitmConfigError::HostPattern(
                     HostPatternError::WildcardTooFewLabels { .. }
@@ -1462,7 +1656,7 @@ mod tests {
         schema.interceptor.https_mitm.strict_hosts = vec!["api.openai.com".to_string()];
         schema.interceptor.https_mitm.cert_ttl = Duration::from_mins(1);
         schema.interceptor.https_mitm.cert_cache_capacity = 8;
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     #[cfg(unix)]
@@ -1473,7 +1667,7 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.interceptor.mode = InterceptorMode::UnixSocket;
         schema.interceptor.socket_path = None;
-        let config = SidecarConfig::try_from(schema).expect("absent path is valid");
+        let config = SidecarConfig::resolve(schema, &state()).expect("absent path is valid");
         assert_eq!(config.interceptor.socket_path, None);
     }
 
@@ -1484,7 +1678,7 @@ mod tests {
         schema.interceptor.mode = InterceptorMode::UnixSocket;
         schema.interceptor.socket_path = Some(PathBuf::new());
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
                 InterceptorConfigError::SocketPathEmpty
             ))
@@ -1497,14 +1691,14 @@ mod tests {
         let mut schema = schema_sidecar();
         schema.interceptor.mode = InterceptorMode::UnixSocket;
         schema.interceptor.socket_path = Some(PathBuf::from("/tmp/firma.sock"));
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     #[test]
     fn test_grpc_mode_defaults_valid() {
         let mut schema = schema_sidecar();
         schema.interceptor.mode = InterceptorMode::Grpc;
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     #[test]
@@ -1548,43 +1742,39 @@ header = "Authorization"
 value_from_env = "OPENAI_API_KEY"
 prefix = "Bearer "
 
-[mapping]
-rules_path = "/etc/firma/rules.toml"
-default_protected = false
-
-[capability_validation]
-clock_skew_tolerance = "5s"
-
 [revocation]
 capacity = 500000
 fpr = 0.001
 lru_capacity = 50000
 
 [audit]
-sink = "wal"
+sink = "grpc"
 grpc_url = "https://audit.example.com"
-wal_path = "/var/lib/firma/wal"
-wal_max_size = "50 MiB"
+buffer_path = "/var/lib/firma/audit-buffer.jsonl"
+buffer_max_size = "50 MiB"
 signing_key_path = "/etc/firma/audit.pem"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
             toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
-        let config =
-            SidecarConfig::try_from(schema).unwrap_or_else(|e| panic!("validation failed: {e}"));
+        let config = SidecarConfig::resolve(schema, &state())
+            .unwrap_or_else(|e| panic!("validation failed: {e}"));
 
         assert_eq!(config.interceptor.mode, InterceptorMode::HttpProxy);
         assert_eq!(
             config.interceptor.listen_addr,
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
-        assert_eq!(config.interceptor.drain_timeout, Duration::from_secs(15));
-        assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
         assert_eq!(
-            config.interceptor.connect_relay.setup_timeout,
+            config.interceptor.drain_timeout.duration(),
+            Duration::from_secs(15)
+        );
+        assert_eq!(config.interceptor.max_request_body_bytes.get(), 2_097_152);
+        assert_eq!(
+            config.interceptor.connect_relay.setup_timeout.duration(),
             Duration::from_secs(12)
         );
         assert_eq!(
-            config.interceptor.connect_relay.session_max,
+            config.interceptor.connect_relay.session_max.duration(),
             Duration::from_mins(15)
         );
         assert!(config.interceptor.https_mitm.enabled);
@@ -1606,10 +1796,7 @@ signing_key_path = "/etc/firma/audit.pem"
         );
         assert_eq!(config.interceptor.https_mitm.cert_cache_capacity, 16);
         assert_eq!(config.policy.dir, PathBuf::from("/etc/firma/policies"));
-        assert_eq!(
-            config.authority.url.as_deref(),
-            Some("https://authority.example.com")
-        );
+        assert_eq!(config.authority.url, "https://authority.example.com");
         assert_eq!(
             config.authority.ca_cert_path.as_deref(),
             Some(std::path::Path::new("/etc/firma/authority-ca.pem"))
@@ -1619,43 +1806,33 @@ signing_key_path = "/etc/firma/audit.pem"
         let openai = &config.credentials["openai"];
         assert_eq!(openai.target_host, "api.openai.com");
         assert_eq!(openai.prefix.as_deref(), Some("Bearer "));
-        assert_eq!(
-            config.enforcement.mapping.rules_path,
-            PathBuf::from("/etc/firma/rules.toml")
-        );
-        assert!(!config.enforcement.mapping.default_protected);
-        assert_eq!(
-            config
-                .enforcement
-                .capability_validation
-                .clock_skew_tolerance,
-            Duration::from_secs(5)
-        );
         // New AARM R2 G4 session-state fields default when unset.
-        assert_eq!(config.enforcement.constraint_enforcement.capacity, 8192);
+        assert_eq!(
+            config.enforcement.constraint_enforcement.capacity.get(),
+            8192
+        );
         assert_eq!(
             config.enforcement.constraint_enforcement.backend,
             SessionStateBackend::Lru
         );
         assert!(config.enforcement.constraint_enforcement.path.is_none());
-        assert_eq!(config.revocation.capacity, 500_000);
+        assert_eq!(config.revocation.capacity.get(), 500_000);
         assert!((config.revocation.fpr - 0.001).abs() < f64::EPSILON);
-        assert_eq!(config.revocation.lru_capacity, 50_000);
-        assert_eq!(config.audit.sink, AuditSink::Wal);
+        assert_eq!(config.revocation.lru_capacity.get(), 50_000);
+        assert_eq!(config.audit.sink, AuditSink::Grpc);
         assert_eq!(
             config.audit.grpc_url.as_deref(),
             Some("https://audit.example.com")
         );
         assert_eq!(
-            config.audit.wal_path.as_deref(),
-            Some(std::path::Path::new("/var/lib/firma/wal"))
+            config.audit.buffer_path.as_deref(),
+            Some(std::path::Path::new("/var/lib/firma/audit-buffer.jsonl"))
         );
-        assert_eq!(config.audit.wal_max_bytes, 52_428_800);
+        assert_eq!(config.audit.buffer_max_bytes, 52_428_800);
         assert_eq!(
-            config.audit.signing_key_path.as_deref(),
-            Some(std::path::Path::new("/etc/firma/audit.pem"))
+            config.audit.signing_key,
+            AuditSigningKey::Path(PathBuf::from("/etc/firma/audit.pem"))
         );
-        assert!(config.audit.signing_key_env.is_none());
     }
 
     #[test]
@@ -1665,11 +1842,13 @@ signing_key_path = "/etc/firma/audit.pem"
 mode = "grpc"
 listen_addr = "127.0.0.1:9091"
 drain_timeout = "10s"
+[authority]
+url = "http://127.0.0.1:50051"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
             toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
-        let config =
-            SidecarConfig::try_from(schema).unwrap_or_else(|e| panic!("validation failed: {e}"));
+        let config = SidecarConfig::resolve(schema, &state())
+            .unwrap_or_else(|e| panic!("validation failed: {e}"));
         assert_eq!(config.interceptor.mode, InterceptorMode::Grpc);
         assert_eq!(
             config.interceptor.listen_addr,
@@ -1682,7 +1861,7 @@ drain_timeout = "10s"
         let mut schema = schema_sidecar();
         schema.authority.url = Some("http://authority.example.com:50051".to_string());
         assert!(matches!(
-            SidecarConfig::try_from(schema),
+            SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::InsecureNonLoopbackAuthority)
         ));
     }
@@ -1692,21 +1871,21 @@ drain_timeout = "10s"
         let mut schema = schema_sidecar();
         schema.authority.url = Some("http://authority.example.com:50051".to_string());
         schema.authority.allow_insecure_remote_authority = true;
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     #[test]
     fn authority_http_loopback_allowed_without_opt_in() {
         let mut schema = schema_sidecar();
         schema.authority.url = Some("http://127.0.0.1:50051".to_string());
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     #[test]
     fn authority_http_ipv6_loopback_allowed_without_opt_in() {
         let mut schema = schema_sidecar();
         schema.authority.url = Some("http://[::1]:50051".to_string());
-        assert!(SidecarConfig::try_from(schema).is_ok());
+        assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
     #[cfg(unix)]
@@ -1717,11 +1896,13 @@ drain_timeout = "10s"
 mode = "unix_socket"
 socket_path = "/tmp/firma.sock"
 drain_timeout = "10s"
+[authority]
+url = "http://127.0.0.1:50051"
 "#;
         let schema: firma_config_schema::sidecar::SidecarConfig =
             toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
-        let config =
-            SidecarConfig::try_from(schema).unwrap_or_else(|e| panic!("validation failed: {e}"));
+        let config = SidecarConfig::resolve(schema, &state())
+            .unwrap_or_else(|e| panic!("validation failed: {e}"));
         assert_eq!(config.interceptor.mode, InterceptorMode::UnixSocket);
         assert_eq!(
             config.interceptor.socket_path.as_deref(),

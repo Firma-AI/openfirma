@@ -25,6 +25,7 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
     let fixture_path = root.join("fixture.sh");
     let liveness_fifo = root.join("grandchild.liveness");
     let child_ready_marker = root.join("grandchild.ready");
+    let release_authority = root.join("release-authority");
 
     nix::unistd::mkfifo(
         &liveness_fifo,
@@ -45,6 +46,7 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
            sh -c 'trap \"\" TERM; exec 3>\"$1/grandchild.liveness\"; \
              printf ready > \"$1/grandchild.ready\"; while :; do sleep 1; done' sh \"$root\" &\n\
            while [ ! -f \"$root/grandchild.ready\" ]; do sleep 0.01; done\n\
+           while [ ! -f \"$root/release-authority\" ]; do sleep 0.01; done\n\
          fi\n",
     )
     .expect("write fixture");
@@ -61,7 +63,7 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
         &config_path,
         format!(
             "[authority]\nlisten_addr = \"{port}\"\n\
-             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n"
+             [sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:9\"\n[sidecar.authority]\nurl = 'http://localhost:50051'\n"
         ),
     )
     .expect("write config");
@@ -75,6 +77,10 @@ fn startup_rollback_kills_grandchild_after_leader_exits() {
         let authority_pid = wait_for_pidfile(&state_dir.join("authority.pid"));
         let cleanup = ProcessGroupCleanup::new(authority_pid);
         wait_for_file(&child_ready_marker);
+        // Do not let the leader exit until the test has observed the group it
+        // must later prove rollback terminated. This is a causal handoff, not
+        // a race against runtime-state cleanup.
+        std::fs::write(&release_authority, []).expect("release authority fixture");
 
         let result = startup.join().expect("startup thread");
         (result, cleanup)

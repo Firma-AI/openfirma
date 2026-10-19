@@ -31,7 +31,7 @@ fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
 /// Write a marker, optionally recording an explicit `listen` endpoint
 /// (a `host:port` pair for an `http_proxy` interceptor, or a socket path).
 /// `None` omits the field, mirroring a legacy marker written before
-/// FIR-195.
+/// markers recorded it.
 fn write_marker_with_listen(run_dir: &Path, sandbox_id: &str, pid: u32, listen: Option<&str>) {
     let dir = run_dir.join(sandbox_id);
     fs::create_dir_all(&dir).expect("mkdir marker dir");

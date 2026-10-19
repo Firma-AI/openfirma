@@ -88,6 +88,7 @@ impl ScenarioSetup {
             .context("generated config is missing sidecar.authority.agent_id")?;
         let seed_path = config::issue_capability(
             &self.config_dir,
+            &self.state_dir,
             agent_id,
             session_id,
             actions,

@@ -10,6 +10,9 @@
 
 pub mod bootstrap;
 pub mod config;
+mod defaults;
+#[cfg(unix)]
+mod freeze;
 #[cfg(unix)]
 pub(crate) mod metadata;
 #[cfg(unix)]

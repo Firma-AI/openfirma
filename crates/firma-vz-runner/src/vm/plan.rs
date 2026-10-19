@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use firma_identifiers::SandboxId;
 
 use crate::contract::{Contract, NetworkMode};
+use crate::vm::error::GuestShareOverlap;
 use crate::vm::{VmPlanError, VmPlanResult};
 
 pub const FIRMA_VIRTIOFS_TAG: &str = "firma";
@@ -29,6 +30,7 @@ pub struct VmPlan {
     pub cols: Option<u16>,
     pub socket_devices: Vec<SocketDevicePlan>,
     pub network_mode: VmNetworkMode,
+    pub broker: Option<BrokerPlan>,
 }
 
 impl VmPlan {
@@ -59,42 +61,31 @@ impl VmPlan {
                 runtime_dir: contract.runtime_dir().to_path_buf(),
             })?;
 
-        if !contract.runtime_dir().is_dir() {
-            return Err(VmPlanError::RuntimeDirMissing {
-                path: contract.runtime_dir().to_path_buf(),
-            });
-        }
-
         validate_rootfs(contract.guest().rootfs())?;
-
-        let mut directory_shares = vec![DirectorySharePlan {
-            name: "runtime".to_string(),
-            source: contract.runtime_dir().to_path_buf(),
-            read_only: false,
-        }];
-
-        for (index, mount) in contract.mounts().iter().enumerate() {
-            if !mount.source().is_dir() {
-                return Err(VmPlanError::MountSourceNotDirectory {
-                    path: mount.source().to_path_buf(),
-                });
-            }
-            directory_shares.push(DirectorySharePlan {
-                name: format!("mount{index}"),
-                source: mount.source().to_path_buf(),
-                read_only: mount.read_only(),
-            });
-        }
+        let PreparedDirectoryShares {
+            runtime_dir,
+            plans: directory_shares,
+            broker_socket_path,
+        } = prepare_directory_shares(contract)?;
 
         let guest_contract_path = guest_runtime_path(contract_relative_path);
         let network_mode = match contract.network_mode() {
             NetworkMode::VsockSidecar => VmNetworkMode::VsockSidecar,
         };
+        let broker = contract
+            .broker_vsock_port()
+            .zip(contract.guest_broker_addr())
+            .zip(broker_socket_path)
+            .map(|((vsock_port, guest_addr), socket_path)| BrokerPlan {
+                vsock_port,
+                socket_path,
+                guest_addr,
+            });
 
         Ok(Self {
             version: contract.version(),
             sandbox_id: *contract.sandbox_id(),
-            runtime_dir: contract.runtime_dir().to_path_buf(),
+            runtime_dir,
             kernel: contract.guest().kernel().to_path_buf(),
             initrd: contract.guest().initrd().to_path_buf(),
             rootfs: contract.guest().rootfs().to_path_buf(),
@@ -109,14 +100,166 @@ impl VmPlan {
             socket_devices: vec![SocketDevicePlan {
                 kind: SocketDeviceKind::VirtioVsockSidecar,
                 sidecar_port: contract.vsock_sidecar_port(),
-                sidecar_host_addr: contract
-                    .sidecar_host_addr()
-                    .map_err(|source| VmPlanError::SidecarHostAddr { source })?,
-                command_pty: CommandPtyPlan::from_contract(contract)?,
+                sidecar_host_addr: contract.sidecar_host_addr(),
+                command_pty: CommandPtyPlan::from_contract(contract),
             }],
             network_mode,
+            broker,
         })
     }
+}
+
+struct SensitivePath {
+    field: &'static str,
+    configured: PathBuf,
+    canonical: PathBuf,
+}
+
+struct ShareSource {
+    name: String,
+    access: &'static str,
+    configured: PathBuf,
+    canonical: PathBuf,
+}
+
+struct SensitivePaths {
+    shim_share_directory: SensitivePath,
+    broker_socket_path: SensitivePath,
+}
+
+struct PreparedDirectoryShares {
+    runtime_dir: PathBuf,
+    plans: Vec<DirectorySharePlan>,
+    broker_socket_path: Option<PathBuf>,
+}
+
+fn prepare_directory_shares(contract: &Contract) -> VmPlanResult<PreparedDirectoryShares> {
+    if !contract.runtime_dir().is_dir() {
+        return Err(VmPlanError::RuntimeDirMissing {
+            path: contract.runtime_dir().to_path_buf(),
+        });
+    }
+    let runtime_dir = canonicalize_path("runtime_dir", contract.runtime_dir())?;
+    let mut share_sources = vec![ShareSource {
+        name: "runtime".to_string(),
+        access: "writable",
+        configured: contract.runtime_dir().to_path_buf(),
+        canonical: runtime_dir.clone(),
+    }];
+    let mut plans = vec![DirectorySharePlan {
+        name: "runtime".to_string(),
+        source: runtime_dir.clone(),
+        read_only: false,
+    }];
+
+    for (index, mount) in contract.mounts().iter().enumerate() {
+        if !mount.source().is_dir() {
+            return Err(VmPlanError::MountSourceNotDirectory {
+                path: mount.source().to_path_buf(),
+            });
+        }
+        let name = format!("mount{index}");
+        let source = canonicalize_path("mount.source", mount.source())?;
+        share_sources.push(ShareSource {
+            name: name.clone(),
+            access: if mount.read_only() {
+                "read-only"
+            } else {
+                "writable"
+            },
+            configured: mount.source().to_path_buf(),
+            canonical: source.clone(),
+        });
+        plans.push(DirectorySharePlan {
+            name,
+            source,
+            read_only: mount.read_only(),
+        });
+    }
+
+    let sensitive_paths = prepare_sensitive_paths(contract)?;
+    if let Some(sensitive_paths) = &sensitive_paths {
+        validate_share_separation(&share_sources, sensitive_paths)?;
+        plans.push(DirectorySharePlan {
+            name: "secret-shims".to_string(),
+            source: sensitive_paths.shim_share_directory.canonical.clone(),
+            read_only: true,
+        });
+    }
+
+    Ok(PreparedDirectoryShares {
+        runtime_dir,
+        plans,
+        broker_socket_path: sensitive_paths.map(|paths| paths.broker_socket_path.canonical),
+    })
+}
+
+fn prepare_sensitive_paths(contract: &Contract) -> VmPlanResult<Option<SensitivePaths>> {
+    contract
+        .secret_shims()
+        .map(|shims| {
+            let shim_dir = shims.shim_share_directory();
+            if !shim_dir.is_dir() {
+                return Err(VmPlanError::ShimShareDirectoryMissing {
+                    path: shim_dir.to_path_buf(),
+                });
+            }
+
+            Ok(SensitivePaths {
+                shim_share_directory: SensitivePath {
+                    field: "secret_shims.shim_share_directory",
+                    configured: shim_dir.to_path_buf(),
+                    canonical: canonicalize_path("secret_shims.shim_share_directory", shim_dir)?,
+                },
+                broker_socket_path: SensitivePath {
+                    field: "secret_shims.broker_socket_path",
+                    configured: shims.broker_socket_path().to_path_buf(),
+                    canonical: canonicalize_path(
+                        "secret_shims.broker_socket_path",
+                        shims.broker_socket_path(),
+                    )?,
+                },
+            })
+        })
+        .transpose()
+}
+
+fn canonicalize_path(field: &'static str, path: &Path) -> VmPlanResult<PathBuf> {
+    std::fs::canonicalize(path).map_err(|source| VmPlanError::CanonicalizePath {
+        field,
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn validate_share_separation(
+    shares: &[ShareSource],
+    sensitive_paths: &SensitivePaths,
+) -> VmPlanResult<()> {
+    for share in shares {
+        for sensitive in [
+            &sensitive_paths.shim_share_directory,
+            &sensitive_paths.broker_socket_path,
+        ] {
+            if share.canonical.starts_with(&sensitive.canonical)
+                || sensitive.canonical.starts_with(&share.canonical)
+            {
+                return Err(VmPlanError::GuestShareOverlapsSensitivePath(Box::new(
+                    GuestShareOverlap {
+                        share_name: share.name.clone(),
+                        share_access: share.access,
+                        share_source: share.configured.clone(),
+                        canonical_share_source: share.canonical.clone(),
+                        sensitive_field: sensitive.field,
+                        sensitive_path: sensitive.configured.clone(),
+                        canonical_sensitive_path: sensitive.canonical.clone(),
+                    },
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,7 +275,7 @@ pub enum NetworkDevicePlan {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SocketDevicePlan {
     pub kind: SocketDeviceKind,
-    pub sidecar_port: u32,
+    pub sidecar_port: NonZeroU32,
     pub sidecar_host_addr: SocketAddr,
     pub command_pty: Option<CommandPtyPlan>,
 }
@@ -143,31 +286,22 @@ pub struct CommandPtyPlan {
     pub control_port: NonZeroU32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokerPlan {
+    pub vsock_port: NonZeroU32,
+    pub socket_path: PathBuf,
+    pub guest_addr: SocketAddr,
+}
+
 impl CommandPtyPlan {
     /// Accepts command PTY ports from the validated launch contract.
-    fn from_contract(contract: &Contract) -> VmPlanResult<Option<Self>> {
-        match (
-            contract.command_pty_vsock_port(),
-            contract.command_pty_control_vsock_port(),
-        ) {
-            (Some(data_port), Some(control_port)) => {
-                let data_port =
-                    NonZeroU32::new(data_port).ok_or(VmPlanError::InvalidCommandPtyPort {
-                        field: "terminal.pty_vsock_port",
-                    })?;
-                let control_port =
-                    NonZeroU32::new(control_port).ok_or(VmPlanError::InvalidCommandPtyPort {
-                        field: "terminal.pty_control_vsock_port",
-                    })?;
-
-                Ok(Some(Self {
-                    data_port,
-                    control_port,
-                }))
-            }
-            (None, None) => Ok(None),
-            _ => Err(VmPlanError::IncompleteCommandPtyPlan),
-        }
+    fn from_contract(contract: &Contract) -> Option<Self> {
+        contract
+            .command_pty_ports()
+            .map(|(data_port, control_port)| Self {
+                data_port,
+                control_port,
+            })
     }
 }
 

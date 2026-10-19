@@ -81,7 +81,8 @@ Primary objective:
 Add an explicit MITM section under `[sidecar.interceptor.https_mitm]`:
 
 - `enabled` (bool, default `true`)
-- `intercept_hosts` (list, explicit allowlist)
+- `intercept_hosts` (list, default `["*"]`; setting it replaces that default
+  and narrows interception)
 - `bypass_hosts` (list)
 - `cert_ttl` (default `"1d"`)
 - `cert_cache_capacity` (bounded cache)

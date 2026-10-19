@@ -3,8 +3,9 @@ use std::process::{Child, Command};
 
 use crate::backend::platform;
 use crate::backend::{
-    BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
-    SandboxMount, SandboxRuntimeLayout,
+    BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, ResolvedSecretShimSupport,
+    SandboxBackend, SandboxHandle, SandboxMount, SandboxRuntimeLayout, SecretShimCapability,
+    SecretShimUnsupportedReason,
 };
 use crate::config::MountSpec;
 use crate::config::NetworkPolicy;
@@ -131,6 +132,7 @@ impl SandboxBackend for Wsl2Backend {
         _runtime_layout: &firma_runtime_state::RuntimeLayout,
         _handle: &SandboxHandle,
         launch: &LaunchSpec,
+        _shim_support: &ResolvedSecretShimSupport,
     ) -> Result<Child, RunError> {
         match current_host_mode() {
             Wsl2HostMode::WslLinux => {
@@ -161,6 +163,12 @@ impl SandboxBackend for Wsl2Backend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+
+    fn secret_shim_capability(&self) -> SecretShimCapability {
+        SecretShimCapability::Unsupported {
+            reason: SecretShimUnsupportedReason::HostCallable,
+        }
     }
 }
 
@@ -279,12 +287,14 @@ mod tests {
             args: vec!["hello".to_string(), "world".to_string()],
             cwd: std::path::PathBuf::from("/tmp"),
             env: env.into(),
+            isolated_secret_shims: None,
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file: None,
+            host_connection_dir: None,
             trust_anchor: None,
         }
     }

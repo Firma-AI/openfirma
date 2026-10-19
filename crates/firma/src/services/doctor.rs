@@ -93,14 +93,52 @@ fn marker_state_is_live(state: firma_runtime_state::status::State) -> bool {
 struct RenderedReport(Report, bool);
 
 /// Resolve the authority reachability endpoint from a raw `[authority]` section
-/// body: parse + validate it into a [`firma_authority::AuthorityConfig`], then derive the probe
+/// body: parse + validate it into a [`firma_authority::AuthorityConfig`], then build the probe
 /// endpoint. Returns `None` if it does not parse, validate, or expose an address.
-fn authority_endpoint_from_body(body: &str) -> Option<Endpoint> {
-    let config = firma_authority::AuthorityConfigBuilder::from_toml_str(body)
+///
+/// Only the listen address is read, so the config is built with TLS disabled:
+/// a host that has not generated TLS material must still get its reachability
+/// probed rather than dropped for a reason that has nothing to do with it.
+fn authority_endpoint_from_body(body: &str, state: &RuntimeLayout) -> Option<Endpoint> {
+    let config = firma_authority::AuthorityConfigBuilder::from_toml_str(body, state)
         .ok()?
+        .without_tls()
         .build()
         .ok()?;
     reachability::endpoint_from_authority(&config)
+}
+
+/// Parse and resolve the `[sidecar]` section the way the Sidecar itself will.
+///
+/// Every failure is a warning rather than a check: the `config parsed` check
+/// already reports a broken section, and the probes below simply have nothing
+/// to aim at. `runtime_layout` must be the state directory the Sidecar would
+/// resolve, so a config whose artifacts are only defaulted still parses here.
+fn parse_sidecar_section(
+    config: &firma_config_loader::FirmaConfig,
+    runtime_layout: &RuntimeLayout,
+) -> Option<firma_sidecar::config::SidecarConfig> {
+    let body = match config.raw_section("sidecar") {
+        Ok(body) => body,
+        Err(error) => {
+            warn!(?error, "could not load sidecar config");
+            return None;
+        }
+    };
+    let schema = match toml::from_str::<firma_config_schema::sidecar::SidecarConfig>(&body) {
+        Ok(schema) => schema,
+        Err(error) => {
+            warn!(?error, "could not parse sidecar config");
+            return None;
+        }
+    };
+    match firma_sidecar::config::SidecarConfig::resolve(schema, runtime_layout) {
+        Ok(config) => Some(config),
+        Err(error) => {
+            warn!(?error, "could not validate sidecar config");
+            None
+        }
+    }
 }
 
 async fn build_report(args: Args, config: Option<&Path>) -> RenderedReport {
@@ -114,13 +152,24 @@ async fn build_report(args: Args, config: Option<&Path>) -> RenderedReport {
     let prober = sandbox::CommandProber::new(timeout);
     report.extend(sandbox::check_with(&sandbox::HostProbe::current(), &prober).await);
 
+    // State dir doubles as the runtime dir on every supported platform, so the
+    // per-run sidecar markers live under it. Resolve it before the config
+    // check: that check validates the `[sidecar]` section the way the Sidecar
+    // will, which means resolving the same state-directory defaults.
+    let state_dir = crate::services::config::resolve_state_dir(args.state_dir.clone())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let runtime_layout = RuntimeLayout::from_root(&state_dir);
+
     // 3. config parse — resolves the unified `firma.toml` everyone else
     //    uses, then validates both sections. Runs early so the
     //    reachability probes can reuse the resolved path.
     let resolved_config = firma_config_loader::ConfigResolver::default().resolve_config(config);
     let parsed_config = match &resolved_config {
         Ok(Some(resolved)) => {
-            report.push(config_parse::check_loaded(&resolved.config));
+            report.push(config_parse::check_loaded(
+                &resolved.config,
+                &runtime_layout,
+            ));
             Some(resolved.config.clone())
         }
         Ok(None) => {
@@ -139,48 +188,14 @@ async fn build_report(args: Args, config: Option<&Path>) -> RenderedReport {
         }
     };
 
-    // State dir doubles as the runtime dir on every supported platform, so the
-    // per-run sidecar markers live under it. Resolve it now: checks 4 and 5
-    // cross-check live per-run instances against the configured daemon probe.
-    let state_dir = crate::services::config::resolve_state_dir(args.state_dir.clone())
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let runtime_layout = RuntimeLayout::from_root(&state_dir);
+    // Checks 4 and 5 cross-check live per-run instances against the configured
+    // daemon probe.
     let live_running = count_live_per_run_sidecars(&state_dir);
 
-    // 4. sidecar mode + reachability
-    let parsed_sidecar: Option<firma_sidecar::config::SidecarConfig> =
-        parsed_config.as_ref().and_then(|c| {
-            let body = match c.raw_section("sidecar") {
-                Ok(body) => body,
-                Err(error) => {
-                    warn!(?error, "could not load sidecar config");
-                    return None;
-                }
-            };
-            match toml::from_str::<firma_config_schema::sidecar::SidecarConfig>(&body) {
-                Ok(schema) => match firma_sidecar::config::SidecarConfig::try_from(schema) {
-                    Ok(sc) => Some(sc),
-                    Err(error) => {
-                        warn!(?error, "could not validate sidecar config");
-                        None
-                    }
-                },
-                Err(error) => {
-                    warn!(?error, "could not parse sidecar config");
-                    None
-                }
-            }
-        });
-    if let Some(ref sc) = parsed_sidecar {
-        use firma_config_schema::sidecar::SidecarMode;
-        report.push(match sc.mode {
-            SidecarMode::Monitor => Check::warn(
-                "sidecar mode",
-                "monitor — observe-only, never deploy to production",
-            ),
-            SidecarMode::Enforce => Check::ok("sidecar mode", "enforce"),
-        });
-    }
+    // 4. sidecar reachability
+    let parsed_sidecar = parsed_config
+        .as_ref()
+        .and_then(|config| parse_sidecar_section(config, &runtime_layout));
     let sidecar_endpoint = parsed_sidecar
         .as_ref()
         .map(|config| reachability::endpoint_from_sidecar(config, &runtime_layout));
@@ -195,7 +210,7 @@ async fn build_report(args: Args, config: Option<&Path>) -> RenderedReport {
     let authority_endpoint: Option<Endpoint> = parsed_config
         .as_ref()
         .and_then(|c| c.raw_section("authority").ok())
-        .and_then(|body| authority_endpoint_from_body(&body));
+        .and_then(|body| authority_endpoint_from_body(&body, &runtime_layout));
     let authority_daemon =
         reachability::check_endpoint("authority reachable", authority_endpoint, timeout).await;
     report.push(reachability::reconcile_reachability(

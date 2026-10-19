@@ -1,0 +1,20 @@
+# Managed mapping snapshots from Firma Team, not the local Mini Authority.
+# Replace the endpoint, trust anchors, registered IDs, and PSK environment name.
+# Run with: firma run --config <path-to-this-file> -- <agent-command>
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
+url = "https://authority.example.com:9443"
+ca_cert_path = "authority-ca.crt"
+public_key_path = "workspace.pub"
+
+[sidecar.authority.credentials]
+workspace_id = "ws-example"
+sidecar_id = "sc-example"
+pre_shared_key_env = "FIRMA_SIDECAR_PSK"
+
+# No [authority] section or mapping files: mappings are managed centrally,
+# and unmatched traffic is always denied.
+
+[run]
+profile = "codex"

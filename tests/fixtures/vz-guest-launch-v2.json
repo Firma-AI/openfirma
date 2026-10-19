@@ -1,0 +1,86 @@
+{
+  "version": 2,
+  "sandbox_id": "sbx_01j0000000e008000000000001",
+  "runtime_dir": "/openfirma-contract-v2/runtime",
+  "runner": {
+    "path": "/openfirma-contract-v2/firma-vz-runner"
+  },
+  "guest": {
+    "kernel": "/openfirma-contract-v2/vmlinuz",
+    "initrd": "/openfirma-contract-v2/initrd.img",
+    "rootfs": "/openfirma-contract-v2/rootfs.img"
+  },
+  "command": {
+    "executable": "/usr/bin/true",
+    "args": ["--version"],
+    "cwd": "/workspace",
+    "env": {},
+    "identity_mode": "sandbox_user"
+  },
+  "terminal": {
+    "interactive": false,
+    "pty": false,
+    "pty_vsock_port": null,
+    "pty_control_vsock_port": null,
+    "term": null,
+    "rows": null,
+    "cols": null
+  },
+  "mounts": [
+    {
+      "source": "/openfirma-contract-v2/workspace",
+      "target": "/workspace",
+      "read_only": false
+    }
+  ],
+  "network": {
+    "mode": "vsock_sidecar",
+    "guest_http_proxy_addr": "127.0.0.1:18080",
+    "guest_dns_stub_addr": "127.0.0.1:1053",
+    "vsock_sidecar_port": 18080,
+    "sidecar_host_addr": "127.0.0.1:19080",
+    "direct_network_devices_allowed": false,
+    "dns_mode": "confined_stub",
+    "attribution_headers": {
+      "x-firma-agent": "agt_01j0000000e008000000000001",
+      "x-firma-profile": "contract-v2",
+      "x-firma-sandbox-id": "sbx_01j0000000e008000000000001",
+      "x-firma-session-id": "ses_contract_v2_fixture",
+      "x-firma-user": "${USER}"
+    }
+  },
+  "invariants": [
+    {
+      "name": "sidecar_only_egress",
+      "mode": "required"
+    },
+    {
+      "name": "dns_confined",
+      "mode": "required"
+    },
+    {
+      "name": "fail_closed_startup",
+      "mode": "required"
+    },
+    {
+      "name": "fail_closed_runtime",
+      "mode": "required"
+    },
+    {
+      "name": "direct_bypass_resistant",
+      "mode": "required"
+    },
+    {
+      "name": "preserve_stdio_signals_exit",
+      "mode": "required"
+    }
+  ],
+  "secret_shims": {
+    "guest_target_triple": "x86_64-unknown-linux-musl",
+    "provider_names": ["op", "vault"],
+    "broker_vsock_port": 18083,
+    "shim_share_directory": "/openfirma-contract-v2/sensitive/secret-shims",
+    "broker_socket_path": "/openfirma-contract-v2/sensitive/broker.sock",
+    "guest_broker_addr": "127.0.0.1:18083"
+  }
+}

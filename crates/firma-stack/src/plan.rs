@@ -20,6 +20,7 @@ use firma_process_orchestrator::UnixEndpoint;
 use firma_process_orchestrator::{
     ComponentEndpoint, ComponentPlanContext, ComponentSpec, OrchestratorError, StackTopology,
 };
+use firma_runtime_state::STATE_DIR_ENV;
 use firma_sidecar::config::SidecarConfig;
 use tracing::debug;
 
@@ -71,20 +72,23 @@ pub fn topology() -> Result<StackTopology, OrchestratorError> {
 /// those validated launch inputs.
 pub struct ComponentPlanner<'a> {
     cfg: &'a StackConfig,
+    /// State directory the children are started with; also the root every
+    /// state-directory default path resolves against.
+    state_dir: &'a Path,
     prepared: Option<PreparedPlan>,
 }
 
 struct PreparedPlan {
     authority_bind_addr: SocketAddr,
     sidecar_endpoint: ComponentEndpoint,
-    sidecar_authority_configured: bool,
     executable: PathBuf,
 }
 
 impl<'a> ComponentPlanner<'a> {
-    pub const fn new(cfg: &'a StackConfig) -> Self {
+    pub const fn new(cfg: &'a StackConfig, state_dir: &'a Path) -> Self {
         Self {
             cfg,
+            state_dir,
             prepared: None,
         }
     }
@@ -102,12 +106,17 @@ impl<'a> ComponentPlanner<'a> {
     ) -> Result<ComponentSpec, StackError> {
         match context.name() {
             AUTHORITY_NAME => {
-                let prepared = PreparedPlan::read(self.cfg)?;
+                let prepared = PreparedPlan::read(self.cfg, self.state_dir)?;
                 let mut authority = Command::new(&prepared.executable);
                 authority
                     .arg(AUTHORITY_NAME)
                     .arg("--config")
-                    .arg(&self.cfg.config_file);
+                    .arg(&self.cfg.config_file)
+                    // Artifact paths a config leaves unset resolve against the
+                    // state directory. The supervisor was given one explicitly,
+                    // so hand children the same root instead of letting them
+                    // fall back to the platform default.
+                    .env(STATE_DIR_ENV, self.state_dir);
                 let authority_publication =
                     context.child_published(ComponentEndpoint::Tcp(prepared.authority_bind_addr));
                 authority
@@ -128,9 +137,7 @@ impl<'a> ComponentPlanner<'a> {
                     })?;
                 let sidecar_publication =
                     context.child_published(prepared.sidecar_endpoint.clone());
-                let authority_connect_addr = if prepared.authority_bind_addr.port() == 0
-                    && prepared.sidecar_authority_configured
-                {
+                let authority_connect_addr = if prepared.authority_bind_addr.port() == 0 {
                     let endpoint = context.ready_endpoint(AUTHORITY_NAME).ok_or(
                         StackError::MissingReadyEndpoint {
                             component: AUTHORITY_NAME,
@@ -155,7 +162,8 @@ impl<'a> ComponentPlanner<'a> {
                 sidecar
                     .arg(SIDECAR_NAME)
                     .arg("--config")
-                    .arg(&self.cfg.config_file);
+                    .arg(&self.cfg.config_file)
+                    .env(STATE_DIR_ENV, self.state_dir);
                 if let Some(connect_addr) = authority_connect_addr {
                     sidecar
                         .arg("--authority-connect-addr")
@@ -163,7 +171,11 @@ impl<'a> ComponentPlanner<'a> {
                 }
                 sidecar
                     .arg("--startup-report")
-                    .arg(sidecar_publication.startup_report_path());
+                    .arg(sidecar_publication.startup_report_path())
+                    .arg("--enforcement-state")
+                    .arg(firma_runtime_state::enforcement_state::daemon_path(
+                        self.state_dir,
+                    ));
                 Ok(ComponentSpec {
                     command: sidecar,
                     readiness: sidecar_publication.into_readiness(),
@@ -179,23 +191,21 @@ impl<'a> ComponentPlanner<'a> {
 }
 
 impl PreparedPlan {
-    fn read(cfg: &StackConfig) -> Result<Self, StackError> {
+    fn read(cfg: &StackConfig, state_dir: &Path) -> Result<Self, StackError> {
         let config = FirmaToml::read(&cfg.config_file)?;
         let authority_bind_addr = config.authority_listen_addr()?;
-        let sidecar_config = config.sidecar_config()?;
+        let sidecar_config = config.sidecar_config(state_dir)?;
         let sidecar_endpoint = match sidecar_config.interceptor.mode {
             InterceptorMode::HttpProxy | InterceptorMode::Grpc => {
                 ComponentEndpoint::Tcp(sidecar_config.interceptor.listen_addr)
             }
             #[cfg(unix)]
             InterceptorMode::UnixSocket => {
-                let path = sidecar_config
-                    .interceptor
-                    .socket_path
-                    .clone()
-                    .ok_or_else(|| StackError::ConfigValidation {
+                let path = sidecar_config.interceptor.socket_path.ok_or_else(|| {
+                    StackError::ConfigValidation {
                         source: anyhow::anyhow!("validated Unix interceptor has no socket path"),
-                    })?;
+                    }
+                })?;
                 ComponentEndpoint::Unix(UnixEndpoint::new(path).map_err(|path| {
                     StackError::ConfigValidation {
                         source: anyhow::anyhow!(
@@ -206,7 +216,6 @@ impl PreparedPlan {
                 })?)
             }
         };
-        let sidecar_authority_configured = sidecar_config.authority.url.is_some();
         let executable = match &cfg.firma_bin {
             Some(path) => path.clone(),
             None => std::env::current_exe()
@@ -215,7 +224,6 @@ impl PreparedPlan {
         Ok(Self {
             authority_bind_addr,
             sidecar_endpoint,
-            sidecar_authority_configured,
             executable,
         })
     }
@@ -279,12 +287,16 @@ impl FirmaToml {
     ///
     /// Returns [`StackError::ConfigValidation`] when the `[sidecar]` section is missing
     /// or does not deserialize.
-    pub fn sidecar_config(&self) -> Result<SidecarConfig, StackError> {
+    pub fn sidecar_config(&self, state_dir: &Path) -> Result<SidecarConfig, StackError> {
         let schema: firma_config_schema::sidecar::SidecarConfig = self
             .config
             .section("sidecar")
             .map_err(|source| StackError::ConfigValidation { source })?;
-        SidecarConfig::try_from(schema)
+        // The same state directory the children are started with: the
+        // supervisor validates the config they are about to load, so it has to
+        // resolve the defaults they will.
+        let state = firma_runtime_state::RuntimeLayout::from_root(state_dir);
+        SidecarConfig::resolve(schema, &state)
             .map_err(|e| StackError::ConfigValidation { source: e.into() })
     }
 }
@@ -322,6 +334,9 @@ mod tests {
 [authority]
 listen_addr = \"127.0.0.1:50051\"
 
+[sidecar.authority]
+url = \"http://localhost:50051\"
+
 [sidecar.interceptor]
 listen_addr = \"127.0.0.1:8080\"
 
@@ -339,7 +354,9 @@ intercept_hosts = [\"api.anthropic.com\"]
             config.authority_listen_addr().expect("authority addr"),
             "127.0.0.1:50051".parse().expect("literal addr")
         );
-        let sidecar = config.sidecar_config().expect("sidecar section");
+        let sidecar = config
+            .sidecar_config(Path::new("/state"))
+            .expect("sidecar section");
         assert_eq!(
             sidecar.interceptor.listen_addr,
             "127.0.0.1:8080".parse().expect("literal addr")
@@ -391,7 +408,7 @@ intercept_hosts = [\"api.anthropic.com\"]
         let (_dir, parsed) = read("[authority]\nlisten_addr = \"127.0.0.1:50051\"\n");
         let err = parsed
             .expect("parses")
-            .sidecar_config()
+            .sidecar_config(Path::new("/state"))
             .expect_err("missing [sidecar] must error")
             .to_string();
         assert!(err.contains("[sidecar]"), "got: {err}");
@@ -402,7 +419,7 @@ intercept_hosts = [\"api.anthropic.com\"]
         let (_dir, parsed) = read("[sidecar]\nmode = \"not-a-real-mode\"\n");
         let err = parsed
             .expect("parses")
-            .sidecar_config()
+            .sidecar_config(Path::new("/state"))
             .expect_err("bad [sidecar] field must error")
             .to_string();
         assert!(err.contains("invalid `[sidecar]` section"), "got: {err}");
@@ -412,9 +429,13 @@ intercept_hosts = [\"api.anthropic.com\"]
     fn sidecar_config_reports_inactive_mitm() {
         // Enabled but with no intercept hosts: nothing to intercept, so MITM is
         // inactive (the scaffold default).
-        let (_dir, parsed) =
-            read("[sidecar.interceptor.https_mitm]\nenabled = true\nintercept_hosts = []\n");
-        let sidecar = parsed.expect("parses").sidecar_config().expect("sidecar");
+        let (_dir, parsed) = read(
+            "[sidecar.authority]\nurl = 'http://localhost:50051'\n[sidecar.interceptor.https_mitm]\nenabled = true\nintercept_hosts = []\n",
+        );
+        let sidecar = parsed
+            .expect("parses")
+            .sidecar_config(Path::new("/state"))
+            .expect("sidecar");
         assert!(!sidecar.interceptor.https_mitm.is_active());
     }
 }

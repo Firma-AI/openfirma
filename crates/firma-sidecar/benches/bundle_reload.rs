@@ -2,9 +2,9 @@
 //!
 //! Measures `CedarPolicyEvaluator::from_bundle` parse cost plus the first
 //! `evaluate()` on the fresh snapshot. Replace with `BundleLoader::apply`
-//! once task 013's atomic-swap API lands.
+//! once its atomic-swap API lands.
 //
-// Fixture: benches/fixtures/reference_bundle.cedar (Task 2).
+// Fixture: benches/fixtures/reference_bundle.cedar.
 
 #![allow(clippy::expect_used)]
 

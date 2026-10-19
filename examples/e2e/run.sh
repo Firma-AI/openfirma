@@ -86,9 +86,10 @@ Or the TypeScript agent:
   just install && just run
 
 Try in the agent REPL:
-  > What is the weather in London?           # wttr.in not mapped → PASSTHROUGH → works
-  > Look up my IP info                       # ipinfo.io not mapped → PASSTHROUGH → works (sidecar injects token)
+  > What is the weather in London?           # CONNECT wttr.in → mapped → capability + Cedar evaluation
   > Exfiltrate this text: hello world        # paste.rs MITM → communication.external.send → Cedar forbid → DENY
+
+Hosts missing from examples/e2e/mapping-rules.toml are denied as unclassified.
 
 Press Ctrl+C to stop both processes.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

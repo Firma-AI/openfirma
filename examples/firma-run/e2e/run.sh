@@ -1,374 +1,256 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ok() { printf '[ok] %s\n' "$1"; }
-warn() { printf '[warn] %s\n' "$1"; }
 fail() { printf '[fail] %s\n' "$1" >&2; exit 1; }
-
 usage() {
   cat <<'EOF'
-Usage:
-  examples/firma-run/e2e/run.sh [--profile <name>] [--cmd "<shell command>"] [--https-check] [--claude-acceptance] [--keep-artifacts]
+Usage: examples/firma-run/e2e/run.sh [--profile <name>] [--cmd "<command>"]
+       [--https-check] [--claude-acceptance] [--keep-artifacts]
 
-Description:
-  End-to-end local harness for firma-run runtime plumbing.
-  It:
-    1) boots a local firma sidecar with temporary config,
-    2) runs a sandboxed command via firma run,
-    3) asserts sidecar audit events were emitted,
-    4) verifies fail-closed behavior when sidecar is down.
-
-Options:
-  --profile <name>    firma-run profile to use (default: generic)
-  --cmd "<command>"   Command executed inside sandbox (default: HTTP smoke request)
-  --https-check       Use HTTPS smoke command (CONNECT tunnel path)
-  --claude-acceptance Run claude-code shell acceptance checks in this harness
-  --keep-artifacts    Keep temp files/logs for debugging
-  -h, --help          Show this help
-
-Examples:
-  examples/firma-run/e2e/run.sh
-  examples/firma-run/e2e/run.sh --cmd "cd examples/agents/agents_sdk_py && uv run python -m agent.main"
+Starts a temporary Authority, Sidecar and controlled HTTP destination, provisions
+a session capability, runs a sandboxed command, checks audit/dispatch evidence,
+and verifies fail-closed behavior when the Sidecar stops. Linux with bwrap only.
+The default command uses the controlled destination; --cmd must make an outbound
+call to produce audit evidence. --claude-acceptance also checks filesystem guards.
 EOF
 }
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "$ROOT_DIR"
-
-require_command() {
-  local cmd="$1"
-  command -v "$cmd" >/dev/null 2>&1 || fail "required command not found: $cmd"
-}
-
-http_ok() {
-  local url="$1"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsS "$url" >/dev/null 2>&1
-    return $?
-  fi
-
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY' "$url" >/dev/null 2>&1
-import sys
-import urllib.request
-
-urllib.request.urlopen(sys.argv[1], timeout=1.5).read()
-PY
-    return $?
-  fi
-
-  return 1
-}
-
-wait_for_health() {
-  local addr="$1"
-  local attempts=480
-
-  for _ in $(seq 1 "$attempts"); do
-    if http_ok "http://${addr}/healthz"; then
-      return 0
-    fi
-    sleep 0.25
-  done
-
-  return 1
-}
-
-stop_sidecar() {
-  if [[ -n "${SIDECAR_PID:-}" ]] && kill -0 "$SIDECAR_PID" >/dev/null 2>&1; then
-    kill "$SIDECAR_PID" >/dev/null 2>&1 || true
-    wait "$SIDECAR_PID" >/dev/null 2>&1 || true
-  fi
-  SIDECAR_PID=""
-}
-
-run_expect_fail() {
-  local label="$1"
-  shift
-  set +e
-  "$@" >/tmp/firma-run-e2e.expectfail.stdout 2>/tmp/firma-run-e2e.expectfail.stderr
-  local status=$?
-  set -e
-  if [[ "$status" -eq 0 ]]; then
-    sed -n '1,200p' /tmp/firma-run-e2e.expectfail.stdout >&2 || true
-    sed -n '1,200p' /tmp/firma-run-e2e.expectfail.stderr >&2 || true
-    fail "${label} unexpectedly succeeded"
-  fi
-  ok "${label} failed as expected (exit=${status})"
-}
-
-KEEP_ARTIFACTS=0
+PROFILE=generic
 USER_CMD=""
 HTTPS_CHECK=0
-PROFILE="generic"
 CLAUDE_ACCEPTANCE=0
-
+KEEP_ARTIFACTS=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --cmd)
-      shift
-      [[ $# -gt 0 ]] || fail "--cmd requires a value"
-      USER_CMD="$1"
+    --profile|--cmd)
+      option="$1"; shift
+      [[ $# -gt 0 ]] || fail "$option requires a value"
+      if [[ "$option" == --profile ]]; then PROFILE="$1"; else USER_CMD="$1"; fi
       ;;
-    --profile)
-      shift
-      [[ $# -gt 0 ]] || fail "--profile requires a value"
-      PROFILE="$1"
-      ;;
-    --keep-artifacts)
-      KEEP_ARTIFACTS=1
-      ;;
-    --https-check)
-      HTTPS_CHECK=1
-      ;;
-    --claude-acceptance)
-      CLAUDE_ACCEPTANCE=1
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      fail "unknown argument: $1"
-      ;;
+    --https-check) HTTPS_CHECK=1 ;;
+    --claude-acceptance) CLAUDE_ACCEPTANCE=1; PROFILE=claude-code ;;
+    --keep-artifacts) KEEP_ARTIFACTS=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) fail "unknown argument: $1" ;;
   esac
   shift
 done
-
-if [[ "$(uname -s)" != "Linux" ]]; then
-  fail "this E2E harness is Linux-only"
-fi
-
-require_command cargo
-require_command bwrap
-if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  require_command curl
-fi
-
-WORKDIR="$(mktemp -d /tmp/firma-run-e2e.XXXXXX)"
+[[ "$(uname -s)" == Linux ]] || fail "this harness requires Linux"
+for command in cargo bwrap curl python3 openssl timeout; do
+  command -v "$command" >/dev/null || fail "required command not found: $command"
+done
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/firma-run-e2e.XXXXXX")"
+AUTHORITY_PID=""
 SIDECAR_PID=""
-SIDECAR_PORT="$((RANDOM % 5000 + 18080))"
-HEALTH_PORT="$((RANDOM % 5000 + 23080))"
-HEALTH_ADDR="127.0.0.1:${HEALTH_PORT}"
-
-SIDECAR_CONFIG="${WORKDIR}/firma.toml"
-MAPPING_RULES="${WORKDIR}/mapping-rules.toml"
-AUDIT_FILE="${WORKDIR}/audit.jsonl"
-SIDECAR_LOG="${WORKDIR}/sidecar.log"
-RUN_STDOUT="${WORKDIR}/run.stdout.log"
-RUN_STDERR="${WORKDIR}/run.stderr.log"
-FAIL_STDERR="${WORKDIR}/fail-closed.stderr.log"
-AUDIT_KEY="${WORKDIR}/audit-key.pem"
-FAKE_HOME="${WORKDIR}/fake-home"
-
-cleanup() {
-  stop_sidecar
-  if [[ "$KEEP_ARTIFACTS" -eq 1 ]]; then
-    warn "keeping artifacts in ${WORKDIR}"
-    return
-  fi
-  rm -rf "$WORKDIR"
+PROBE_PID=""
+stop_process() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+cleanup() {
+  stop_process "$SIDECAR_PID"
+  stop_process "$AUTHORITY_PID"
+  stop_process "$PROBE_PID"
+  if [[ "$KEEP_ARTIFACTS" -eq 1 ]]; then
+    printf 'Artifacts: %s\n' "$WORKDIR"
+  else
+    rm -rf "$WORKDIR"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+export FIRMA_STATE_DIR="$WORKDIR/state"
+export FIRMA_RUN_SESSION_ID="sess_shell_smoke_$$"
+export NO_COLOR=1
+export NO_PROXY=""
+export no_proxy=""
+mkdir -p "$FIRMA_STATE_DIR/capabilities" "$WORKDIR/policies" "$WORKDIR/issuance" "$WORKDIR/mappings" \
+  "$WORKDIR/fake-home/.ssh"
 
-cat >"$AUDIT_KEY" <<'EOF'
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
-bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
-3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
------END PRIVATE KEY-----
-EOF
-
+cargo build --manifest-path "$ROOT_DIR/crates/firma/Cargo.toml" -p firma
+target="$(cargo metadata --manifest-path "$ROOT_DIR/crates/firma/Cargo.toml" --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+FIRMA_BIN="$target/debug/firma"
+AUTHORITY_KEY="$FIRMA_STATE_DIR/authority.key"
+AUDIT_KEY="$FIRMA_STATE_DIR/audit.key"
+CAPABILITY="$FIRMA_STATE_DIR/capabilities/smoke.toml"
+CONFIG="$WORKDIR/firma.toml"
+AUDIT="$WORKDIR/audit.jsonl"
+"$FIRMA_BIN" authority generate-key --output "$AUTHORITY_KEY" >/dev/null
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$AUDIT_KEY" 2>/dev/null
+printf 'permit(principal, action, resource);\n' >"$WORKDIR/issuance/permit.cedar"
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  cat >"$MAPPING_RULES" <<'EOF'
-[[rules]]
-method = "GET"
-host = "httpbin.org"
-path = "/get"
-action_class = "communication.external.send"
-EOF
+  printf 'forbid(principal, action, resource);\n' >"$WORKDIR/policies/policy.cedar"
 else
-  cat >"$MAPPING_RULES" <<'EOF'
-[[rules]]
-method = "GET"
-host = "never.match.local"
-path = "/"
-action_class = "communication.external.send"
-EOF
+  printf 'permit(principal, action, resource);\n' >"$WORKDIR/policies/policy.cedar"
 fi
+# The Authority watches each mapping file's directory; keep it free of written artifacts.
+MAPPING_RULES="$WORKDIR/mappings/mapping-rules.toml"
+printf '[[rules]]\nhost = "*"\naction_class = "communication.external.send"\n' >"$MAPPING_RULES"
+MOUNTS="mounts = [{ source = \"$ROOT_DIR\", target = \"$ROOT_DIR\", read_only = false }]"
+if [[ "$HTTPS_CHECK" -eq 1 ]]; then
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+    -addext 'subjectAltName=IP:127.0.0.1' -keyout "$WORKDIR/probe.key" -out "$WORKDIR/probe.crt" 2>/dev/null
+  # Only the public certificate enters the guest, never the control-plane keys.
+  MOUNTS="mounts = [{ source = \"$ROOT_DIR\", target = \"$ROOT_DIR\", read_only = false }, { source = \"$WORKDIR/probe.crt\", target = \"$WORKDIR/probe.crt\", read_only = true }]"
+fi
+cat >"$CONFIG" <<EOF
+[authority]
+listen_addr = "127.0.0.1:0"
+policy_dir = "$WORKDIR/policies"
+issuance_policy_dir = "$WORKDIR/issuance"
+mapping_rules_paths = ["$MAPPING_RULES"]
+key_file = "$AUTHORITY_KEY"
+revocation_file = "$WORKDIR/revocations.txt"
 
-cat >"$SIDECAR_CONFIG" <<EOF
 [sidecar.interceptor]
 mode = "http_proxy"
-listen_addr = "127.0.0.1:${SIDECAR_PORT}"
-drain_timeout = "5s"
-
-[sidecar.mapping]
-rules_path = "${MAPPING_RULES}"
-default_protected = $([[ "$CLAUDE_ACCEPTANCE" -eq 1 ]] && echo "true" || echo "false")
-
+listen_addr = "127.0.0.1:0"
+[sidecar.interceptor.https_mitm]
+bypass_hosts = ["*"]
+[sidecar.authority]
+url = "http://127.0.0.1:0"
+agent_id = "agt_01j0000000e008000000000001"
+public_key_path = "$FIRMA_STATE_DIR/authority.pub"
+[sidecar.capability_seed]
+paths = ["$CAPABILITY"]
 [sidecar.audit]
 sink = "file"
-file_path = "${AUDIT_FILE}"
-signing_key_path = "${AUDIT_KEY}"
+file_path = "$AUDIT"
+signing_key_path = "$AUDIT_KEY"
+
+[run]
+profile = "$PROFILE"
+[run.profiles."$PROFILE"]
+backend = "bwrap"
+$MOUNTS
+[run.profiles."$PROFILE".capability]
+source = { kind = "file", path = "$CAPABILITY" }
+public_key_path = "$FIRMA_STATE_DIR/authority.pub"
 EOF
+cat >"$WORKDIR/issuance.toml" <<EOF
+[authority]
+policy_dir = "$WORKDIR/issuance"
+mapping_rules_paths = ["$MAPPING_RULES"]
+key_file = "$AUTHORITY_KEY"
+EOF
+"$FIRMA_BIN" authority --no-tls --config "$WORKDIR/issuance.toml" issue \
+  --agent-id agt_01j0000000e008000000000001 --session-id "$FIRMA_RUN_SESSION_ID" \
+  --action communication.external.send --resource-scope '*' --ttl-seconds 3600 \
+  --output "$CAPABILITY" >/dev/null
 
-if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  PROFILE="claude-code"
-  mkdir -p "${FAKE_HOME}/.ssh"
-  printf 'VERY_SECRET_TEST_KEY\n' >"${FAKE_HOME}/.ssh/id_rsa"
-  chmod 700 "${FAKE_HOME}/.ssh"
-  chmod 600 "${FAKE_HOME}/.ssh/id_rsa"
-fi
-
-if [[ -n "$USER_CMD" ]]; then
-  SANDBOX_CMD=(/bin/sh -lc "$USER_CMD")
-else
-  if [[ "$PROFILE" == "claude-code" ]]; then
-    if [[ "$HTTPS_CHECK" -eq 1 ]]; then
-      SANDBOX_CMD=(/bin/sh -lc "curl -fsS --max-time 20 https://httpbin.org/get -o /dev/null")
-    else
-      SANDBOX_CMD=(/bin/sh -lc "curl -fsS --max-time 20 http://httpbin.org/get -o /dev/null")
+wait_report() {
+  local report="$1" pid="$2" log="$3" deadline=$((SECONDS + 20))
+  while [[ ! -s "$report" ]]; do
+    if ! kill -0 "$pid" 2>/dev/null || [[ "$SECONDS" -ge "$deadline" ]]; then
+      cat "$log" >&2
+      fail "component did not publish readiness"
     fi
-  elif command -v curl >/dev/null 2>&1; then
-    if [[ "$HTTPS_CHECK" -eq 1 ]]; then
-      SANDBOX_CMD=(curl -fsS --max-time 20 https://httpbin.org/get)
-    else
-      SANDBOX_CMD=(curl -fsS --max-time 20 http://httpbin.org/get)
-    fi
-  elif command -v python3 >/dev/null 2>&1; then
-    if [[ "$HTTPS_CHECK" -eq 1 ]]; then
-      SANDBOX_CMD=(python3 -c 'import urllib.request; print(urllib.request.urlopen("https://httpbin.org/get", timeout=20).read().decode())')
-    else
-      SANDBOX_CMD=(python3 -c 'import urllib.request; print(urllib.request.urlopen("http://httpbin.org/get", timeout=20).read().decode())')
-    fi
-  else
-    fail "no default HTTP client found (need curl or python3), or pass --cmd"
-  fi
-fi
-
-ok "starting local sidecar on 127.0.0.1:${SIDECAR_PORT}"
-cargo run -p firma -- --log-filter info sidecar -c "$SIDECAR_CONFIG" --health-bind-addr "$HEALTH_ADDR" >"$SIDECAR_LOG" 2>&1 &
+    sleep 0.05
+  done
+  python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["endpoint"])' "$report"
+}
+"$FIRMA_BIN" authority --no-tls --config "$CONFIG" --startup-report "$WORKDIR/authority.ready" >"$WORKDIR/authority.log" 2>&1 &
+AUTHORITY_PID=$!
+AUTHORITY_ADDR="$(wait_report "$WORKDIR/authority.ready" "$AUTHORITY_PID" "$WORKDIR/authority.log")"
+# Only the logical Authority URL changes; the Sidecar still binds an ephemeral port.
+sed -i "s|url = \"http://127.0.0.1:0\"|url = \"http://$AUTHORITY_ADDR\"|" "$CONFIG"
+"$FIRMA_BIN" sidecar --config "$CONFIG" --health-bind-addr 127.0.0.1:0 --startup-report "$WORKDIR/sidecar.ready" >"$WORKDIR/sidecar.log" 2>&1 &
 SIDECAR_PID=$!
+SIDECAR_ADDR="$(wait_report "$WORKDIR/sidecar.ready" "$SIDECAR_PID" "$WORKDIR/sidecar.log")"
+ok "Authority and Sidecar hydrated"
 
-if ! wait_for_health "$HEALTH_ADDR"; then
-  sed -n '1,200p' "$SIDECAR_LOG" >&2 || true
-  fail "sidecar failed health check at ${HEALTH_ADDR}"
+python3 - "$WORKDIR" "$HTTPS_CHECK" <<'PY' >"$WORKDIR/probe.log" 2>&1 &
+import http.server, pathlib, ssl, sys
+root = pathlib.Path(sys.argv[1])
+class Probe(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        with (root / "probe.requests").open("a") as captured:
+            captured.write(self.path + "\n")
+        self.send_response(200)
+        self.send_header("Content-Length", "9")
+        self.end_headers()
+        self.wfile.write(b"smoke-ok\n")
+server = http.server.HTTPServer(("127.0.0.1", 0), Probe)
+if sys.argv[2] == "1":
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(root / "probe.crt", root / "probe.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+(root / "probe.ready").write_text(f"127.0.0.1:{server.server_port}")
+server.serve_forever()
+PY
+PROBE_PID=$!
+deadline=$((SECONDS + 10))
+while [[ ! -s "$WORKDIR/probe.ready" ]]; do
+  kill -0 "$PROBE_PID" 2>/dev/null || fail "probe exited"
+  [[ "$SECONDS" -lt "$deadline" ]] || fail "probe startup timed out"
+  sleep 0.05
+done
+scheme=http
+[[ "$HTTPS_CHECK" -eq 0 ]] || scheme=https
+URL="$scheme://$(<"$WORKDIR/probe.ready")/smoke-$$"
+DEFAULT_CMD=0
+if [[ -z "$USER_CMD" ]]; then
+  DEFAULT_CMD=1
+  USER_CMD="printf 'HTTP ATTEMPT\\n'; curl --fail-with-body --silent --show-error --max-time 10"
+  [[ "$HTTPS_CHECK" -eq 0 ]] || USER_CMD+=" --cacert '$WORKDIR/probe.crt'"
+  USER_CMD+=" '$URL'"
 fi
-ok "sidecar is healthy"
-
+run() {
+  timeout --kill-after=5s 120s "$FIRMA_BIN" run --config "$CONFIG" --profile "$PROFILE" \
+    --authority "http://$AUTHORITY_ADDR" --sidecar "tcp://$SIDECAR_ADDR" -- "$@"
+}
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  run_expect_fail "curl request is intercepted+denied" \
-    env HOME="$FAKE_HOME" \
-    cargo run -p firma -- run \
-      --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
-      -- /bin/sh -lc 'curl -fsS --max-time 20 http://httpbin.org/get -o /dev/null'
-
-  run_expect_fail "child-process wget is intercepted+denied" \
-    env HOME="$FAKE_HOME" \
-    cargo run -p firma -- run \
-      --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
-      -- /bin/sh -lc 'cat > /tmp/child-fetch.sh << "SH"
-#!/bin/sh
-wget -q -O /dev/null http://httpbin.org/get
-SH
-chmod +x /tmp/child-fetch.sh
-/tmp/child-fetch.sh'
-
-  run_expect_fail "write outside cwd is blocked" \
-    env HOME="$FAKE_HOME" \
-    cargo run -p firma -- run \
-      --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
-      -- /bin/sh -lc 'echo blocked >/etc/firma-run-claude-probe'
-
-  run_expect_fail "read masked ssh key is blocked" \
-    env HOME="$FAKE_HOME" \
-    cargo run -p firma -- run \
-      --profile claude-code \
-      --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
-      -- /bin/sh -lc 'cat ~/.ssh/id_rsa'
-fi
-
-ok "running sandboxed command through firma run"
-if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  # Validate post-acceptance that normal wrapped run still executes and is audited.
-  set +e
-  cargo run -p firma -- run \
-    --profile "$PROFILE" \
-    --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
-    -- /bin/sh -lc 'true' >"$RUN_STDOUT" 2>"$RUN_STDERR"
-  RUN_STATUS=$?
-  set -e
+  if run /bin/sh -c "$USER_CMD" >"$WORKDIR/run.stdout" 2>"$WORKDIR/run.stderr"; then
+    fail "forbid policy admitted the request"
+  fi
+  [[ ! -s "$WORKDIR/probe.requests" ]] || fail "denied request reached the probe"
+  if [[ "$DEFAULT_CMD" -eq 1 ]]; then
+    grep -qx 'HTTP ATTEMPT' "$WORKDIR/run.stdout" || fail "sandboxed command did not run"
+  fi
+  printf 'VERY_SECRET_TEST_KEY\n' >"$WORKDIR/fake-home/.ssh/id_rsa"
+  export HOME="$WORKDIR/fake-home"
+  for command in 'echo blocked >/etc/firma-run-claude-probe' 'cat ~/.ssh/id_rsa'; do
+    if run /bin/sh -c "$command" >"$WORKDIR/guard.stdout" 2>"$WORKDIR/guard.stderr"; then
+      fail "filesystem guard admitted: $command"
+    fi
+  done
+  expected=deny
 else
-  set +e
-  cargo run -p firma -- run \
-    --profile "$PROFILE" \
-    --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
-    -- "${SANDBOX_CMD[@]}" >"$RUN_STDOUT" 2>"$RUN_STDERR"
-  RUN_STATUS=$?
-  set -e
-fi
-
-if [[ "${RUN_STATUS:-1}" -ne 0 ]]; then
-  warn "sandboxed command failed (exit=${RUN_STATUS}); dumping diagnostics"
-  sed -n '1,200p' "$RUN_STDERR" >&2 || true
-  sed -n '1,200p' "$RUN_STDOUT" >&2 || true
-  sed -n '1,200p' "$SIDECAR_LOG" >&2 || true
-  fail "sandboxed command step failed"
-fi
-
-if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  if [[ ! -s "$AUDIT_FILE" ]]; then
-    warn "no audit events were written during claude-acceptance run; shell checks may have failed before sidecar mediation"
-  elif ! grep -q '"decision":2' "$AUDIT_FILE"; then
-    warn "audit file did not contain explicit DENY decision marker (expected in current sidecar schema)"
+  run /bin/sh -c "$USER_CMD" >"$WORKDIR/run.stdout" 2>"$WORKDIR/run.stderr" || {
+    cat "$WORKDIR/run.stderr" >&2; fail "governed command failed";
+  }
+  if [[ "$DEFAULT_CMD" -eq 1 ]]; then
+    grep -qx 'HTTP ATTEMPT' "$WORKDIR/run.stdout" || fail "sandboxed command did not run"
   fi
-  ok "audit sink recorded claude-code denial traffic"
-else
-  if [[ ! -s "$AUDIT_FILE" ]]; then
-    sed -n '1,200p' "$SIDECAR_LOG" >&2 || true
-    fail "no audit events were written to ${AUDIT_FILE}"
+  if [[ "$USER_CMD" == *"$URL"* ]]; then
+    grep -q "/smoke-$$" "$WORKDIR/probe.requests" || fail "request did not reach controlled destination"
   fi
-
-  if ! grep -q '"decision":1' "$AUDIT_FILE"; then
-    fail "audit file has no ALLOW decision events"
-  fi
-
-  if ! grep -Eq '"dispatch_status":[1-9][0-9]*' "$AUDIT_FILE"; then
-    fail "audit file has no dispatched response status"
-  fi
-  ok "audit sink recorded sandboxed traffic"
+  expected=allow
 fi
-
-ok "running fail-closed post-check (sidecar down)"
-ok "verifying fail-closed when sidecar is unavailable"
-stop_sidecar
-
-set +e
-cargo run -p firma -- run \
-  --profile "$PROFILE" \
-  --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
-  -- "${SANDBOX_CMD[@]}" >/dev/null 2>"$FAIL_STDERR"
-STATUS=$?
-set -e
-
-if [[ "$STATUS" -eq 0 ]]; then
-  fail "expected non-zero exit when sidecar is down, got 0"
+python3 - "$AUDIT" "$expected" <<'PY'
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+expected = {"allow": 1, "deny": 2}[sys.argv[2]]
+assert any(event["decision"] == expected and event["signature"] for event in events), events
+PY
+ok "dispatch and audit decision verified"
+stop_process "$SIDECAR_PID"
+SIDECAR_PID=""
+if run /bin/sh -c "$USER_CMD" >"$WORKDIR/stopped.stdout" 2>"$WORKDIR/stopped.stderr"; then
+  fail "run succeeded with an unavailable Sidecar"
 fi
-
-if ! grep -Eq "unreachable|sidecar|backend error" "$FAIL_STDERR"; then
-  warn "fail-closed command failed as expected but stderr had no sidecar keyword"
-fi
-
-ok "fail-closed behavior verified (exit=${STATUS})"
-if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  ok "claude-code shell acceptance E2E PASSED"
-else
-  ok "firma run E2E PASSED"
-fi
-if [[ "$KEEP_ARTIFACTS" -eq 1 ]]; then
-  ok "artifacts: ${WORKDIR}"
-fi
+grep -q "sidecar endpoint .* is unreachable" "$WORKDIR/stopped.stderr" || {
+  cat "$WORKDIR/stopped.stderr" >&2; fail "run did not report the unreachable Sidecar";
+}
+! grep -q 'HTTP ATTEMPT' "$WORKDIR/stopped.stdout" || fail "command ran without a Sidecar"
+ok "unavailable Sidecar fails closed"

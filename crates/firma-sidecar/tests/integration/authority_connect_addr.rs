@@ -1,17 +1,28 @@
 use std::net::SocketAddr;
 
+use super::state_layout::empty_state_beside;
 use firma_sidecar::config::SidecarConfig;
 
 fn load_authority(body: &str) -> Result<SidecarConfig, String> {
     let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
     let path = dir.path().join("firma.toml");
     std::fs::write(&path, body).map_err(|error| error.to_string())?;
-    SidecarConfig::load_from_path(&path).map_err(|error| error.to_string())
+    SidecarConfig::load_from_path(&path, &empty_state_beside(&path))
+        .map_err(|error| error.to_string())
+}
+
+#[test]
+fn a_sidecar_requires_an_explicit_authority_endpoint() {
+    for body in ["", "[authority]\nurl = ''", "[authority]\nurl = '   '"] {
+        let error = load_authority(body).expect_err("Authority endpoint is mandatory");
+        insta::allow_duplicates! { insta::assert_snapshot!(error, @"authority: sidecar.authority.url is required"); }
+    }
 }
 
 #[test]
 fn connect_addr_defaults_absent_and_parses_ip_families() {
-    let default = load_authority("").expect("default config");
+    let default =
+        load_authority("[authority]\nurl = 'http://localhost:50051'\n").expect("default config");
     assert_eq!(default.authority.connect_addr, None);
 
     for address in ["127.0.0.1:41000", "[::1]:42000"] {
@@ -30,10 +41,7 @@ fn connect_addr_defaults_absent_and_parses_ip_families() {
 fn connect_addr_requires_url_and_nonzero_port() {
     let missing_url = load_authority("[authority]\nconnect_addr = '127.0.0.1:41000'\n")
         .expect_err("connect address without URL must fail");
-    assert_eq!(
-        missing_url,
-        "authority: connect_addr requires url to be set"
-    );
+    assert_eq!(missing_url, "authority: sidecar.authority.url is required");
 
     let zero_port = load_authority(
         "[authority]\nurl = 'http://localhost:50051'\nconnect_addr = '127.0.0.1:0'\n",

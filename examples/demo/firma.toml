@@ -7,6 +7,7 @@
 # ── Mini Authority ───────────────────────────────────────────────────────────
 
 [authority]
+mapping_rules_paths = ["mapping-rules.toml"]
 listen_addr = "127.0.0.1:50051"
 policy_dir = "policies/"
 issuance_policy_dir = "issuance-policies/"
@@ -32,7 +33,7 @@ drain_timeout = "30s"
 # (for wttr.in/paste.rs) to surface a Stage 2 decision in the audit
 # log that scripted.py asserts on.
 #
-# Setting `intercept_hosts` here replaces the built-in default list
+# Setting `intercept_hosts` here replaces the intercept-everything default
 # (see HttpsMitmConfig::default_https_mitm_intercept_hosts), so we
 # enumerate every host the demo actually contacts.
 [sidecar.interceptor.https_mitm]
@@ -43,13 +44,6 @@ dir = "policies"
 
 [sidecar.ca]
 dir = "examples/demo/firma-ca"
-
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-default_protected = false
-
-[sidecar.capability_validation]
-clock_skew_tolerance = "5s"
 
 [sidecar.revocation]
 capacity = 100000
@@ -84,7 +78,7 @@ public_key_path = "firma-authority.pub"
 ca_cert_path = "authority-ca.crt"
 
 [sidecar.capability_seed]
-paths = ["capability-demo-agent.toml"]
+paths = ["capabilities/capability-demo-agent.toml"]
 
 [sidecar.audit]
 sink = "stdout"

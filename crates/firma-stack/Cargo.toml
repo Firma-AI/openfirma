@@ -16,13 +16,13 @@ firma-authority = { workspace = true }
 firma-config-loader = { workspace = true }
 firma-config-schema = { workspace = true }
 firma-process-orchestrator = { workspace = true }
+firma-runtime-state = { workspace = true }
 firma-sidecar = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 camino = { workspace = true, features = ["serde1"] }
-firma-runtime-state = { workspace = true }
 firma-test-helpers = { workspace = true }
 insta = { workspace = true }
 serde = { workspace = true }

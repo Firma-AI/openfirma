@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use firma_authority::{
-    AuthorityConfig, CedarPolicyStore, IssuanceRequest, RevocationStore, Server, issue_capability,
-    seed::SeedFile,
+    AuthorityConfig, CedarPolicyStore, IssuanceRequest, RevocationStore, Server, TlsRequest,
+    issue_capability, seed::SeedFile,
 };
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_identifiers::{AgentId, SessionId, TokenId};
@@ -49,7 +49,17 @@ pub async fn run(args: Args, config: Option<&Path>) -> Result<ExitCode> {
         source = ?resolved.source,
         "config resolved"
     );
-    let config = AuthorityConfig::from_resolved_section(&resolved)
+    // Resolved here, at the process boundary, rather than inside the builder:
+    // artifact paths must come from the operator's choice, never from whatever
+    // the ambient runtime directory happens to hold.
+    let state = firma_runtime_state::RuntimeLayout::resolve(None)
+        .context("failed to resolve the state directory")?;
+    let tls = if args.no_tls {
+        TlsRequest::Disabled
+    } else {
+        TlsRequest::Required
+    };
+    let config = AuthorityConfig::from_resolved_section(&resolved, &state, tls)
         .context("failed to load authority configuration")?
         .ok_or_else(|| {
             anyhow::anyhow!("failed to load authority configuration: missing [authority] section")
@@ -234,12 +244,14 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
     println!("  cert    : {}", server_cert_path.display());
     println!("  key     : {}", server_key_path.display());
     println!();
-    println!("authority config:");
-    println!("  tls_cert_path = \"{}\"", server_cert_path.display());
-    println!("  tls_key_path  = \"{}\"", server_key_path.display());
+    println!(
+        "Material generated here is picked up automatically when it sits in the\n\
+         state directory: `tls_cert_path`, `tls_key_path`, and the Sidecar's\n\
+         `ca_cert_path` all default from it. Set them in firma.toml only to pin a\n\
+         different location."
+    );
     println!("sidecar config:");
     println!("  authority_url = \"https://{}:50051\"", hosts[0]);
-    println!("  ca_cert_path  = \"{}\"", ca_cert_path.display());
     Ok(())
 }
 
@@ -251,7 +263,7 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
         CedarPolicyStore::load(
             config.policy_dir(),
             config.schema_path().map(std::path::Path::to_path_buf),
-            config.bundle_ttl_seconds().get(),
+            config.bundle_ttl_seconds(),
         )
         .context("failed to load Cedar policies")?,
     );
@@ -279,13 +291,18 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
 fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -> Result<()> {
     use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
 
-    let ca_cert_path = config.tls().mtls_client_ca_cert_path().ok_or_else(|| {
-        anyhow::anyhow!(
-            "mtls_client_ca_cert_path is not set in the Authority config; \
-             run `firma authority generate-client-ca` first"
-        )
-    })?;
-    let ca_key_path = config.tls().mtls_client_ca_key_path().ok_or_else(|| {
+    let mtls = config
+        .tls()
+        .material()
+        .and_then(firma_authority::AuthorityTlsMaterial::mtls)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mtls_client_ca_cert_path is not set in the Authority config; \
+                 run `firma authority generate-client-ca` first"
+            )
+        })?;
+    let ca_cert_path = mtls.client_ca_cert();
+    let ca_key_path = mtls.client_ca_key().ok_or_else(|| {
         anyhow::anyhow!("mtls_client_ca_key_path is not set in the Authority config")
     })?;
 
@@ -344,12 +361,8 @@ fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -
     println!(
         "Add the following entry to your authorized_clients_path TOML file to authorize this Sidecar:"
     );
-    println!("  [[authorized]]");
-    if args.san.is_some() {
-        println!("  san = \"{identity}\"");
-    } else {
-        println!("  cn = \"{identity}\"");
-    }
+    println!("  [[clients]]");
+    println!("  identity = {}", toml::Value::String(identity.to_string()));
     Ok(())
 }
 

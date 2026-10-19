@@ -1,7 +1,7 @@
 //! Filesystem and process preparation for a local Sidecar launch.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use firma_config_loader::AgentProfile;
@@ -16,6 +16,27 @@ use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 
 const LOOPBACK_EPHEMERAL: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+
+fn validated_config(
+    path: &Path,
+    state: &firma_runtime_state::RuntimeLayout,
+) -> Result<toml::Value, RunError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| RunError::Internal(format!("read {}: {error}", path.display())))?;
+    let document: toml::Value = toml::from_str(&text)
+        .map_err(|error| RunError::Internal(format!("parse synthesized config: {error}")))?;
+    let section = document
+        .get("sidecar")
+        .ok_or_else(|| RunError::Internal("synthesized config has no [sidecar] table".into()))?;
+    let schema = section.clone().try_into().map_err(|error| {
+        RunError::ConfigValidation(format!("invalid synthesized Sidecar config: {error}"))
+    })?;
+    // Templates are drafts until orchestration injects the ready endpoint.
+    firma_sidecar::config::SidecarConfig::resolve(schema, state).map_err(|error| {
+        RunError::ConfigValidation(format!("invalid synthesized Sidecar config: {error}"))
+    })?;
+    Ok(document)
+}
 
 /// A fully materialized local Sidecar launch, without process ownership.
 ///
@@ -34,8 +55,6 @@ pub struct PreparedSidecarLaunch {
     sandbox_id: SandboxId,
     agent_id: AgentId,
     session_id: String,
-    /// Version computed during preparation, not evidence of the running child.
-    pub planned_policy_bundle_version: String,
     /// Configured Authority URL published after the launch becomes ready.
     pub planned_authority_url: String,
 }
@@ -58,6 +77,7 @@ impl PreparedSidecarLaunch {
 /// Preparation-only inputs for a local Sidecar launch.
 #[doc(hidden)]
 pub struct PrepareRequest<'a> {
+    pub state: firma_runtime_state::RuntimeLayout,
     pub sandbox_id: &'a SandboxId,
     pub agent_id: &'a AgentId,
     pub execution_profile: AgentProfile,
@@ -72,16 +92,12 @@ pub struct PrepareRequest<'a> {
     pub capability_seed_path: Option<PathBuf>,
     pub use_http_proxy_interceptor: bool,
     pub audit_fallback_path: Option<PathBuf>,
-    pub monitor_mode: bool,
+    pub audit_signing_key_path: Option<PathBuf>,
     pub secret_gateway_addr: Option<&'a str>,
     pub http_secret_providers: &'a [HttpIntegrationSpec<SecretMatcher>],
 }
 
 /// Materialize a Sidecar command and all of its launch inputs.
-#[expect(
-    clippy::too_many_lines,
-    reason = "prepare operations must stay in the same place"
-)]
 pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunError> {
     let marker_dir = std::path::absolute(&req.marker_dir).map_err(|error| {
         RunError::Internal(format!(
@@ -120,32 +136,15 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         authority_credentials: req.authority_credentials.as_ref(),
         capability_seed_path: req.capability_seed_path.as_deref(),
         audit_fallback_path: req.audit_fallback_path.as_deref(),
-        monitor_mode: req.monitor_mode,
+        audit_signing_key_path: req.audit_signing_key_path.as_deref(),
         http_secret_providers: req.http_secret_providers,
     })?;
 
-    let synthesized = std::fs::read_to_string(&config_path)
-        .map_err(|error| RunError::Internal(format!("read {}: {error}", config_path.display())))?;
-    let synthesized: toml::Value = toml::from_str(&synthesized)
-        .map_err(|error| RunError::Internal(format!("parse synthesized config: {error}")))?;
+    let synthesized = validated_config(&config_path, &req.state)?;
     let sidecar = synthesized
         .get("sidecar")
         .and_then(toml::Value::as_table)
         .ok_or_else(|| RunError::Internal("synthesized config has no [sidecar] table".into()))?;
-    let policy_dir = sidecar
-        .get("policy")
-        .and_then(toml::Value::as_table)
-        .and_then(|policy| policy.get("dir"))
-        .and_then(toml::Value::as_str)
-        .map_or_else(|| PathBuf::from("policies"), PathBuf::from);
-    let policy_dir = if policy_dir.is_absolute() {
-        policy_dir
-    } else {
-        marker_dir.join(policy_dir)
-    };
-    let policy_bundle_version = firma_sidecar::startup::compute_policy_bundle_version(&policy_dir)
-        .map_err(|error| RunError::Internal(format!("compute policy bundle version: {error}")))?
-        .0;
     let authority_url = sidecar
         .get("authority")
         .and_then(toml::Value::as_table)
@@ -158,6 +157,10 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
     command
         .args(["sidecar", "--config"])
         .arg(&config_path)
+        .arg("--enforcement-state")
+        .arg(firma_runtime_state::enforcement_state::run_path(
+            &marker_dir,
+        ))
         .env_remove("FIRMA_LOG_FILE")
         .env("FIRMA_SIDECAR_HEALTH_BIND_ADDR", "127.0.0.1:0")
         .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id.to_string())
@@ -167,9 +170,6 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    if req.monitor_mode {
-        command.env("FIRMA_ALLOW_MONITOR_MODE", "1");
-    }
     if let Some(ref addr) = req.secret_gateway_addr {
         command.env(GATEWAY_ADDR_ENV, addr);
     } else {
@@ -187,7 +187,6 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         sandbox_id: *req.sandbox_id,
         agent_id: *req.agent_id,
         session_id: req.session_id.to_string(),
-        planned_policy_bundle_version: policy_bundle_version,
         planned_authority_url: authority_url,
     })
 }
@@ -205,7 +204,8 @@ pub fn publish_metadata(
             agent_id: prepared.agent_id.to_string(),
             session_id: prepared.session_id.clone(),
             authority_url: prepared.planned_authority_url.clone(),
-            policy_bundle_version: prepared.planned_policy_bundle_version.clone(),
+            // The running Sidecar publishes its enforced version separately.
+            policy_bundle_version: String::new(),
             pid,
             started_at: chrono::Utc::now().to_rfc3339(),
             listen: endpoint_text(endpoint),

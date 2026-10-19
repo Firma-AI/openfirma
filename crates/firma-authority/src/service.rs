@@ -6,10 +6,10 @@ use std::sync::Arc;
 use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
 use firma_core::FirmaEntityUid;
-use firma_core::policy::PolicyBundle;
 use firma_core::token::CapabilityClaims;
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_identifiers::{AgentId, SessionId};
+use firma_protobuf::v1::PolicyBundle;
 use firma_protobuf::v1::RevocationEvent;
 use firma_protobuf::v1::authority_service_server::AuthorityService;
 use firma_protobuf::v1::{
@@ -180,6 +180,14 @@ impl AuthorityService for AuthorityServiceImpl {
         let client_identity = peer_identity_from_request(&request);
         let req = request.into_inner();
         let current_version = req.current_version;
+        if !req
+            .supported_capabilities
+            .contains(&(firma_protobuf::v1::PolicyBundleCapability::ActionMappingSnapshotV1 as i32))
+        {
+            return Err(Status::failed_precondition(
+                "complete enforcement snapshots require action mapping support",
+            ));
+        }
 
         tracing::info!(
             client_version = %current_version,
@@ -190,18 +198,15 @@ impl AuthorityService for AuthorityServiceImpl {
         let mut rx = self.policy_watcher.subscribe();
 
         let stream = async_stream::try_stream! {
-            // Send current bundle immediately (unless client already has it)
+            // Always send a complete initial snapshot: receipt is what renews the
+            // client's freshness deadline, so its reported version is advisory.
             let initial = rx.borrow_and_update().clone();
-            if current_version.is_empty() || current_version != initial.version {
-                yield bundle_to_update(&initial);
-            }
+            yield bundle_to_update(&initial);
 
-            // Periodic refresh keeps the sidecar bundle fresh between policy changes.
-            // Interval = half of bundle TTL, floored at 5 s.
-            let refresh_secs = (u64::from(initial.ttl_seconds) / 2).max(5);
-            let mut ticker = tokio::time::interval(
-                std::time::Duration::from_secs(refresh_secs)
-            );
+            // Keep the half-TTL precision even for a one-second TTL: rounding
+            // up to a whole second (or imposing a minimum) lets it expire.
+            let refresh_interval = std::time::Duration::from_secs(u64::from(initial.ttl_seconds)) / 2;
+            let mut ticker = tokio::time::interval(refresh_interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             ticker.tick().await; // skip the immediate first tick
 
@@ -565,13 +570,10 @@ fn build_proto_token(
 
 fn bundle_to_update(bundle: &PolicyBundle) -> PolicyBundleUpdate {
     PolicyBundleUpdate {
-        bundle: Some(firma_protobuf::v1::PolicyBundle {
-            version: bundle.version.clone(),
-            policies: bundle.policies.clone(),
-            entity_schema: bundle.entity_schema.clone(),
-            ttl_seconds: bundle.ttl_seconds,
-        }),
+        bundle: Some(bundle.clone()),
         updated_at: Some(to_proto_timestamp(Utc::now())),
+        // The OpenFirma Authority streams one directory of policies; it has no policy set to describe.
+        policy_set: None,
     }
 }
 

@@ -10,6 +10,8 @@ cargo-dist-version = "0.32.0"
 # - Run non-publishing artifact builds for snapshot-candidate branch pushes.
 # - Add a candidate gate covering the release artifact build jobs.
 # - Remove swatinem/rust-cache so release artifacts never use a persistent build cache.
+# - Assert every binary archive contains its platform's firma-secret-shim member.
+# - Reject publishing a release tag present in the installer's legacy CLI-only allowlist.
 # Reapply these changes and run zizmor after regenerating CI during cargo-dist upgrades.
 allow-dirty = ["ci"]
 # CI backends to support
@@ -48,12 +50,13 @@ pr-run-mode = "upload"
 github-build-setup = "../build-setup.yml"
 
 [dist.github-custom-runners]
+global = "ubuntu-24.04"
 aarch64-unknown-linux-musl = "ubuntu-24.04-arm"
 aarch64-apple-darwin = "macos-14"
 aarch64-pc-windows-msvc = "windows-11-arm"
 x86_64-apple-darwin = "macos-15-intel"
 x86_64-pc-windows-msvc = "windows-2022"
-x86_64-unknown-linux-musl = "ubuntu-22.04"
+x86_64-unknown-linux-musl = "ubuntu-24.04"
 
 [dist.github-action-commits]
 "actions/checkout" = "3d3c42e5aac5ba805825da76410c181273ba90b1"

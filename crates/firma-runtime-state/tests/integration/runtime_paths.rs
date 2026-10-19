@@ -176,7 +176,7 @@ fn windows_uses_local_app_data() {
 }
 
 #[test]
-fn derives_all_runtime_contract_paths_from_one_root() {
+fn names_all_runtime_contract_paths_from_one_root() {
     let base = PathBuf::from("/run/user/1000/firma");
     let layout = RuntimeLayout::from_root(&base);
     let sandbox_id = firma_identifiers::SandboxId::generate();
@@ -218,4 +218,40 @@ fn derives_all_runtime_contract_paths_from_one_root() {
     assert_eq!(layout.audit_log(), base.join("audit.jsonl"));
     assert_eq!(layout.sidecar_socket(), base.join("sidecar.sock"));
     assert_eq!(layout.session_state(), base.join("session-state.jsonl"));
+}
+
+/// These are the positions `firma config` writes into `firma.toml` as absolute
+/// paths, and the paths the Authority and the Sidecar resolve when the
+/// corresponding key is unset, so a scaffolded config and an unset one must
+/// name the same files.
+#[test]
+fn durable_artifact_defaults_match_the_scaffolded_layout() {
+    let base = absolute_root("state");
+    let layout = RuntimeLayout::from_root(&base);
+
+    assert_eq!(layout.authority_key(), base.join("authority.key"));
+    assert_eq!(layout.authority_public_key(), base.join("authority.pub"));
+    assert_eq!(layout.audit_key(), base.join("audit.key"));
+    assert_eq!(layout.revocations(), base.join("revocations.txt"));
+    assert_eq!(layout.generated_ca_dir(), base.join("generated-firma-ca"));
+    assert_eq!(layout.tls_dir(), base.join("tls"));
+    assert_eq!(
+        layout.authority_tls_certificate(),
+        layout.tls_dir().join("authority.crt")
+    );
+    assert_eq!(
+        layout.authority_tls_private_key(),
+        layout.tls_dir().join("authority.key")
+    );
+    assert_eq!(
+        layout.authority_tls_ca_certificate(),
+        layout.tls_dir().join("authority-ca.crt")
+    );
+    assert_eq!(
+        layout.authority_tls_ca_private_key(),
+        layout.tls_dir().join("authority-ca.key")
+    );
+    // The capability signing key and the TLS private key share a file name and
+    // differ only by directory.
+    assert_ne!(layout.authority_key(), layout.authority_tls_private_key());
 }

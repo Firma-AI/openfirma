@@ -9,7 +9,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use firma_config_utils::NonZeroDuration;
 
 const DEFAULT_CONNECTION_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(1));
@@ -28,10 +28,7 @@ pub struct GatewayConfig {
     #[serde(default = "default_operation_timeout")]
     pub operation_timeout: NonZeroDuration,
     /// Cap on the outbound payload and inbound response line size.
-    #[serde(
-        deserialize_with = "crate::utils::byte_size::deserialize",
-        default = "default_max_buffer_size"
-    )]
+    #[serde(with = "crate::utils::byte_size", default = "default_max_buffer_size")]
     pub max_buffer_size: ByteSize,
 }
 

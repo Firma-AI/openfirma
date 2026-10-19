@@ -1,0 +1,23 @@
+[authority]
+mapping_rules_paths = ["mapping-rules.toml"]
+listen_addr = "127.0.0.1:0"
+policy_dir = "policies"
+issuance_policy_dir = "issuance-policies"
+revocation_file = "examples/custom-http-secret/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl = "1h"
+bundle_ttl = "30s"
+
+[sidecar]
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
+
+[run.profiles.generic]
+backend = "bwrap"
+secret_providers = [
+  { type = "http", provider_id = "local-mock-http", host = "127.0.0.1:18081", matchers = [{ type = "sensitive_command", path = "/v1/secret", matcher = { type = "json", record_path = "$", value_path = "$.value", name = { source = "path", path = "$.name" } } }, { type = "safe_command", path = "/v1/echo" }] },
+]

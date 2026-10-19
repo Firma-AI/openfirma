@@ -38,8 +38,7 @@ accepted changes.
 When investigating or validating a proposed change locally, run:
 
 ```bash
-just check     # fmt + lint + test + build + audit + dependency check
-just hawk      # unnecessary public API visibility (macOS and Linux)
+just check # fmt + lint + test + build + audit + dependency check
 ```
 
 ## License

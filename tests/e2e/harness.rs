@@ -208,6 +208,29 @@ impl TestWorld {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.run_firma_with_host_env(profile, config_path, cwd, run_args, program, args, &[])
+    }
+
+    /// Like [`Self::run_firma`], with host process environment overrides that
+    /// may be deliberately absent from the guest environment.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the existing run helper and adds one host environment input"
+    )]
+    pub(crate) fn run_firma_with_host_env<I, S>(
+        &self,
+        profile: &str,
+        config_path: Option<&Path>,
+        cwd: &Path,
+        run_args: &[&str],
+        program: impl AsRef<OsStr>,
+        args: I,
+        host_env: &[(&str, &Path)],
+    ) -> ProcessOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let mut command = self.isolated_command_in(env!("CARGO_BIN_EXE_firma"), cwd);
         command.args(["run", "--profile", profile]);
         if let Some(config_path) = config_path {
@@ -219,6 +242,9 @@ impl TestWorld {
             .arg(program)
             .args(args)
             .env("FIRMA_RUN_SESSION_ID", &self.session_id);
+        for (name, value) in host_env {
+            command.env(name, value);
+        }
         run_bounded(&mut command, Duration::from_mins(2))
     }
 
@@ -412,6 +438,16 @@ impl LiveGovernedRun {
         match self.http.request(nonce, url) {
             Ok(response) => response,
             Err(error) => self.protocol_failure("request response", &error),
+        }
+    }
+
+    /// Rewrites `path` from inside the sandbox through the governed fixture.
+    ///
+    /// The method returns only after the wrapped process confirms the write, proving the file was
+    /// writable by the sandboxed agent.
+    pub(crate) fn write_file(&mut self, nonce: &str, path: &Path, contents: &str) {
+        if let Err(error) = self.http.write_file(nonce, path, contents) {
+            self.protocol_failure("sandboxed file write", &error);
         }
     }
 

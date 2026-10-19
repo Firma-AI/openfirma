@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
@@ -11,20 +11,20 @@ use crate::config::{
 use crate::error::RunError;
 
 /// Returns built-in profile patch for a given profile id.
-pub fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> {
+pub fn built_in_profile(profile: &str, workspace: &Path) -> Result<ProfilePatch, RunError> {
     match AgentProfile::from_name(profile) {
-        Some(AgentProfile::Generic) => Ok(generic_profile()),
-        Some(AgentProfile::Codex) => Ok(codex_profile()),
-        Some(AgentProfile::ClaudeCode) => Ok(claude_code_profile()),
-        Some(AgentProfile::Copilot) => Ok(copilot_profile()),
-        Some(AgentProfile::Vscode) => Ok(vscode_profile()),
+        Some(AgentProfile::Generic) => Ok(generic_profile(workspace)),
+        Some(AgentProfile::Codex) => Ok(codex_profile(workspace)),
+        Some(AgentProfile::ClaudeCode) => Ok(claude_code_profile(workspace)),
+        Some(AgentProfile::Copilot) => Ok(copilot_profile(workspace)),
+        Some(AgentProfile::Vscode) => Ok(vscode_profile(workspace)),
         None => Err(RunError::ConfigValidation(format!(
             "unknown profile '{profile}'; supported profiles: generic, codex, claude-code, copilot, vscode"
         ))),
     }
 }
 
-fn generic_profile() -> ProfilePatch {
+fn generic_profile(workspace: &Path) -> ProfilePatch {
     let mut env_set = BTreeMap::new();
     env_set.insert("FIRMA_RUN_PROFILE".to_string(), "generic".to_string());
     env_set.insert(
@@ -64,8 +64,8 @@ fn generic_profile() -> ProfilePatch {
         ]),
         env_set: Some(env_set),
         mounts: Some(vec![MountPatch {
-            source: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            target: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            source: workspace.to_path_buf(),
+            target: workspace.to_path_buf(),
             read_only: false,
         }]),
         network: Some(NetworkPolicyPatch {
@@ -92,8 +92,8 @@ fn generic_profile() -> ProfilePatch {
     }
 }
 
-fn codex_profile() -> ProfilePatch {
-    let mut base = generic_profile();
+fn codex_profile(workspace: &Path) -> ProfilePatch {
+    let mut base = generic_profile(workspace);
     base.env_set
         .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "codex".to_string());
@@ -109,13 +109,38 @@ fn codex_profile() -> ProfilePatch {
     // sandbox provides equivalent isolation. Elsewhere keep workspace-write.
     base.executable_policies.get_or_insert_default().insert(
         "codex".to_string(),
-        codex_executable_policy(crate::backend::platform::nested_userns_restricted()),
+        codex_executable_policy(NestedUserns::of_host()),
     );
     base
 }
 
-fn codex_executable_policy(restricted: bool) -> ExecutableLaunchPolicyPatch {
-    let (sandbox_mode, config_overrides) = if restricted {
+/// Whether the host lets codex run its own bwrap sandbox inside firma's.
+///
+/// Named rather than a `bool` because it selects between two sandbox modes
+/// with different blast radii, and a bare `true` did not say which of them it
+/// selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NestedUserns {
+    /// Nested user namespaces work: keep codex's own `workspace-write` sandbox.
+    Permitted,
+    /// Nested user namespaces are blocked (Ubuntu, Debian ≥12, hardened
+    /// kernels). codex's internal sandbox cannot run, so it is disabled and
+    /// firma's outer sandbox provides the isolation.
+    Restricted,
+}
+
+impl NestedUserns {
+    fn of_host() -> Self {
+        if crate::backend::platform::nested_userns_restricted() {
+            Self::Restricted
+        } else {
+            Self::Permitted
+        }
+    }
+}
+
+fn codex_executable_policy(nested_userns: NestedUserns) -> ExecutableLaunchPolicyPatch {
+    let (sandbox_mode, config_overrides) = if nested_userns == NestedUserns::Restricted {
         (
             "danger-full-access".to_string(),
             BTreeMap::from([(
@@ -146,8 +171,8 @@ fn codex_executable_policy(restricted: bool) -> ExecutableLaunchPolicyPatch {
     }
 }
 
-fn claude_code_profile() -> ProfilePatch {
-    let mut base = generic_profile();
+fn claude_code_profile(workspace: &Path) -> ProfilePatch {
+    let mut base = generic_profile(workspace);
     base.env_set
         .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "claude-code".to_string());
@@ -163,8 +188,8 @@ fn claude_code_profile() -> ProfilePatch {
     base
 }
 
-fn copilot_profile() -> ProfilePatch {
-    let mut base = generic_profile();
+fn copilot_profile(workspace: &Path) -> ProfilePatch {
+    let mut base = generic_profile(workspace);
     base.env_set
         .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "copilot".to_string());
@@ -184,8 +209,8 @@ fn copilot_profile() -> ProfilePatch {
     base
 }
 
-fn vscode_profile() -> ProfilePatch {
-    let mut base = generic_profile();
+fn vscode_profile(workspace: &Path) -> ProfilePatch {
+    let mut base = generic_profile(workspace);
     base.env_set
         .get_or_insert_default()
         .insert("FIRMA_RUN_PROFILE".to_string(), "vscode".to_string());
@@ -216,7 +241,7 @@ mod tests {
 
     #[test]
     fn copilot_profile_sets_append_ca_and_github_env() {
-        let patch = built_in_profile("copilot").unwrap();
+        let patch = built_in_profile("copilot", Path::new("/ws")).unwrap();
         assert_eq!(patch.ca_trust_mode, Some(CaTrustMode::AppendSystemRoots));
         assert!(
             patch
@@ -235,7 +260,7 @@ mod tests {
 
     #[test]
     fn vscode_profile_sets_append_ca_and_profile_env() {
-        let patch = built_in_profile("vscode").unwrap();
+        let patch = built_in_profile("vscode", Path::new("/ws")).unwrap();
         assert_eq!(patch.ca_trust_mode, Some(CaTrustMode::AppendSystemRoots));
         assert_eq!(patch.use_http_proxy_sidecar, Some(true));
         assert_eq!(
@@ -280,7 +305,7 @@ mod tests {
 
     #[test]
     fn codex_policy_workspace_write_includes_network_access() {
-        let policy = codex_executable_policy(false);
+        let policy = codex_executable_policy(NestedUserns::Permitted);
         assert_eq!(policy.sandbox_mode, Some("workspace-write".to_string()));
         assert_eq!(
             policy
@@ -300,7 +325,7 @@ mod tests {
 
     #[test]
     fn codex_policy_danger_full_access_omits_network_access() {
-        let policy = codex_executable_policy(true);
+        let policy = codex_executable_policy(NestedUserns::Restricted);
         assert_eq!(policy.sandbox_mode, Some("danger-full-access".to_string()));
         assert!(
             !policy

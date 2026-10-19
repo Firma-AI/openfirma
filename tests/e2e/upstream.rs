@@ -106,6 +106,11 @@ impl HttpProbe {
         format!("http://{}/{nonce}", self.address, nonce = self.nonce)
     }
 
+    /// Returns the probe's loopback `host:port` authority.
+    pub(crate) fn authority(&self) -> String {
+        self.address.to_string()
+    }
+
     /// Returns the audit resource corresponding to [`Self::url`].
     pub(crate) fn resource(&self) -> String {
         format!("{}/{nonce}", self.address, nonce = self.nonce)

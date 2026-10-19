@@ -1,11 +1,16 @@
 use std::str::FromStr;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use firma_config_schema::broker::BrokerConfig;
 use firma_http::Str;
 use firma_secret_provider::{
     broker::{
-        BinaryName, BrokerExitStatus, BrokerOutput, BrokerOutputChunk, BrokerRequest,
-        BrokerResponse, DecodedBrokerResponse, server::BrokerListener, stream::BrokerStream,
+        BinaryName, BrokerExitStatus, BrokerOutput, BrokerOutputChunk, BrokerReadinessRequest,
+        BrokerReadinessResponse, BrokerRequest, BrokerResponse, DecodedBrokerResponse,
+        server::BrokerListener, stream::BrokerStream,
     },
     endpoint::{EndpointInner, server::ServerEndpoint},
 };
@@ -332,6 +337,109 @@ async fn malformed_request_is_rejected_without_reaching_handler() {
     server.await.expect("server task");
     let response: BrokerResponse = serde_json::from_str(line.trim()).expect("deserialize");
     assert!(decode_output(response).is_err());
+}
+
+#[tokio::test]
+async fn readiness_is_answered_without_dispatching_execution_handler() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerConfig::default())
+        .await
+        .expect("bind");
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let handler_invocations = Arc::clone(&invocations);
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async move |_request| {
+                handler_invocations.fetch_add(1, Ordering::SeqCst);
+                BrokerResponse::rejected("execution handler must not run")
+            })
+            .await
+            .expect("accept readiness");
+    });
+
+    let payload = serde_json::to_string(&BrokerReadinessRequest::current()).expect("serialize");
+    let line = connect_and_send_raw(&endpoint, format!("{payload}\n").as_bytes())
+        .await
+        .expect("send readiness");
+    server.await.expect("server task");
+
+    let response: BrokerReadinessResponse =
+        serde_json::from_str(line.trim()).expect("affirmative readiness response");
+    assert_eq!(response, BrokerReadinessResponse::current());
+    assert_eq!(invocations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn old_guest_synthetic_probe_remains_an_execution_request() {
+    let BoundBroker {
+        listener,
+        endpoint,
+        _dir,
+    } = bind_with_config(BrokerConfig::default())
+        .await
+        .expect("bind");
+    let request = BrokerRequest {
+        bin: BinaryName::new("__firma_broker_readiness_probe__")
+            .expect("legacy probe is a valid binary name"),
+        args: Vec::new(),
+    };
+    let server = tokio::spawn(async move {
+        listener
+            .accept_one(async |request| {
+                assert_eq!(&*request.bin, "__firma_broker_readiness_probe__");
+                BrokerResponse::rejected("provider is not configured")
+            })
+            .await
+            .expect("accept legacy readiness probe");
+    });
+
+    let line = connect_and_send(&endpoint, &request)
+        .await
+        .expect("send legacy readiness probe");
+    server.await.expect("server task");
+    assert_eq!(
+        line,
+        "{\"type\":\"rejected\",\"error\":\"provider is not configured\"}\n"
+    );
+}
+
+#[tokio::test]
+async fn malformed_and_unsupported_control_frames_fail_deterministically() {
+    for (frame, expected) in [
+        (
+            "{\"control\":{\"type\":\"unknown\",\"version\":1}}\n",
+            "{\"type\":\"rejected\",\"error\":\"malformed broker control request: unknown variant `unknown`, expected `readiness`\"}\n",
+        ),
+        (
+            "{\"control\":{\"type\":\"readiness\",\"version\":2}}\n",
+            "{\"type\":\"rejected\",\"error\":\"unsupported broker control version 2; expected 1\"}\n",
+        ),
+    ] {
+        let BoundBroker {
+            listener,
+            endpoint,
+            _dir,
+        } = bind_with_config(BrokerConfig::default())
+            .await
+            .expect("bind");
+        let server = tokio::spawn(async move {
+            listener
+                .accept_one(async |_request| {
+                    panic!("control frame must not reach execution handler")
+                })
+                .await
+                .expect("accept control frame");
+        });
+
+        let line = connect_and_send_raw(&endpoint, frame.as_bytes())
+            .await
+            .expect("send control frame");
+        server.await.expect("server task");
+        assert_eq!(line, expected);
+    }
 }
 
 #[tokio::test]

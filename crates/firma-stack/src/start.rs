@@ -42,7 +42,7 @@ pub enum StartMode {
 /// Returns config, state-directory, lock, spawn, or readiness errors.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<RunningStack, StackError> {
     let topology = plan::topology()?;
-    let mut planner = plan::ComponentPlanner::new(cfg);
+    let mut planner = plan::ComponentPlanner::new(cfg, state_dir);
     spawn_stack_from_plan(
         &topology,
         |context| planner.build(&context),
@@ -68,7 +68,7 @@ pub fn start(
     let topology = plan::topology()?;
     match mode {
         StartMode::Foreground => {
-            let mut planner = plan::ComponentPlanner::new(cfg);
+            let mut planner = plan::ComponentPlanner::new(cfg, state_dir);
             start_foreground_from_plan(
                 &topology,
                 |context| planner.build(&context),
@@ -121,7 +121,7 @@ pub fn supervise_owned_generation(
     generation: StackGeneration,
 ) -> Result<(), StackError> {
     let topology = plan::topology()?;
-    let mut planner = plan::ComponentPlanner::new(cfg);
+    let mut planner = plan::ComponentPlanner::new(cfg, state_dir);
     supervise_owned_generation_from_plan(
         &topology,
         |context| planner.build(&context),

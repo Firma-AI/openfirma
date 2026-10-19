@@ -1,5 +1,5 @@
-- name: Install protoc
-  uses: ./.github/actions/setup-protoc
+- name: Install protoc with mise
+  uses: ./.github/actions/setup-mise
   with:
-    version: "35.1"
-    repo-token: ${{ secrets.GITHUB_TOKEN }}
+    tools: |
+      protoc

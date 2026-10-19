@@ -30,9 +30,15 @@ firma config --profile copilot --posture dev
 
 This selects the `copilot` mapping (CONNECT classification for the Copilot and GitHub hosts) and seeds `sidecar.interceptor.https_mitm.bypass_hosts` with `github.com`, `api.github.com`, and `uploads.github.com` so those hosts pass through untouched while firma-ca still covers any intercepted host.
 
-The generated `firma.toml` keeps MITM enabled (the bypass list alone keeps `[sidecar.interceptor.https_mitm].enabled = true`) and lists `mappings/copilot.toml` under `rules_paths`.
+Both `github.com` and `api.github.com` map to `code.write` at CONNECT level;
+Copilot service and upload hosts map to `communication.external.send`. An
+opaque GitHub API tunnel can carry writes, so a policy granting only
+`code.review.read` does not permit it. Grant `code.write` for these destinations
+only if that broader access is intended.
 
-This profile is intentionally CONNECT-only for `github.com` and `api.github.com`. If you want native GitHub git enforcement for another coding agent, remove `github.com` from `sidecar.interceptor.https_mitm.bypass_hosts`, add it to `sidecar.interceptor.https_mitm.intercept_hosts`, and use the GitHub mapping instead of the Copilot bypass mapping. Without MITM, the Sidecar cannot see `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, so it cannot classify `git push`, enforce branch/ref policy, or inject a git credential.
+The generated `firma.toml` keeps MITM enabled (the bypass list alone keeps `[sidecar.interceptor.https_mitm].enabled = true`) and lists `mappings/copilot.toml` under `[authority].mapping_rules_paths`.
+
+This profile is intentionally CONNECT-only for `github.com`, `api.github.com` and `uploads.github.com` — every other host it reaches is intercepted, as the Sidecar intercepts everything by default. If you want native GitHub git enforcement for another coding agent, remove `github.com` from `sidecar.interceptor.https_mitm.bypass_hosts` (no `intercept_hosts` entry is needed; removing the bypass is enough) and use the GitHub mapping instead of the Copilot bypass mapping. Without MITM, the Sidecar cannot see `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, so it cannot classify `git push`, enforce branch/ref policy, or inject a git credential.
 
 ## Step 2: Run Copilot
 

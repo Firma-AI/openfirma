@@ -6,6 +6,11 @@
 # ── Mini Authority ───────────────────────────────────────────────────────────
 
 [authority]
+mapping_rules_paths = [
+  "mapping-rules.toml",
+  "../../crates/firma-sidecar/config/mappings/github.toml",
+  "../../crates/firma-sidecar/config/mappings/gmail.toml",
+]
 listen_addr = "127.0.0.1:50051"
 policy_dir = "policies/"
 issuance_policy_dir = "issuance-policies/"
@@ -25,9 +30,13 @@ mode = "http_proxy"
 listen_addr = "127.0.0.1:7474"
 drain_timeout = "30s"
 
-# HTTPS MITM — intercept GitHub and Gmail so the sidecar can inspect L7 traffic.
-# The agent's LLM traffic (api.openai.com, api.anthropic.com) tunnels through
-# untouched; the LLM SDK does not need to trust the generated firma-ca.
+# Narrow the intercept-everything default so this example keeps a small, fixed
+# surface: only these three hosts are MITM'd and the sidecar can inspect their
+# L7 traffic. Listing `intercept_hosts` replaces the default, which is why the
+# agent's LLM traffic (api.openai.com, api.anthropic.com) tunnels through
+# untouched and its SDK does not have to trust the generated firma-ca. A
+# deployment that keeps the default intercepts those hosts too, so the SDK must
+# trust firma-ca there or the host belongs in `bypass_hosts`.
 [sidecar.interceptor.https_mitm]
 intercept_hosts = ["api.github.com", "gmail.googleapis.com", "pypi.org"]
 # Strict-MITM: the bare CONNECT is auto-authorized once the TLS preflight
@@ -39,20 +48,6 @@ dir = "."
 
 [sidecar.ca]
 dir = "examples/generic-agent/.runtime/generated-firma-ca"
-
-[sidecar.mapping]
-# Supplemental rules (CONNECT tunnels, package managers, localhost).
-rules_path = "mapping-rules.toml"
-# Shipped provider-specific rules merged on top.
-rules_paths = [
-  "../../crates/firma-sidecar/config/mappings/github.toml",
-  "../../crates/firma-sidecar/config/mappings/gmail.toml",
-]
-# Fail-closed: any host not covered by a mapping rule is DENIED.
-default_protected = true
-
-[sidecar.capability_validation]
-clock_skew_tolerance = "0s"
 
 [sidecar.connector]
 default_timeout = "2m" # covers LLM first-token latency

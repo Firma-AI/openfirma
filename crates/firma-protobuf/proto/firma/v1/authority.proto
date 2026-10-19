@@ -40,9 +40,15 @@ service AuthorityService {
   rpc GetApprovalOutcome(GetApprovalOutcomeRequest) returns (GetApprovalOutcomeResponse);
 
   // WatchPolicyBundle is a persistent server-streaming call. Immediately streams
-  // the current policy bundle on connect, then pushes incremental updates.
+  // a complete current policy bundle on connect, then complete replacements.
+  // Managed Authorities authenticate first, then require the client's
+  // ACTION_MAPPING_SNAPSHOT_V1 capability before starting the stream; missing
+  // support returns FAILED_PRECONDITION. Managed Sidecars require a valid mapping
+  // snapshot before readiness even if a legacy server accepts the subscription.
   // If this stream disconnects and the Sidecar's cached bundle TTL expires
   // (default 30s), the Sidecar enters fail-closed mode.
+  // Each update also names the policy set the bundle was composed from when the
+  // Authority models policy sets.
   rpc WatchPolicyBundle(WatchPolicyBundleRequest) returns (stream PolicyBundleUpdate);
 
   // WatchRevocations is a persistent server-streaming call that pushes
@@ -187,22 +193,60 @@ message DeniedApproval {}
 // exists.
 message ExpiredApproval {}
 
+// PolicyBundleCapability describes behavior supported by a bundle consumer.
+// Unknown numbers and UNSPECIFIED do not imply any recognized capability.
+enum PolicyBundleCapability {
+  POLICY_BUNDLE_CAPABILITY_UNSPECIFIED = 0;
+  // Supports format-1 complete mappings, validates/compiles every component
+  // before atomic activation, and enforces protected-by-default empty snapshots.
+  // Advertise only once that behavior is implemented, on every reconnect.
+  POLICY_BUNDLE_CAPABILITY_ACTION_MAPPING_SNAPSHOT_V1 = 1;
+}
+
 // WatchPolicyBundleRequest initiates a policy bundle subscription.
 message WatchPolicyBundleRequest {
-  // The sidecar's current bundle version (empty string on first connect).
-  // Authority uses this to determine whether to send a full bundle or
-  // incremental update.
+  // The sidecar's current bundle version (empty string on first connect),
+  // exactly as received in PolicyBundle.version. The serving Authority defines
+  // the format: the Team Authority issues canonical decimal numbers of at least 1,
+  // with no sign, padding, or leading zeros, and rejects any other form with
+  // INVALID_ARGUMENT; the OpenFirma mini-Authority issues SHA-256 hex digests.
+  // Advisory for reconciliation only: connect/reconnect still sends a complete
+  // initial snapshot even if the version matches; it cannot renew cache TTL alone.
   string current_version = 1;
   // Credentials authenticating the connecting Sidecar.
   SidecarCredentials credentials = 2;
+  // Explicit consumer support. Empty (including legacy omission), unspecified,
+  // and unknown-only lists lack mapping support. Managed Authorities require
+  // ACTION_MAPPING_SNAPSHOT_V1; an unrecognized value cannot substitute for it.
+  // Connected OpenFirma Sidecars, including mini-authority clients, advertise it.
+  repeated PolicyBundleCapability supported_capabilities = 3;
 }
 
-// PolicyBundleUpdate wraps a policy bundle push from Authority to Sidecar.
+// PolicyBundleUpdate is everything the Authority pushes to one agent's Sidecar:
+// the enforcement snapshot plus descriptive parts about it. New data for the
+// agent is added as new fields here (descriptive parts) or on PolicyBundle
+// (enforcement parts); the rpc and this envelope are never renamed.
 message PolicyBundleUpdate {
   // The updated policy bundle.
   PolicyBundle bundle = 1;
-  // Server timestamp of this update.
+  // When the payload content became current; keepalive resends repeat it. An
+  // Authority that records no publication time sends the send time.
   google.protobuf.Timestamp updated_at = 2;
+  // Policy set the bundle was composed from. Absent when the serving Authority
+  // does not model policy sets (the standalone OpenFirma Authority); never
+  // present with an empty policy_set_id. Informational: receivers must not
+  // derive enforcement decisions from it.
+  PolicySetDescriptor policy_set = 3;
+}
+
+// PolicySetDescriptor identifies the policy set a bundle was composed from.
+message PolicySetDescriptor {
+  // Policy set identity (pset_... TypeID).
+  string policy_set_id = 1;
+  // Version of the policy set the bundle was composed from. A separate
+  // sequence from PolicyBundle.version, which stays the only version a Sidecar
+  // reports in WatchPolicyBundleRequest.current_version.
+  uint64 policy_set_version = 2;
 }
 
 // WatchRevocationsRequest initiates a revocation event subscription.

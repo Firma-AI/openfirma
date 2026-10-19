@@ -175,6 +175,6 @@ mod tests {
         );
         assert!(headers.contains_key("x-firma-session-id"));
         assert!(headers.contains_key("x-firma-user"));
-        assert!(!headers["x-firma-user"].trim().is_empty());
+        assert_ne!(headers["x-firma-user"].trim(), "");
     }
 }

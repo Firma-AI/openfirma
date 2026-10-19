@@ -1,0 +1,37 @@
+[package]
+name = "firma-connection-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Local storage for the `firma login` connection and its optional secret"
+
+[lints]
+workspace = true
+
+[dependencies]
+dirs = { workspace = true }
+firma-identifiers = { workspace = true }
+fs2 = { workspace = true }
+getrandom = { workspace = true }
+keyring-core = { workspace = true }
+secrecy = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { workspace = true }

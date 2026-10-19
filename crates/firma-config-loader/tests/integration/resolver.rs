@@ -357,5 +357,5 @@ fn ceiling_is_inclusive_and_stops_walk() {
 #[test]
 fn ceiling_outside_start_yields_nothing() {
     let dirs = candidate_dirs(Path::new("/a/b"), Some(Path::new("/other")));
-    assert!(dirs.is_empty());
+    assert_eq!(dirs, [] as [std::path::PathBuf; 0]);
 }

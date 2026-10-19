@@ -1,5 +1,8 @@
 # Anthropic / Claude API mapping.
-# Tunnels through without MITM; the SDK does not need to trust firma-ca.
+# The Sidecar intercepts every host by default, so the SDK must trust
+# firma-ca. The CONNECT rules classify the tunnel preface; the REST
+# fallbacks below classify the decrypted requests. Move these hosts into
+# https_mitm.bypass_hosts to tunnel them uninspected instead.
 
 [[rules]]
 method = "CONNECT"

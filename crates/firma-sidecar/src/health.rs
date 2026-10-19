@@ -1,8 +1,8 @@
 //! Lightweight HTTP health-check server for readiness probes.
 //!
-//! Exposes a single `GET /healthz` endpoint that returns `200 OK` after the
-//! sidecar has emitted its ready signal. All other paths return
-//! `404 Not Found`.
+//! Exposes a single `GET /healthz` endpoint that returns `200 OK` while the
+//! sidecar is serving: Authority streams hydrated and the enforced policy
+//! bundle within its TTL. All other paths return `404 Not Found`.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -40,6 +40,8 @@ impl HealthcheckServer {
         ready: Arc<AtomicBool>,
     ) -> Result<Self, std::io::Error> {
         let listener = TcpListener::bind(addr).await?;
+        // Logs the bound address so a port-0 bind is discoverable.
+        tracing::info!(addr = %listener.local_addr()?, "health endpoint listening");
         Ok(Self {
             listener,
             cancel,

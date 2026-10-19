@@ -41,6 +41,9 @@ pub struct ServeArgs {
     /// Internal path for writing the one-shot startup report.
     #[arg(long, hide = true)]
     pub startup_report: Option<PathBuf>,
+    /// Internal path where the Sidecar publishes the bundle it enforces.
+    #[arg(long, hide = true)]
+    pub enforcement_state: Option<PathBuf>,
     /// Address the readiness / health-check HTTP endpoint binds to.
     #[clap(
         long,

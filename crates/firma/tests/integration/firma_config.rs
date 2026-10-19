@@ -16,7 +16,11 @@
 use std::path::Path;
 use std::process::Command;
 
+use firma_http::{Authority, Method};
 use firma_identifiers::AgentId;
+use firma_sidecar::config::MappingRulesFile;
+use firma_sidecar::enforcement::registry::ActionClassRegistry;
+use firma_sidecar::normalizer::{MappingTable, MatchResult};
 
 use super::CONFIG_FILE_NAME;
 
@@ -57,8 +61,151 @@ fn extract_dry_run_file(stdout: &[u8], file_name: &str) -> String {
     content[..end].to_string()
 }
 
+fn scaffold_mapping_table(
+    config_dir: &Path,
+) -> (firma_config_schema::sidecar::SidecarConfig, MappingTable) {
+    let config: toml::Value = toml::from_str(
+        &std::fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).expect("read config"),
+    )
+    .expect("parse config");
+    let sidecar: firma_config_schema::sidecar::SidecarConfig = config["sidecar"]
+        .clone()
+        .try_into()
+        .expect("parse Sidecar section");
+    let authority: firma_config_schema::authority::AuthorityConfig = config["authority"]
+        .clone()
+        .try_into()
+        .expect("parse Authority section");
+    let mut merged = MappingRulesFile { rules: Vec::new() };
+    for path in &authority.mapping_rules_paths {
+        let text = std::fs::read_to_string(config_dir.join(path)).expect("read selected mapping");
+        let file: MappingRulesFile = toml::from_str(&text).expect("parse selected mapping");
+        merged.rules.extend(file.rules);
+    }
+    let table = MappingTable::from_config(&merged, &ActionClassRegistry::v0_1())
+        .expect("build selected mapping table");
+    (sidecar, table)
+}
+
 #[test]
-fn composio_mapping_renders_exact_strict_mitm_hosts_without_bypass() {
+fn vscode_scaffold_classifies_decrypted_github_requests() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    let output = firma()
+        .args(["config", "--yes", "--profile", "vscode", "--output-dir"])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn firma config");
+    assert!(
+        output.status.success(),
+        "config failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (sidecar, table) = scaffold_mapping_table(&config_dir);
+    let mitm = &sidecar.interceptor.https_mitm;
+    let host = Authority::from_static("api.github.com");
+    assert!(mitm.enabled);
+    assert_eq!(mitm.intercept_hosts, ["*"]);
+    assert!(!mitm.bypass_hosts.contains(&host.to_string()));
+    assert!(matches!(
+        table.find_match(&Method::GET, &Authority::from_static("vscode.dev"), "/"),
+        MatchResult::Matched(_)
+    ));
+    assert!(matches!(
+        table.find_match(&Method::GET, &host, "/unknown-endpoint"),
+        MatchResult::UnclassifiedProtected
+    ));
+    match table.find_match(
+        &Method::GET,
+        &host,
+        "/repos/Firma-AI/firma-team/contents/README.md",
+    ) {
+        MatchResult::Matched(rule) => assert_eq!(rule.action_class, "code.read"),
+        other @ MatchResult::UnclassifiedProtected => {
+            panic!("VS Code's selected mappings must classify repository reads, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn copilot_scaffold_upgrade_keeps_intercepted_requests_classifiable() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(config_dir.join("mappings")).expect("create mappings dir");
+    std::fs::write(
+        config_dir.join(CONFIG_FILE_NAME),
+        format!(
+            r#"[run]
+profile = "copilot"
+[sidecar.authority]
+agent_id = "{REGISTERED_AGENT_ID}"
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.anthropic.com"]
+strict_hosts = ["api.anthropic.com"]
+bypass_hosts = ["github.com", "api.github.com", "uploads.github.com"]
+[authority]
+listen_addr = "127.0.0.1:50051"
+mapping_rules_paths = ["mapping-rules.toml", "mappings/copilot.toml"]
+"#
+        ),
+    )
+    .expect("write previous config");
+    std::fs::write(
+        config_dir.join("mappings/copilot.toml"),
+        r#"[[rules]]
+method = "CONNECT"
+host = "api.individual.githubcopilot.com"
+action_class = "communication.external.send"
+[[rules]]
+method = "CONNECT"
+host = "telemetry.individual.githubcopilot.com"
+action_class = "communication.external.send"
+[[rules]]
+method = "CONNECT"
+host = "api.github.com"
+action_class = "code.write"
+[[rules]]
+method = "CONNECT"
+host = "github.com"
+action_class = "code.write"
+[[rules]]
+method = "CONNECT"
+host = "uploads.github.com"
+action_class = "communication.external.send"
+"#,
+    )
+    .expect("write previous Copilot mapping");
+
+    run_init(&config_dir, &state_dir);
+
+    let (sidecar, table) = scaffold_mapping_table(&config_dir);
+    let mitm = &sidecar.interceptor.https_mitm;
+    let host = Authority::from_static("api.individual.githubcopilot.com");
+    assert!(mitm.enabled);
+    assert_eq!(mitm.intercept_hosts, ["*"]);
+    assert_eq!(mitm.strict_hosts, ["*"]);
+    assert!(!mitm.bypass_hosts.contains(&host.to_string()));
+    assert!(matches!(
+        table.find_match(&Method::CONNECT, &host, "/"),
+        MatchResult::Matched(_)
+    ));
+    match table.find_match(&Method::POST, &host, "/chat/completions") {
+        MatchResult::Matched(rule) => {
+            assert_eq!(rule.action_class, "communication.external.send");
+        }
+        other @ MatchResult::UnclassifiedProtected => {
+            panic!("upgrading the scaffold must preserve Copilot classification, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn composio_mapping_leaves_interception_to_the_sidecar_default() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     let state_dir = tmp.path().join("state");
@@ -85,33 +232,123 @@ fn composio_mapping_renders_exact_strict_mitm_hosts_without_bypass() {
 
     let rendered = extract_dry_run_file(&output.stdout, CONFIG_FILE_NAME);
     let config: toml::Value = toml::from_str(&rendered).expect("parse rendered firma.toml");
-    let https = &config["sidecar"]["interceptor"]["https_mitm"];
-    let intercepted: Vec<_> = https["intercept_hosts"]
-        .as_array()
-        .expect("intercept_hosts array")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect();
-    let strict: Vec<_> = https["strict_hosts"]
-        .as_array()
-        .expect("strict_hosts array")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect();
-    assert_eq!(
-        intercepted,
-        vec!["app.composio.dev", "backend.composio.dev"]
+    // The sidecar intercepts every host and fails closed by default, so the
+    // generated config pins no interception keys for the selected mapping.
+    assert!(
+        config["sidecar"]["interceptor"].get("https_mitm").is_none(),
+        "{rendered}"
     );
-    assert_eq!(strict, intercepted);
-    assert!(https.get("bypass_hosts").is_none());
     assert_eq!(
-        config["sidecar"]["mapping"]["rules_paths"][0].as_str(),
+        config["authority"]["mapping_rules_paths"][1].as_str(),
         Some("mappings/composio.toml")
     );
 
     let mapping = extract_dry_run_file(&output.stdout, "mappings/composio.toml");
     assert!(mapping.contains("/api/v3.1/tools/execute/*"));
     assert!(mapping.contains("/tool_router/v3/*/mcp"));
+}
+
+#[test]
+fn rerun_clears_stale_interception_keys_from_a_parent_inline_table() {
+    // A hand-written `interceptor = { ... }` inline table carries the same
+    // keys as the block form. The re-run normalizes an inline `https_mitm`
+    // table before dropping the managed interception keys, so it must do the
+    // same one level up — otherwise the pinned posture either survives the
+    // re-run or fails it entirely.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    run_init(&config_dir, &state_dir);
+    let path = config_dir.join(CONFIG_FILE_NAME);
+    let body = std::fs::read_to_string(&path).expect("read scaffolded config");
+    let patched = body.replacen(
+        "[sidecar]\n\n[sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:8080\"",
+        "[sidecar]\ninterceptor = { mode = \"http_proxy\", listen_addr = \"127.0.0.1:8080\", \
+         https_mitm = { enabled = false, intercept_hosts = [\"api.github.com\"] } }",
+        1,
+    );
+    assert_ne!(
+        patched, body,
+        "expected a scaffolded interceptor block to rewrite"
+    );
+    std::fs::write(&path, patched).expect("write parent-inline config");
+
+    run_init(&config_dir, &state_dir);
+    let rerun = std::fs::read_to_string(&path).expect("read re-run config");
+    let config: toml::Value = toml::from_str(&rerun).expect("parse re-run config");
+    assert_eq!(
+        config["sidecar"]["interceptor"]["mode"].as_str(),
+        Some("http_proxy"),
+        "{rerun}"
+    );
+    assert!(
+        config["sidecar"]["interceptor"].get("https_mitm").is_none(),
+        "stale inline interception keys must not survive a re-run: {rerun}"
+    );
+}
+
+#[test]
+fn rerun_does_not_duplicate_bypass_hosts_with_different_spelling() {
+    // Host matching lowercases, so an existing bypass entry that differs from
+    // a requested one only in spelling names the same host. Merging must not
+    // append a duplicate for it.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    let output = firma()
+        .args(["config", "--yes", "--mapping", "copilot", "--output-dir"])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn firma config");
+    assert!(
+        output.status.success(),
+        "config failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let path = config_dir.join(CONFIG_FILE_NAME);
+    let body = std::fs::read_to_string(&path).expect("read scaffolded config");
+    let patched = body.replacen("\"api.github.com\"", "\"API.GitHub.COM\"", 1);
+    assert_ne!(patched, body, "expected a copilot bypass entry to respell");
+    std::fs::write(&path, &patched).expect("write respelled config");
+
+    let output = firma()
+        .args(["config", "--yes", "--mapping", "copilot", "--output-dir"])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn firma config re-run");
+    assert!(
+        output.status.success(),
+        "re-run failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let rerun = std::fs::read_to_string(&path).expect("read re-run config");
+    let config: toml::Value = toml::from_str(&rerun).expect("parse re-run config");
+    let bypass: Vec<&str> = config["sidecar"]["interceptor"]["https_mitm"]["bypass_hosts"]
+        .as_array()
+        .expect("bypass_hosts array")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
+    let mut lowered: Vec<String> = bypass
+        .iter()
+        .map(|host| host.to_ascii_lowercase())
+        .collect();
+    lowered.sort();
+    lowered.dedup();
+    assert_eq!(
+        lowered,
+        vec!["api.github.com", "github.com", "uploads.github.com"],
+        "re-run must not duplicate a bypass host over spelling: {rerun}"
+    );
+    assert_eq!(bypass.len(), 3, "no duplicate entries: {rerun}");
 }
 
 #[test]
@@ -241,6 +478,35 @@ fn existing_config_without_agent_id_fails_without_mutation() {
     );
 }
 
+/// A removed `[sidecar.mapping]` table in a file that configures a local
+/// Authority fails `firma config` with guidance toward that Authority's
+/// mapping paths and leaves the file untouched.
+#[test]
+fn existing_legacy_sidecar_mapping_fails_without_mutation() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let path = config_dir.join(CONFIG_FILE_NAME);
+    let original = "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n\n[sidecar.mapping]\nrules_path = \"mapping-rules.toml\"\n\n[sidecar.authority]\nagent_id = \"agt_01j0000000e008000000000001\"\nurl = \"http://127.0.0.1:50051\"\n\n[run]\nprofile = \"codex\"\n";
+    std::fs::write(&path, original).expect("write legacy config");
+
+    let output = firma()
+        .args(["config", "--yes", "--mode", "agent-local", "--output-dir"])
+        .arg(&config_dir)
+        .output()
+        .expect("spawn firma config");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let config_path = path.display().to_string();
+    assert!(stderr.contains(&config_path), "{stderr}");
+    insta::assert_snapshot!(stderr.replace(&config_path, "[CONFIG]"), @"[ERR]  merge [CONFIG]: firma.toml: `[sidecar.mapping]` is no longer supported because the Authority owns mappings; delete it and list its files in `[authority].mapping_rules_paths`");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read config"),
+        original
+    );
+}
+
 #[test]
 fn explicit_agent_id_does_not_rewrite_invalid_existing_value() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -321,12 +587,23 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         "FIRMA_RUN_BWRAP_ROOTFS_MODE = \"readonly\"",
         "FIRMA_RUN_BWRAP_ROOTFS_MODE = \"readonly\"\nCUSTOM_WRAPPER_DEFAULT = \"kept\"",
     );
-    std::fs::write(
-        &firma_toml_path,
-        toml::to_string_pretty(&toml::from_str::<toml::Value>(&existing_firma_toml_text).unwrap())
-            .unwrap(),
-    )
-    .unwrap();
+    let mut existing: toml::Value = toml::from_str(&existing_firma_toml_text).unwrap();
+    existing["authority"]["mapping_rules_paths"] = toml::Value::Array(
+        [
+            "mappings/github.toml",
+            "mapping-rules.toml",
+            "custom/github.toml",
+            "other.toml",
+            "mappings/github.toml",
+            "mapping-rules.toml",
+            "./custom/github.toml",
+            "./mappings/github.toml",
+        ]
+        .into_iter()
+        .map(|path| toml::Value::String(path.into()))
+        .collect(),
+    );
+    std::fs::write(&firma_toml_path, toml::to_string_pretty(&existing).unwrap()).unwrap();
 
     let defaults = firma()
         .args(["config", "--yes", "--dry-run", "--output-dir"])
@@ -346,13 +623,18 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         Some("127.0.0.1:9555"),
     );
     assert_eq!(
-        value["sidecar"]["mapping"]["rules_paths"]
+        value["authority"]["mapping_rules_paths"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>(),
-        vec!["mappings/github.toml"],
+        vec![
+            "mapping-rules.toml",
+            "custom/github.toml",
+            "other.toml",
+            "mappings/github.toml"
+        ],
     );
     assert!(
         value["run"]["profiles"]["generic"]["mounts"]
@@ -395,13 +677,18 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         Some("127.0.0.1:9666"),
     );
     assert_eq!(
-        value["sidecar"]["mapping"]["rules_paths"]
+        value["authority"]["mapping_rules_paths"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>(),
-        vec!["mappings/openai.toml"],
+        vec![
+            "mapping-rules.toml",
+            "custom/github.toml",
+            "other.toml",
+            "mappings/openai.toml"
+        ],
     );
     assert!(
         value["run"]["profiles"]["generic"]["mounts"]
@@ -856,13 +1143,13 @@ fn scaffold_contains_standalone_sidecar_settings() {
         "scaffold must emit [sidecar.interceptor].listen_addr:\n{text}"
     );
 
-    // The authority public key path must be present for capability-seed
-    // verification.
+    // The authority public key is adopted from the state directory, where this
+    // same run generated it, so the scaffold must not name it.
     assert!(
-        value["sidecar"]["authority"]["public_key_path"]
-            .as_str()
-            .is_some(),
-        "scaffold must emit [sidecar.authority].public_key_path:\n{text}"
+        value["sidecar"]["authority"]
+            .get("public_key_path")
+            .is_none(),
+        "scaffold must not emit [sidecar.authority].public_key_path:\n{text}"
     );
 
     // No [sidecar.preflight] section must be emitted; that concept is removed.
@@ -872,8 +1159,66 @@ fn scaffold_contains_standalone_sidecar_settings() {
     );
 }
 
+/// Nothing in the generated file points at a custom state dir, so scaffolding
+/// into one without exporting `FIRMA_STATE_DIR` produces a config the processes
+/// cannot start from. Say so at scaffold time.
 #[test]
-fn init_state_paths_in_config_are_absolute() {
+fn a_non_default_state_dir_warns_about_firma_state_dir() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    let output = firma()
+        .args(["config", "--yes", "--output-dir"])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn firma config");
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FIRMA_STATE_DIR") && stderr.contains(&state_dir.display().to_string()),
+        "expected a state-dir warning naming the export, got: {stderr}"
+    );
+}
+
+/// The warning is about reaching a directory the processes will not resolve,
+/// not about the spelling of the flag. A relative `--state-dir` naming the very
+/// directory `FIRMA_STATE_DIR` already points at is the default, so scaffolding
+/// there must stay quiet.
+#[test]
+fn a_relative_state_dir_matching_the_default_stays_quiet() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let work = tmp.path();
+
+    // Both spellings name the same directory; only the flag reaches the
+    // warning unresolved. Keeping both relative also keeps the comparison off
+    // the host's path conventions, which differ per platform once a path is
+    // canonicalized.
+    let output = firma()
+        .args(["config", "--yes", "--output-dir"])
+        .arg(work.join("config"))
+        .args(["--state-dir", "state"])
+        .current_dir(work)
+        .env("FIRMA_STATE_DIR", "./state")
+        .output()
+        .expect("spawn firma config");
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("FIRMA_STATE_DIR"),
+        "expected no state-dir warning, got: {stderr}"
+    );
+}
+
+/// The generated config names no artifact path at all: every one of these has
+/// a default that resolves to the position this same run generated the material
+/// at. Writing them would pin the file to this machine.
+#[test]
+fn init_writes_no_artifact_paths() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     let state_dir = tmp.path().join("state");
@@ -883,21 +1228,30 @@ fn init_state_paths_in_config_are_absolute() {
     let text = std::fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).unwrap();
     let value: toml::Value = toml::from_str(&text).unwrap();
 
-    let key_file = value["authority"]["key_file"]
-        .as_str()
-        .expect("authority.key_file");
-    assert!(
-        Path::new(key_file).is_absolute(),
-        "authority.key_file must be absolute, got {key_file}"
-    );
-
-    let audit_path = value["sidecar"]["audit"]["file_path"]
-        .as_str()
-        .expect("sidecar.audit.file_path");
-    assert!(
-        Path::new(audit_path).is_absolute(),
-        "sidecar.audit.file_path must be absolute, got {audit_path}"
-    );
+    for (section, key) in [
+        (vec!["authority"], "key_file"),
+        (vec!["authority"], "revocation_file"),
+        (vec!["authority"], "tls_cert_path"),
+        (vec!["authority"], "tls_key_path"),
+        (vec!["sidecar", "ca"], "dir"),
+        (vec!["sidecar", "audit"], "file_path"),
+        (vec!["sidecar", "audit"], "signing_key_path"),
+        (vec!["sidecar", "authority"], "ca_cert_path"),
+        (vec!["sidecar", "authority"], "public_key_path"),
+    ] {
+        let mut node = Some(&value);
+        for part in &section {
+            node = node.and_then(|value| value.get(part));
+        }
+        let Some(node) = node else {
+            continue;
+        };
+        assert!(
+            node.get(key).is_none(),
+            "[{}].{key} must not be written:\n{text}",
+            section.join(".")
+        );
+    }
 }
 
 #[test]
@@ -1135,7 +1489,7 @@ fn init_writes_sensitive_dirs_with_mode_0700() {
 
 /// Every shipped posture, scaffolded via the real `firma config` binary, must
 /// pass the real `firma policy validate` binary — end-to-end through the CLI,
-/// not just the library validator. Regression guard for FIR-190.
+/// not just the library validator.
 #[test]
 fn scaffolded_postures_pass_cli_policy_validate() {
     for posture in ["strict", "dev", "dev-with-delete-watch"] {
@@ -1180,4 +1534,93 @@ fn scaffolded_postures_pass_cli_policy_validate() {
             );
         }
     }
+}
+
+/// The Authority is the only owner of mapping inputs, so a standalone
+/// Authority scaffold must publish the mappings the operator selected. Dropping
+/// them leaves every connected Sidecar denying that traffic as unclassified.
+#[test]
+fn authority_mode_publishes_selected_mappings() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "authority",
+            "--mapping",
+            "anthropic",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn authority-only firma config");
+    assert!(
+        output.status.success(),
+        "authority config failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let firma_toml = extract_dry_run_file(&output.stdout, CONFIG_FILE_NAME);
+    let value: toml::Value = toml::from_str(&firma_toml).unwrap();
+    let paths = value["authority"]["mapping_rules_paths"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing Authority mapping paths:\n{firma_toml}"));
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.as_str() == Some("mappings/anthropic.toml")),
+        "selected mapping is not published by the Authority:\n{firma_toml}"
+    );
+    let anthropic = extract_dry_run_file(&output.stdout, "mappings/anthropic.toml");
+    assert!(anthropic.contains("anthropic.com"), "{anthropic}");
+}
+
+/// Without a local Authority nothing publishes generated mapping rules, so a
+/// remote Sidecar scaffold must refuse inputs that only produce them instead of
+/// writing files no configuration reads.
+#[test]
+fn agent_remote_rejects_extra_hosts_that_only_a_local_authority_publishes() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
+            "--extra-hosts",
+            "api.example.test",
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--output-dir",
+        ])
+        .arg(tmp.path().join("config"))
+        .args(["--state-dir"])
+        .arg(tmp.path().join("state"))
+        .args(["--authority-ca-cert"])
+        .arg(tmp.path().join("remote-ca.crt"))
+        .args(["--authority-pub-key"])
+        .arg(tmp.path().join("remote-authority.pub"))
+        .output()
+        .expect("spawn remote firma config");
+
+    assert!(
+        !output.status.success(),
+        "remote scaffold accepted extra hosts"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--mapping and --extra-hosts are local Authority options"),
+        "{stderr}"
+    );
 }

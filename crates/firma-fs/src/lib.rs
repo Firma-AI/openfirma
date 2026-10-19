@@ -11,6 +11,8 @@
 //! - [`write_new_file`] is the create-once variant of [`write_file`]. Pair it
 //!   with [`FsError::kind`] when `std::io::ErrorKind::AlreadyExists` is a
 //!   non-fatal outcome.
+//! - [`normalize_absolute_path`] resolves `.` and `..` textually, for callers
+//!   comparing paths rather than opening them.
 //!
 //! The file helpers write only the target file. They do not create parent
 //! directories; provision those separately with [`create_private_dir_all`] or
@@ -21,7 +23,7 @@
 //! ignored where the platform does not expose them.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(not(unix))]
 mod not_unix;
@@ -138,4 +140,37 @@ pub fn write_file(path: &Path, bytes: &[u8], mode: u32) -> Result<(), FsError> {
 /// Returns [`FsError`] on any I/O failure.
 pub fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<(), FsError> {
     platform::write_new_file(path, bytes, mode)
+}
+
+/// Lexically remove `.` and `..` components from an absolute path without
+/// following filesystem links.
+///
+/// Textual on purpose, and the only helper here that touches no filesystem:
+/// callers compare paths that need not exist yet — a bind target the sandbox
+/// has not created, a project root being derived from a config location — and
+/// resolving symlinks would answer a different question than they are asking.
+/// Use [`std::fs::canonicalize`] when the identity of an existing file is what
+/// matters.
+///
+/// A leading `..` has nothing to pop and is dropped, so the result never
+/// escapes above the path's root.
+#[must_use]
+pub fn normalize_absolute_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if normalized
+                    .components()
+                    .next_back()
+                    .is_some_and(|part| matches!(part, Component::Normal(_)))
+                {
+                    normalized.pop();
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }

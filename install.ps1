@@ -3,6 +3,9 @@
     Install the firma CLI on Windows.
 
 .DESCRIPTION
+    Installs only firma.exe. Windows/WSL secret-shim mediation is unsupported,
+    so archive shim members are intentionally not installed.
+
     Usage:
         iwr -useb https://<host>/install.ps1 | iex
         iwr -useb https://<host>/install.ps1 | iex -- -NoInit
@@ -227,6 +230,7 @@ function Install-FirmaBinary ($TmpDir) {
     Invoke-Step "Move-Item $binarySrc -> $dest" {
         Move-Item -Force -Path $binarySrc -Destination $dest
     }
+
     Write-Info "installed: $dest"
 }
 

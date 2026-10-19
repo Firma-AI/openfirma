@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::NonZeroDuration;
+use firma_config_utils::NonZeroDuration;
 
 const DEFAULT_RETRY_AFTER: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_millis(500));

@@ -39,7 +39,7 @@ fn regex_missing_domain_is_rejected_atomically() {
 
     std::assert_matches!(&error, MatcherError::NoDomainMatched);
     insta::assert_snapshot!(error.to_string(), @"no domain matched");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn regex_empty_matches_are_rejected() {
 
     std::assert_matches!(&error, MatcherError::EmptyGroup("name"));
     insta::assert_snapshot!(error.to_string(), @"regex matches an empty capture group: `name`");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]

@@ -1,0 +1,1342 @@
+schema_version = 1
+observed_revision = "a737ed612b8f16019f1cf3e58012af6d512bba50"
+
+[observed_methods]
+accepted = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT"]
+parsed_but_unsupported = ["TRACE", "get", "YEET"]
+any_representation = "omitted"
+
+[observed_action_classes]
+expected_count = 52
+accepted_sentinels = [
+  "communication.external.read",
+  "calendar.read",
+  "document.write",
+]
+rejected = [
+  "",
+  " communication.external.read ",
+  "Communication.External.Read",
+  "unknown.action",
+]
+
+[catalog_summary]
+selectable_templates = 11
+source_rules = 306
+template_host_entries = 64
+distinct_normalized_host_patterns = 61
+excluded_templates = ["custom.toml"]
+
+[[parse_cases]]
+id = "parse-minimal-rule"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig"
+outcome = "accept"
+rule_count = 1
+document = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[parse_cases]]
+id = "parse-all-supported-methods"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::VALID_HTTP_METHODS"
+outcome = "accept"
+rule_count = 8
+document = '''
+[[rules]]
+method = "GET"
+host = "get.example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+method = "POST"
+host = "post.example.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "PUT"
+host = "put.example.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "DELETE"
+host = "delete.example.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "PATCH"
+host = "patch.example.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "HEAD"
+host = "head.example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+method = "OPTIONS"
+host = "options.example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+method = "CONNECT"
+host = "connect.example.com"
+action_class = "communication.external.send"
+'''
+
+[[parse_cases]]
+id = "parse-methods-rejected-by-validation"
+contract = "observed"
+source = "crates/firma-http/src/method.rs::Method::from_str"
+outcome = "accept"
+rule_count = 3
+document = '''
+[[rules]]
+method = "TRACE"
+host = "trace.example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+method = "get"
+host = "lower.example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+method = "YEET"
+host = "extension.example.com"
+action_class = "communication.external.read"
+'''
+
+[[parse_cases]]
+id = "parse-invalid-method-syntax"
+contract = "observed"
+source = "crates/firma-http/src/method.rs::Method::from_str"
+outcome = "reject"
+error_code = "invalid_method_syntax"
+document = '''
+[[rules]]
+method = "NOT A METHOD"
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[parse_cases]]
+id = "parse-missing-host"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig"
+outcome = "reject"
+error_code = "missing_field"
+document = '''
+[[rules]]
+action_class = "communication.external.read"
+'''
+
+[[parse_cases]]
+id = "parse-missing-action-class"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig"
+outcome = "reject"
+error_code = "missing_field"
+document = '''
+[[rules]]
+host = "example.com"
+'''
+
+[[parse_cases]]
+id = "parse-wrong-field-type"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig"
+outcome = "reject"
+error_code = "wrong_type"
+document = '''
+[[rules]]
+host = 42
+action_class = "communication.external.read"
+'''
+
+[[parse_cases]]
+id = "parse-wrong-path-type"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig"
+outcome = "reject"
+error_code = "wrong_type"
+document = '''
+[[rules]]
+host = "example.com"
+path = ["/v1/*"]
+action_class = "communication.external.read"
+'''
+
+[[parse_cases]]
+id = "parse-unknown-fields-ignored"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRulesFile"
+outcome = "accept"
+rule_count = 1
+document = '''
+future_top_level = true
+
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+future_rule_field = true
+'''
+
+[[parse_cases]]
+id = "parse-omitted-rules"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRulesFile"
+outcome = "accept"
+rule_count = 0
+document = ""
+
+[[parse_cases]]
+id = "parse-explicit-empty-rules"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRulesFile"
+outcome = "accept"
+rule_count = 0
+document = "rules = []"
+
+[[validation_cases]]
+id = "validate-empty-rules"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRulesFile::validate"
+outcome = "accept"
+document = "rules = []"
+
+[[validation_cases]]
+id = "validate-empty-host"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "reject"
+error_code = "empty_host"
+document = '''
+[[rules]]
+host = "   "
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-empty-normalized-host"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "reject"
+error_code = "empty_normalized_host"
+document = '''
+[[rules]]
+host = ":443"
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-implicit-bare-catch-all"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "reject"
+error_code = "implicit_catch_all"
+document = '''
+[[rules]]
+host = "*:443"
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-implicit-ported-catch-all"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "reject"
+error_code = "implicit_catch_all"
+document = '''
+[[rules]]
+host = "*.:8443"
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-explicit-catch-all"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "accept"
+document = '''
+[[rules]]
+host = "*"
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-explicit-ported-catch-all"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "accept"
+document = '''
+[[rules]]
+host = "*:8443"
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-empty-action-class"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "reject"
+error_code = "empty_action_class"
+document = '''
+[[rules]]
+host = "example.com"
+action_class = "   "
+'''
+
+[[validation_cases]]
+id = "validate-unsupported-method"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::VALID_HTTP_METHODS"
+outcome = "reject"
+error_code = "unsupported_method"
+document = '''
+[[rules]]
+method = "TRACE"
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-unknown-action-class"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+outcome = "reject"
+error_code = "unknown_action_class"
+document = '''
+[[rules]]
+host = "example.com"
+action_class = "unknown.action"
+'''
+
+[[validation_cases]]
+id = "validate-normalized-duplicate"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+outcome = "reject"
+error_code = "duplicate_tuple"
+document = '''
+[[rules]]
+method = "GET"
+host = "API.EXAMPLE.COM.:443"
+path = "/v1/*"
+action_class = "communication.external.read"
+
+[[rules]]
+method = "GET"
+host = "api.example.com"
+path = "/v1/*"
+action_class = "communication.external.send"
+'''
+
+[[validation_cases]]
+id = "validate-default-port-duplicate"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+outcome = "reject"
+error_code = "duplicate_tuple"
+document = '''
+[[rules]]
+host = "example.com:80"
+action_class = "communication.external.read"
+
+[[rules]]
+host = "example.com:443"
+action_class = "communication.external.send"
+'''
+
+[[validation_cases]]
+id = "validate-omitted-and-empty-path-duplicate"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+outcome = "reject"
+error_code = "duplicate_tuple"
+document = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+host = "example.com"
+path = ""
+action_class = "communication.external.send"
+'''
+
+[[validation_cases]]
+id = "validate-omitted-and-wildcard-path-distinct"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+outcome = "accept"
+document = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+host = "example.com"
+path = "*"
+action_class = "communication.external.send"
+'''
+
+[[validation_cases]]
+id = "validate-path-text-is-unrestricted"
+contract = "observed"
+source = "crates/firma-sidecar/src/config/enforcement.rs::MappingRuleConfig::validate"
+outcome = "accept"
+document = '''
+[[rules]]
+host = "empty-path.example.com"
+path = ""
+action_class = "communication.external.read"
+
+[[rules]]
+host = "wildcard-path.example.com"
+path = "*"
+action_class = "communication.external.read"
+
+[[rules]]
+host = "relative-path.example.com"
+path = "relative/*?query=value#fragment"
+action_class = "communication.external.read"
+'''
+
+[[validation_cases]]
+id = "validate-duplicate-precedes-unknown-class"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+outcome = "reject"
+error_code = "duplicate_tuple"
+document = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+host = "example.com"
+action_class = "unknown.action"
+'''
+
+[[host_normalization_cases]]
+id = "normalize-dns-case-whitespace-dot"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = " API.Example.COM. "
+output = "api.example.com"
+
+[[host_normalization_cases]]
+id = "normalize-dns-dot-before-port"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "api.example.com.:8443"
+output = "api.example.com:8443"
+
+[[host_normalization_cases]]
+id = "normalize-default-http-port"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "api.example.com:80"
+output = "api.example.com"
+
+[[host_normalization_cases]]
+id = "normalize-default-https-port"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "api.example.com:443."
+output = "api.example.com"
+
+[[host_normalization_cases]]
+id = "normalize-nonstandard-port"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "api.example.com:8443"
+output = "api.example.com:8443"
+
+[[host_normalization_cases]]
+id = "normalize-ipv4"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "127.0.0.1:8443"
+output = "127.0.0.1:8443"
+
+[[host_normalization_cases]]
+id = "normalize-ipv6-default-port"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "[FE80::1]:443"
+output = "[fe80::1]"
+
+[[host_normalization_cases]]
+id = "normalize-ipv6-nonstandard-port"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "[FE80::1]:8443"
+output = "[fe80::1]:8443"
+
+[[host_normalization_cases]]
+id = "normalize-nonnumeric-port-as-name"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_host_pattern"
+input = "example.com:https"
+output = "example.com:https"
+
+[[path_normalization_cases]]
+id = "normalize-root-path"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mod.rs::normalize_path"
+input = ""
+output = "/"
+
+[[path_normalization_cases]]
+id = "normalize-combined-path"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mod.rs::IntentNormalizer::normalize"
+input = "/v1//users/./old/../42/?token=secret#fragment"
+output = "/v1/users/42"
+
+[[path_normalization_cases]]
+id = "normalize-path-above-root"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mod.rs::normalize_path"
+input = "/../../v1"
+output = "/v1"
+
+[[path_normalization_cases]]
+id = "normalize-path-unicode-nfc"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mod.rs::normalize_path"
+input = "/café"
+output = "/café"
+
+[[glob_cases]]
+id = "glob-star-empty"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = "api*.example.com"
+candidate = "api.example.com"
+matches = true
+
+[[glob_cases]]
+id = "glob-star-crosses-host-labels"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = "*.example.com"
+candidate = "deep.api.example.com"
+matches = true
+
+[[glob_cases]]
+id = "glob-subdomain-pattern-excludes-apex"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = "*.example.com"
+candidate = "example.com"
+matches = false
+
+[[glob_cases]]
+id = "glob-star-crosses-path-segments"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = "/v1/*/messages"
+candidate = "/v1/accounts/42/messages"
+matches = true
+
+[[glob_cases]]
+id = "glob-mid-label"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = "copilot-reports-*.b01.azurefd.net"
+candidate = "copilot-reports-team.b01.azurefd.net"
+matches = true
+
+[[glob_cases]]
+id = "glob-question-mark-is-literal"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = "api?.example.com"
+candidate = "api1.example.com"
+matches = false
+
+[[glob_cases]]
+id = "glob-brackets-are-literal"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = "[ab].example.com"
+candidate = "a.example.com"
+matches = false
+
+[[glob_cases]]
+id = "glob-backslash-does-not-escape-star"
+contract = "observed"
+source = "crates/firma-secret-provider/src/glob.rs::glob_match"
+pattern = 'api\*.example.com'
+candidate = 'api\service.example.com'
+matches = true
+
+[[match_cases]]
+id = "match-exact-normalized-request"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mod.rs::IntentNormalizer::normalize"
+target = "intent_normalizer"
+request_method = "GET"
+request_authority = "EXAMPLE.COM:443"
+request_path = "/v1//messages/?token=secret"
+is_https = true
+result = "matched"
+action_class = "communication.external.read"
+normalized_authority = "example.com"
+dispatch_authority = "example.com"
+normalized_path = "/v1/messages"
+rules_toml = '''
+[[rules]]
+method = "GET"
+host = "example.com"
+path = "/v1/*"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-omitted-method"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::rule_matches"
+target = "mapping_table"
+request_method = "POST"
+request_authority = "example.com"
+request_path = "/anything"
+is_https = true
+result = "matched"
+action_class = "communication.external.read"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-runtime-extension-method-through-any-rule"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::rule_matches"
+target = "mapping_table"
+request_method = "TRACE"
+request_authority = "example.com"
+request_path = "/anything"
+is_https = true
+result = "matched"
+action_class = "communication.external.read"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-runtime-extension-method-denied-by-normalizer"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mod.rs::IntentNormalizer::normalize"
+target = "intent_normalizer"
+request_method = "TRACE"
+request_authority = "example.com"
+request_path = "/anything"
+is_https = true
+result = "normalization_denied"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-specified-method-mismatch"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::rule_matches"
+target = "mapping_table"
+request_method = "POST"
+request_authority = "example.com"
+request_path = "/"
+is_https = true
+result = "unclassified_protected"
+rules_toml = '''
+[[rules]]
+method = "GET"
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-bare-catch-all"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::rule_matches"
+target = "mapping_table"
+request_method = "GET"
+request_authority = "unlisted.example"
+request_path = "/"
+is_https = true
+result = "matched"
+action_class = "communication.external.read"
+rules_toml = '''
+[[rules]]
+host = "*"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-empty-path-pattern-matches-no-normalized-path"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mod.rs::IntentNormalizer::normalize"
+target = "intent_normalizer"
+request_method = "GET"
+request_authority = "example.com"
+request_path = ""
+is_https = true
+result = "unclassified_protected"
+normalized_path = "/"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+path = ""
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-authored-rule-path-is-not-normalized"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+target = "intent_normalizer"
+request_method = "GET"
+request_authority = "example.com"
+request_path = "/v1//messages/"
+is_https = true
+result = "unclassified_protected"
+normalized_path = "/v1/messages"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+path = "/v1//messages/"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-wildcard-host-and-path"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::rule_matches"
+target = "mapping_table"
+request_method = "GET"
+request_authority = "deep.api.example.com"
+request_path = "/v1/accounts/42/messages"
+is_https = true
+result = "matched"
+action_class = "communication.external.read"
+rules_toml = '''
+[[rules]]
+method = "GET"
+host = "*.example.com"
+path = "/v1/*/messages"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-nonstandard-port"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::rule_matches"
+target = "mapping_table"
+request_method = "GET"
+request_authority = "example.com:8443"
+request_path = "/"
+is_https = true
+result = "matched"
+action_class = "communication.external.read"
+rules_toml = '''
+[[rules]]
+host = "example.com:8443"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-opposite-scheme-port-preserved-for-dispatch"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::normalize_dispatch_host"
+target = "intent_normalizer"
+request_method = "GET"
+request_authority = "example.com:443"
+request_path = "/"
+is_https = false
+result = "matched"
+action_class = "communication.external.read"
+normalized_authority = "example.com"
+dispatch_authority = "example.com:443"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-ipv6-default-port"
+contract = "observed"
+source = "crates/firma-sidecar/tests/integration/mapping_rules.rs::ipv6_rule_host_ports_mirror_runtime_normalization"
+target = "intent_normalizer"
+request_method = "GET"
+request_authority = "[::1]:443"
+request_path = "/"
+is_https = true
+result = "matched"
+action_class = "communication.external.read"
+normalized_authority = "[::1]"
+rules_toml = '''
+[[rules]]
+host = "[::1]"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-unclassified-protected"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::find_match"
+target = "mapping_table"
+request_method = "GET"
+request_authority = "other.example.com"
+request_path = "/"
+is_https = true
+result = "unclassified_protected"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+'''
+
+[[match_cases]]
+id = "match-listed-host-wrong-path-unclassified"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::find_match"
+target = "mapping_table"
+request_method = "GET"
+request_authority = "example.com"
+request_path = "/other"
+is_https = true
+result = "unclassified_protected"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+path = "/expected"
+action_class = "communication.external.read"
+'''
+
+[[precedence_cases]]
+id = "precedence-specific-rule"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingRule::compute_specificity"
+request_method = "GET"
+request_authority = "api.example.com"
+request_path = "/v1/messages"
+winning_action_class = "communication.external.read"
+rules_toml = '''
+[[rules]]
+host = "*.example.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "GET"
+host = "api.example.com"
+path = "/v1/messages"
+action_class = "communication.external.read"
+'''
+
+[[precedence_cases]]
+id = "precedence-wildcard-path-over-omitted-path"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingRule::compute_specificity"
+request_method = "GET"
+request_authority = "example.com"
+request_path = "/anything"
+winning_action_class = "communication.external.send"
+rules_toml = '''
+[[rules]]
+host = "example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+host = "example.com"
+path = "*"
+action_class = "communication.external.send"
+'''
+
+[[precedence_cases]]
+id = "precedence-authored-order-breaks-tie"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingTable::from_config"
+request_method = "GET"
+request_authority = "api.example.com"
+request_path = "/v1/messages"
+winning_action_class = "communication.external.read"
+rules_toml = '''
+[[rules]]
+host = "*.example.com"
+path = "/v1/*"
+action_class = "communication.external.read"
+
+[[rules]]
+host = "api.*.com"
+path = "/v1/*"
+action_class = "communication.external.send"
+'''
+
+[[precedence_cases]]
+id = "precedence-additive-score-not-lexicographic"
+contract = "observed"
+source = "crates/firma-sidecar/src/normalizer/mapping.rs::MappingRule::compute_specificity"
+request_method = "GET"
+request_authority = "api.example.com"
+request_path = "/s01/s02/s03/s04/s05/s06/s07/s08/s09/s10/s11/s12/s13/s14/s15/s16/s17/s18/s19/s20/s21/s22/s23/s24/s25/s26/s27/s28/s29/s30/s31/s32/s33/s34/s35/s36/s37/s38/s39/s40/s41/s42/s43/s44/s45/s46/s47/s48/s49/s50/s51/s52/s53/s54/s55/s56/s57/s58/s59/s60/s61/s62/s63/s64/s65/s66/s67/s68/s69/s70/s71/s72/s73/s74/s75/s76"
+winning_action_class = "communication.external.send"
+rules_toml = '''
+[[rules]]
+host = "api.example.com"
+action_class = "communication.external.read"
+
+[[rules]]
+method = "GET"
+host = "*.example.com"
+path = "/s01/s02/s03/s04/s05/s06/s07/s08/s09/s10/s11/s12/s13/s14/s15/s16/s17/s18/s19/s20/s21/s22/s23/s24/s25/s26/s27/s28/s29/s30/s31/s32/s33/s34/s35/s36/s37/s38/s39/s40/s41/s42/s43/s44/s45/s46/s47/s48/s49/s50/s51/s52/s53/s54/s55/s56/s57/s58/s59/s60/s61/s62/s63/s64/s65/s66/s67/s68/s69/s70/s71/s72/s73/s74/s75/s76"
+action_class = "communication.external.send"
+'''
+
+[[decomposition_cases]]
+id = "decompose-base-dns-host"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "example.com"
+owner_host = "example.com"
+outcome = "accept"
+normalized_full_host = "example.com"
+normalized_owner_host = "example.com"
+subdomain = ""
+recomposed_host = "example.com"
+
+[[decomposition_cases]]
+id = "decompose-exact-subdomain"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "API.Example.COM.:443"
+owner_host = "example.com"
+outcome = "accept"
+normalized_full_host = "api.example.com"
+normalized_owner_host = "example.com"
+subdomain = "api"
+recomposed_host = "api.example.com"
+
+[[decomposition_cases]]
+id = "decompose-deep-subdomain"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "api.dev.example.com"
+owner_host = "example.com"
+outcome = "accept"
+normalized_full_host = "api.dev.example.com"
+normalized_owner_host = "example.com"
+subdomain = "api.dev"
+recomposed_host = "api.dev.example.com"
+
+[[decomposition_cases]]
+id = "decompose-leading-wildcard"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "*.example.com"
+owner_host = "example.com"
+outcome = "accept"
+normalized_full_host = "*.example.com"
+normalized_owner_host = "example.com"
+subdomain = "*"
+recomposed_host = "*.example.com"
+
+[[decomposition_cases]]
+id = "decompose-embedded-wildcard"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "api.*.example.com"
+owner_host = "example.com"
+outcome = "accept"
+normalized_full_host = "api.*.example.com"
+normalized_owner_host = "example.com"
+subdomain = "api.*"
+recomposed_host = "api.*.example.com"
+
+[[decomposition_cases]]
+id = "decompose-mid-label-wildcard"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "copilot-reports-*.b01.azurefd.net"
+owner_host = "b01.azurefd.net"
+outcome = "accept"
+normalized_full_host = "copilot-reports-*.b01.azurefd.net"
+normalized_owner_host = "b01.azurefd.net"
+subdomain = "copilot-reports-*"
+recomposed_host = "copilot-reports-*.b01.azurefd.net"
+
+[[decomposition_cases]]
+id = "decompose-nonstandard-port"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "api.example.com:8443"
+owner_host = "example.com:8443"
+outcome = "accept"
+normalized_full_host = "api.example.com:8443"
+normalized_owner_host = "example.com:8443"
+subdomain = "api"
+recomposed_host = "api.example.com:8443"
+
+[[decomposition_cases]]
+id = "decompose-ipv4-root"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "127.0.0.1:8443"
+owner_host = "127.0.0.1:8443"
+outcome = "accept"
+normalized_full_host = "127.0.0.1:8443"
+normalized_owner_host = "127.0.0.1:8443"
+subdomain = ""
+recomposed_host = "127.0.0.1:8443"
+
+[[decomposition_cases]]
+id = "decompose-ipv6-root"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "[FE80::1]:8443"
+owner_host = "[fe80::1]:8443"
+outcome = "accept"
+normalized_full_host = "[fe80::1]:8443"
+normalized_owner_host = "[fe80::1]:8443"
+subdomain = ""
+recomposed_host = "[fe80::1]:8443"
+
+[[decomposition_cases]]
+id = "decompose-catch-all-root"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "*"
+owner_host = "*"
+outcome = "accept"
+normalized_full_host = "*"
+normalized_owner_host = "*"
+subdomain = ""
+recomposed_host = "*"
+
+[[decomposition_cases]]
+id = "decompose-owner-not-suffix"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "api.example.com"
+owner_host = "other.example"
+subdomain = "api"
+outcome = "reject"
+error_code = "owner_not_suffix"
+
+[[decomposition_cases]]
+id = "decompose-leading-dot-subdomain"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "api.example.com"
+owner_host = "example.com"
+subdomain = ".api"
+outcome = "reject"
+error_code = "invalid_relative_subdomain"
+
+[[decomposition_cases]]
+id = "decompose-trailing-dot-subdomain"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "api.example.com"
+owner_host = "example.com"
+subdomain = "api."
+outcome = "reject"
+error_code = "invalid_relative_subdomain"
+
+[[decomposition_cases]]
+id = "decompose-owner-requires-label-boundary"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "notexample.com"
+owner_host = "example.com"
+subdomain = "not"
+outcome = "reject"
+error_code = "owner_not_suffix"
+
+[[decomposition_cases]]
+id = "decompose-owner-port-must-match"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "api.example.com:8443"
+owner_host = "example.com:9443"
+subdomain = "api"
+outcome = "reject"
+error_code = "owner_port_mismatch"
+
+[[decomposition_cases]]
+id = "decompose-ipv4-rejects-subdomain"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "127.0.0.1:8443"
+owner_host = "127.0.0.1:8443"
+subdomain = "api"
+outcome = "reject"
+error_code = "non_dns_owner_requires_empty_subdomain"
+
+[[decomposition_cases]]
+id = "decompose-ipv6-rejects-subdomain"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "[::1]:8443"
+owner_host = "[::1]:8443"
+subdomain = "api"
+outcome = "reject"
+error_code = "non_dns_owner_requires_empty_subdomain"
+
+[[decomposition_cases]]
+id = "decompose-catch-all-rejects-subdomain"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Decomposition Cases"
+full_host = "*"
+owner_host = "*"
+subdomain = "api"
+outcome = "reject"
+error_code = "non_dns_owner_requires_empty_subdomain"
+
+[[overlap_cases]]
+id = "overlap-identical"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "example.com"
+right = "EXAMPLE.COM.:443"
+overlaps = true
+
+[[overlap_cases]]
+id = "overlap-wildcard-with-covered-host"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "*.example.com"
+right = "api.example.com"
+overlaps = true
+
+[[overlap_cases]]
+id = "overlap-wildcard-excludes-apex"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "*.example.com"
+right = "example.com"
+overlaps = false
+
+[[overlap_cases]]
+id = "overlap-catch-all"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "*"
+right = "api.example.com"
+overlaps = true
+
+[[overlap_cases]]
+id = "overlap-disjoint-hosts"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "*.example.com"
+right = "api.example.org"
+overlaps = false
+
+[[overlap_cases]]
+id = "overlap-wildcard-patterns-intersect"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "api*.example.com"
+right = "*prod.example.com"
+overlaps = true
+
+[[overlap_cases]]
+id = "overlap-mid-label-wildcard"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "copilot-reports-*.b01.azurefd.net"
+right = "copilot-reports-team.b01.azurefd.net"
+overlaps = true
+
+[[overlap_cases]]
+id = "overlap-embedded-label-wildcard-excludes-apex"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "api.*.example.com"
+right = "api.example.com"
+overlaps = false
+
+[[overlap_cases]]
+id = "overlap-default-ports-normalize"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "example.com:80"
+right = "EXAMPLE.COM.:443"
+overlaps = true
+
+[[overlap_cases]]
+id = "overlap-nonstandard-ports-are-disjoint"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "example.com:8443"
+right = "example.com:9443"
+overlaps = false
+
+[[overlap_cases]]
+id = "overlap-ipv4-default-port"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "127.0.0.1"
+right = "127.0.0.1:443"
+overlaps = true
+
+[[overlap_cases]]
+id = "overlap-ipv6-default-port"
+contract = "agreed"
+source = "compatibility/mapping/README.md::Overlap Cases"
+left = "[::1]"
+right = "[::1]:80"
+overlaps = true
+
+[[catalogs]]
+selection = "anthropic"
+source = "crates/firma/templates/mappings/anthropic.toml"
+rule_count = 6
+hosts = [
+  { pattern = "*.anthropic.com", owner_host = "anthropic.com", subdomain = "*", rule_count = 2 },
+  { pattern = "*.claude.com", owner_host = "claude.com", subdomain = "*", rule_count = 2 },
+  { pattern = "*.claude.ai", owner_host = "claude.ai", subdomain = "*", rule_count = 2 },
+]
+
+[[catalogs]]
+selection = "cargo"
+source = "crates/firma/templates/mappings/cargo-registry.toml"
+rule_count = 4
+hosts = [
+  { pattern = "crates.io", owner_host = "crates.io", subdomain = "", rule_count = 2 },
+  { pattern = "static.crates.io", owner_host = "crates.io", subdomain = "static", rule_count = 2 },
+]
+
+[[catalogs]]
+selection = "copilot"
+source = "crates/firma/templates/mappings/copilot.toml"
+rule_count = 7
+hosts = [
+  { pattern = "api.individual.githubcopilot.com", owner_host = "githubcopilot.com", subdomain = "api.individual", rule_count = 2 },
+  { pattern = "telemetry.individual.githubcopilot.com", owner_host = "githubcopilot.com", subdomain = "telemetry.individual", rule_count = 2 },
+  { pattern = "api.github.com", owner_host = "github.com", subdomain = "api", rule_count = 1 },
+  { pattern = "github.com", owner_host = "github.com", subdomain = "", rule_count = 1 },
+  { pattern = "uploads.github.com", owner_host = "github.com", subdomain = "uploads", rule_count = 1 },
+]
+
+[[catalogs]]
+selection = "composio"
+source = "crates/firma/templates/mappings/composio.toml"
+rule_count = 12
+hosts = [
+  { pattern = "app.composio.dev", owner_host = "composio.dev", subdomain = "app", rule_count = 3 },
+  { pattern = "backend.composio.dev", owner_host = "composio.dev", subdomain = "backend", rule_count = 9 },
+]
+
+[[catalogs]]
+selection = "github"
+source = "crates/firma/templates/mappings/github.toml"
+rule_count = 54
+hosts = [
+  { pattern = "api.github.com", owner_host = "github.com", subdomain = "api", rule_count = 47 },
+  { pattern = "github.com", owner_host = "github.com", subdomain = "", rule_count = 7 },
+]
+
+[[catalogs]]
+selection = "gmail"
+source = "crates/firma/templates/mappings/gmail.toml"
+rule_count = 42
+hosts = [
+  { pattern = "gmail.googleapis.com", owner_host = "googleapis.com", subdomain = "gmail", rule_count = 42 },
+]
+
+[[catalogs]]
+selection = "npm"
+source = "crates/firma/templates/mappings/npm.toml"
+rule_count = 2
+hosts = [
+  { pattern = "registry.npmjs.org", owner_host = "npmjs.org", subdomain = "registry", rule_count = 2 },
+]
+
+[[catalogs]]
+selection = "openai"
+source = "crates/firma/templates/mappings/openai.toml"
+rule_count = 6
+hosts = [
+  { pattern = "*.openai.com", owner_host = "openai.com", subdomain = "*", rule_count = 2 },
+  { pattern = "chatgpt.com", owner_host = "chatgpt.com", subdomain = "", rule_count = 2 },
+  { pattern = "*.chatgpt.com", owner_host = "chatgpt.com", subdomain = "*", rule_count = 2 },
+]
+
+[[catalogs]]
+selection = "pypi"
+source = "crates/firma/templates/mappings/pypi.toml"
+rule_count = 4
+hosts = [
+  { pattern = "pypi.org", owner_host = "pypi.org", subdomain = "", rule_count = 2 },
+  { pattern = "files.pythonhosted.org", owner_host = "pythonhosted.org", subdomain = "files", rule_count = 2 },
+]
+
+[[catalogs]]
+selection = "stripe"
+source = "crates/firma/templates/mappings/stripe.toml"
+rule_count = 89
+hosts = [
+  { pattern = "api.stripe.com", owner_host = "stripe.com", subdomain = "api", rule_count = 89 },
+]
+
+[[catalogs]]
+selection = "vscode"
+source = "crates/firma/templates/mappings/vscode.toml"
+rule_count = 80
+hosts = [
+  { pattern = "update.code.visualstudio.com", owner_host = "visualstudio.com", subdomain = "update.code", rule_count = 2 },
+  { pattern = "code.visualstudio.com", owner_host = "visualstudio.com", subdomain = "code", rule_count = 2 },
+  { pattern = "*.code.visualstudio.com", owner_host = "visualstudio.com", subdomain = "*.code", rule_count = 2 },
+  { pattern = "vscode.dev", owner_host = "vscode.dev", subdomain = "", rule_count = 2 },
+  { pattern = "*.vscode.dev", owner_host = "vscode.dev", subdomain = "*", rule_count = 2 },
+  { pattern = "az764295.vo.msecnd.net", owner_host = "msecnd.net", subdomain = "az764295.vo", rule_count = 2 },
+  { pattern = "vscodeexperiments.azureedge.net", owner_host = "azureedge.net", subdomain = "vscodeexperiments", rule_count = 2 },
+  { pattern = "default.exp-tas.com", owner_host = "exp-tas.com", subdomain = "default", rule_count = 2 },
+  { pattern = "marketplace.visualstudio.com", owner_host = "visualstudio.com", subdomain = "marketplace", rule_count = 2 },
+  { pattern = "*.gallerycdn.vsassets.io", owner_host = "vsassets.io", subdomain = "*.gallerycdn", rule_count = 2 },
+  { pattern = "*.gallery.vsassets.io", owner_host = "vsassets.io", subdomain = "*.gallery", rule_count = 2 },
+  { pattern = "*.vscode-unpkg.net", owner_host = "vscode-unpkg.net", subdomain = "*", rule_count = 2 },
+  { pattern = "*.vscode-cdn.net", owner_host = "vscode-cdn.net", subdomain = "*", rule_count = 2 },
+  { pattern = "vscode-sync.trafficmanager.net", owner_host = "trafficmanager.net", subdomain = "vscode-sync", rule_count = 2 },
+  { pattern = "*.vscode-sync.trafficmanager.net", owner_host = "trafficmanager.net", subdomain = "*.vscode-sync", rule_count = 2 },
+  { pattern = "login.microsoftonline.com", owner_host = "microsoftonline.com", subdomain = "login", rule_count = 2 },
+  { pattern = "login.live.com", owner_host = "live.com", subdomain = "login", rule_count = 2 },
+  { pattern = "*.microsoft.com", owner_host = "microsoft.com", subdomain = "*", rule_count = 2 },
+  { pattern = "*.msauth.net", owner_host = "msauth.net", subdomain = "*", rule_count = 2 },
+  { pattern = "*.msftauth.net", owner_host = "msftauth.net", subdomain = "*", rule_count = 2 },
+  { pattern = "*.github.com", owner_host = "github.com", subdomain = "*", rule_count = 1 },
+  { pattern = "collector.github.com", owner_host = "github.com", subdomain = "collector", rule_count = 1 },
+  { pattern = "copilot-reports.github.com", owner_host = "github.com", subdomain = "copilot-reports", rule_count = 1 },
+  { pattern = "uploads.github.com", owner_host = "github.com", subdomain = "uploads", rule_count = 1 },
+  { pattern = "*.githubusercontent.com", owner_host = "githubusercontent.com", subdomain = "*", rule_count = 2 },
+  { pattern = "*.ghe.com", owner_host = "ghe.com", subdomain = "*", rule_count = 2 },
+  { pattern = "*.githubcopilot.com", owner_host = "githubcopilot.com", subdomain = "*", rule_count = 2 },
+  { pattern = "*.individual.githubcopilot.com", owner_host = "githubcopilot.com", subdomain = "*.individual", rule_count = 2 },
+  { pattern = "*.business.githubcopilot.com", owner_host = "githubcopilot.com", subdomain = "*.business", rule_count = 2 },
+  { pattern = "*.enterprise.githubcopilot.com", owner_host = "githubcopilot.com", subdomain = "*.enterprise", rule_count = 2 },
+  { pattern = "copilot-reports-*.b01.azurefd.net", owner_host = "b01.azurefd.net", subdomain = "copilot-reports-*", rule_count = 2 },
+  { pattern = "usagereports*.blob.core.windows.net", owner_host = "blob.core.windows.net", subdomain = "usagereports*", rule_count = 2 },
+  { pattern = "ai.azure.com", owner_host = "azure.com", subdomain = "ai", rule_count = 2 },
+  { pattern = "api.catalog.azureml.ms", owner_host = "azureml.ms", subdomain = "api.catalog", rule_count = 2 },
+  { pattern = "*.api.azureml.ms", owner_host = "azureml.ms", subdomain = "*.api", rule_count = 2 },
+  { pattern = "amlwlrt4*.blob.core.windows.net", owner_host = "blob.core.windows.net", subdomain = "amlwlrt4*", rule_count = 2 },
+  { pattern = "accounts.google.com", owner_host = "google.com", subdomain = "accounts", rule_count = 2 },
+  { pattern = "*.gstatic.com", owner_host = "gstatic.com", subdomain = "*", rule_count = 2 },
+  { pattern = "*.googleusercontent.com", owner_host = "googleusercontent.com", subdomain = "*", rule_count = 2 },
+  { pattern = "appleid.apple.com", owner_host = "apple.com", subdomain = "appleid", rule_count = 2 },
+  { pattern = "idmsa.apple.com", owner_host = "apple.com", subdomain = "idmsa", rule_count = 2 },
+  { pattern = "*.cdn-apple.com", owner_host = "cdn-apple.com", subdomain = "*", rule_count = 2 },
+]

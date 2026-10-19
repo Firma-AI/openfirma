@@ -13,7 +13,7 @@ const VSCODE_MAPPING: &str = include_str!("../../templates/mappings/vscode.toml"
 fn vscode_mapping_classifies_copilot_chat_connect() {
     let file: MappingRulesFile =
         toml::from_str(VSCODE_MAPPING).unwrap_or_else(|e| panic!("vscode mapping must parse: {e}"));
-    let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true)
+    let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1())
         .unwrap_or_else(|e| panic!("vscode mapping must build a table: {e}"));
 
     match table.find_match(
@@ -24,6 +24,8 @@ fn vscode_mapping_classifies_copilot_chat_connect() {
         MatchResult::Matched(rule) => {
             assert_eq!(rule.action_class, "communication.external.send");
         }
-        other => panic!("expected Copilot chat host to match a rule, got {other:?}"),
+        other @ MatchResult::UnclassifiedProtected => {
+            panic!("expected Copilot chat host to match a rule, got {other:?}")
+        }
     }
 }

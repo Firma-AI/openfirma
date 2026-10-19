@@ -26,8 +26,8 @@ pub struct RunArgs {
     #[arg(long)]
     pub backend: Option<BackendOverride>,
 
-    /// Path to a capability-token file made available to the agent for
-    /// runtime lease refresh.
+    /// Path to canonical signed capability seed TOML. Run exports its raw token
+    /// and the original path to the wrapped process.
     #[arg(long)]
     pub capability_file: Option<PathBuf>,
 
@@ -88,14 +88,7 @@ pub struct RunArgs {
     #[arg(long, default_value_t = false)]
     pub allow_non_structural: bool,
 
-    /// Start the sidecar in monitor mode: every call is allowed through and
-    /// audit records carry the original deny reason prefixed with
-    /// `monitor_mode:`. Equivalent to `mode = "monitor"` in firma.toml but
-    /// scoped to this run only. Never use in production.
-    #[arg(long, default_value_t = false)]
-    pub monitor: bool,
-
-    /// Wrapped command and args (pass after `--`).
+    /// Wrapped command and args (use `--` to separate child options).
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
     pub command: Vec<String>,
 }

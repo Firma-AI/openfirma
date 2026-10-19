@@ -26,7 +26,7 @@ pub mod log_contract;
 pub mod pipeline;
 
 pub use self::audit::{load_audit_event_builder, spawn_audit_sink};
-pub use self::authority::spawn_authority_client;
+pub use self::authority::{spawn_authority_client, spawn_authority_client_publishing};
 pub use self::capability::{CapabilityReloader, build_token_verifier, load_capability_map};
 pub use self::connector::build_connector_registry;
 pub use self::interceptor::{
@@ -34,8 +34,8 @@ pub use self::interceptor::{
 };
 pub use self::local_exec::spawn_local_exec_endpoint;
 pub use self::log_contract::{
-    StartupReport, compute_policy_bundle_version, log_pre_ready_sequence, log_ready_line,
+    StartupReport, log_authority_hydrated, log_pre_ready_sequence, log_ready_line,
 };
 pub use self::pipeline::{
-    PipelineRuntime, build_pipeline_runtime, mapping_references_composio_hosts,
+    PipelineRuntime, build_pipeline_runtime, mapping_hosts_reference_composio,
 };

@@ -15,6 +15,7 @@ fn request(
     tcp: bool,
 ) -> PrepareRequest<'_> {
     PrepareRequest {
+        state: firma_runtime_state::RuntimeLayout::from_root(marker_dir.join("state")),
         sandbox_id,
         agent_id: super::helper::agent_id(),
         execution_profile: firma_config_loader::AgentProfile::Generic,
@@ -30,7 +31,7 @@ fn request(
         capability_seed_path: None,
         use_http_proxy_interceptor: tcp,
         audit_fallback_path: None,
-        monitor_mode: true,
+        audit_signing_key_path: None,
         secret_gateway_addr: None,
         http_secret_providers: &[],
     }
@@ -84,12 +85,21 @@ fn preparation_absolutizes_unix_paths_and_materializes_launch_contract() {
         env.get(OsStr::new("FIRMA_RUN_AUDIT_SOCK")),
         Some(&prepared.audit_socket_path.as_os_str())
     );
-    assert_eq!(
-        env.get(OsStr::new("FIRMA_ALLOW_MONITOR_MODE")),
-        Some(&OsStr::new("1"))
-    );
     assert_eq!(prepared.planned_authority_url, "http://127.0.0.1:50051");
-    assert!(!prepared.planned_policy_bundle_version.is_empty());
+    let args: Vec<_> = prepared
+        .command()
+        .expect("command is available")
+        .get_args()
+        .collect();
+    let enforcement_state = prepared.marker_dir.join("enforcement.toml");
+    assert!(
+        args.windows(2).any(|pair| pair
+            == [
+                OsStr::new("--enforcement-state"),
+                enforcement_state.as_os_str()
+            ]),
+        "Sidecar must publish its enforced bundle beside the marker: {args:?}"
+    );
 }
 
 #[test]
@@ -102,7 +112,6 @@ fn prepared_command_can_only_be_taken_once() {
     let _command = prepared.take_command().expect("first command handoff");
     assert!(prepared.command().is_none());
     assert!(prepared.take_command().is_err());
-    assert!(!prepared.planned_policy_bundle_version.is_empty());
 }
 
 #[test]
@@ -146,10 +155,7 @@ fn publication_writes_effective_endpoint_and_complete_marker_schema() {
     assert_eq!(metadata.agent_id, super::helper::agent_id().to_string());
     assert_eq!(metadata.session_id, "prepared-session");
     assert_eq!(metadata.authority_url, prepared.planned_authority_url);
-    assert_eq!(
-        metadata.policy_bundle_version,
-        prepared.planned_policy_bundle_version
-    );
+    assert_eq!(metadata.policy_bundle_version, "");
     assert_eq!(metadata.pid, pid);
     assert_eq!(metadata.listen, "127.0.0.1:43127");
     chrono::DateTime::parse_from_rfc3339(&metadata.started_at).expect("RFC 3339 started_at");

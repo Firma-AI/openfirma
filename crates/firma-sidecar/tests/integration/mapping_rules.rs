@@ -1,5 +1,6 @@
 //! Load-time normalization of mapping-rule host patterns.
 
+use firma_core::ActionClass;
 use firma_http::{Authority, HeaderMap, Method};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::normalizer::MatchResult;
@@ -14,6 +15,37 @@ fn rule(host: &str) -> MappingRuleConfig {
     }
 }
 
+#[test]
+fn mapping_accepts_every_canonical_action_class() -> anyhow::Result<()> {
+    let rules = ActionClass::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, class)| MappingRuleConfig {
+            method: None,
+            host: format!("class-{index}.example"),
+            path: None,
+            action_class: class.as_str().to_owned(),
+        })
+        .collect();
+
+    let table =
+        MappingTable::from_config(&MappingRulesFile { rules }, &ActionClassRegistry::v0_1())?;
+
+    for (index, class) in ActionClass::ALL.iter().enumerate() {
+        let host: Authority = format!("class-{index}.example").parse()?;
+        match table.find_match(&Method::GET, &host, "/") {
+            MatchResult::Matched(rule) => {
+                assert_eq!(rule.action_class.as_str(), class.as_str());
+            }
+            MatchResult::UnclassifiedProtected => {
+                anyhow::bail!("canonical class {} has no mapping", class.as_str());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// A rule host written with case or a trailing dot must still match runtime
 /// hosts, which arrive lowercased with the trailing dot stripped; without
 /// load-time normalization such a rule is dead.
@@ -24,7 +56,6 @@ fn rule_hosts_are_normalized_at_load_time() -> anyhow::Result<()> {
             rules: vec![rule("API.GitHub.COM.")],
         },
         &ActionClassRegistry::v0_1(),
-        false,
     )?;
 
     assert!(matches!(
@@ -48,7 +79,6 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
             rules: vec![rule("api.github.com:443")],
         },
         &registry,
-        false,
     )?;
     assert!(matches!(
         default_port.find_match(
@@ -64,7 +94,6 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
             rules: vec![rule("api.github.com:8443")],
         },
         &registry,
-        false,
     )?;
     assert!(matches!(
         nonstandard_port.find_match(
@@ -80,11 +109,64 @@ fn rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
             &Authority::from_static("api.github.com"),
             "/repos/x"
         ),
-        MatchResult::NotProtected
+        MatchResult::UnclassifiedProtected
     ));
     Ok(())
 }
 
+#[test]
+fn malformed_authority_hosts_are_rejected_at_configuration_validation() {
+    let diagnostics = [
+        "api.example.com:8443:80",
+        "api.example.com]",
+        "api[.example.com",
+        "[::1",
+        "[::1]suffix",
+        "[::1]:8443:80",
+    ]
+    .map(|host| {
+        MappingTable::from_config(
+            &MappingRulesFile {
+                rules: vec![rule(host)],
+            },
+            &ActionClassRegistry::v0_1(),
+        )
+        .expect_err("a malformed authority must not load")
+        .to_string()
+    });
+
+    insta::assert_debug_snapshot!(diagnostics, @r###"
+    [
+        "invalid mapping rules file: rule 0: host pattern 'api.example.com:8443:80' is not a valid authority; use at most one port suffix and bracket IPv6 literals",
+        "invalid mapping rules file: rule 0: host pattern 'api.example.com]' is not a valid authority; use at most one port suffix and bracket IPv6 literals",
+        "invalid mapping rules file: rule 0: host pattern 'api[.example.com' is not a valid authority; use at most one port suffix and bracket IPv6 literals",
+        "invalid mapping rules file: rule 0: host pattern '[::1' is not a valid authority; use at most one port suffix and bracket IPv6 literals",
+        "invalid mapping rules file: rule 0: host pattern '[::1]suffix' is not a valid authority; use at most one port suffix and bracket IPv6 literals",
+        "invalid mapping rules file: rule 0: host pattern '[::1]:8443:80' is not a valid authority; use at most one port suffix and bracket IPv6 literals",
+    ]
+    "###);
+}
+
+#[test]
+fn bracketed_wildcard_patterns_remain_valid() -> anyhow::Result<()> {
+    for (rule_host, request_host) in [
+        ("[*]", Authority::from_static("[::1]")),
+        ("[*]:8443", Authority::from_static("[fe80::1]:8443")),
+    ] {
+        let table = MappingTable::from_config(
+            &MappingRulesFile {
+                rules: vec![rule(rule_host)],
+            },
+            &ActionClassRegistry::v0_1(),
+        )?;
+
+        assert!(matches!(
+            table.find_match(&Method::GET, &request_host, "/repos/x"),
+            MatchResult::Matched(_)
+        ));
+    }
+    Ok(())
+}
 /// Default ports are stripped from bracketed IPv6 rule hosts exactly as they
 /// are from IPv4/hostname rule hosts, while a nonstandard port is preserved
 /// and still requires an exact port match.
@@ -96,7 +178,6 @@ fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
             rules: vec![rule("[::1]:443")],
         },
         &registry,
-        false,
     )?;
     assert!(matches!(
         default_port.find_match(&Method::GET, &Authority::from_static("[::1]"), "/repos/x"),
@@ -134,7 +215,6 @@ fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
             rules: vec![rule("[fe80::1]:8443")],
         },
         &registry,
-        false,
     )?;
     assert!(matches!(
         nonstandard_port.find_match(
@@ -150,7 +230,7 @@ fn ipv6_rule_host_ports_mirror_runtime_normalization() -> anyhow::Result<()> {
             &Authority::from_static("[fe80::1]"),
             "/repos/x"
         ),
-        MatchResult::NotProtected
+        MatchResult::UnclassifiedProtected
     ));
     Ok(())
 }
@@ -170,7 +250,6 @@ fn ipv6_rule_hosts_match_ipv6_request_hosts_on_any_port() -> anyhow::Result<()> 
                 rules: vec![rule(&host.to_string())],
             },
             &registry,
-            false,
         )?;
         let normalizer = IntentNormalizer::new(table);
 
@@ -205,7 +284,6 @@ fn ipv6_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
             rules: vec![rule("[::1]:443")],
         },
         &ActionClassRegistry::v0_1(),
-        false,
     )?;
     let normalizer = IntentNormalizer::new(table);
 
@@ -239,7 +317,6 @@ fn ipv4_opposite_scheme_port_is_preserved_for_dispatch() -> anyhow::Result<()> {
             rules: vec![rule("api.example.com:443")],
         },
         &ActionClassRegistry::v0_1(),
-        false,
     )?;
     let normalizer = IntentNormalizer::new(table);
 
@@ -284,7 +361,6 @@ fn trailing_dots_around_ports_cannot_evade_rules() -> anyhow::Result<()> {
                 rules: vec![rule(rule_host)],
             },
             &ActionClassRegistry::v0_1(),
-            false,
         )?;
         let normalizer = IntentNormalizer::new(table);
 
@@ -321,7 +397,6 @@ fn degenerate_catch_all_host_patterns_are_rejected() {
                 rules: vec![rule(host)],
             },
             &ActionClassRegistry::v0_1(),
-            false,
         );
         assert!(result.is_err(), "{host} must be rejected at validation");
     }
@@ -342,7 +417,6 @@ fn explicit_port_scoped_catch_all_still_loads_and_matches() -> anyhow::Result<()
             }],
         },
         &ActionClassRegistry::v0_1(),
-        false,
     )?;
 
     assert!(matches!(
@@ -359,7 +433,7 @@ fn explicit_port_scoped_catch_all_still_loads_and_matches() -> anyhow::Result<()
             &Authority::from_static("anything.example"),
             "/x"
         ),
-        MatchResult::NotProtected
+        MatchResult::UnclassifiedProtected
     ));
     Ok(())
 }
@@ -373,7 +447,6 @@ fn duplicate_detection_compares_normalized_hosts() {
             rules: vec![rule("api.github.com"), rule("API.GITHUB.COM.")],
         },
         &ActionClassRegistry::v0_1(),
-        false,
     );
 
     assert!(result.is_err());

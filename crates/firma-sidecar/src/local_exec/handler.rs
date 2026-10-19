@@ -22,8 +22,10 @@
 //! All deny paths include a human-readable `reason` string so operators can
 //! diagnose why a launch was blocked.
 
+use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::time::Duration;
+
+use firma_config_utils::NonZeroDuration;
 
 use firma_identifiers::SandboxId;
 use serde::{Deserialize, Serialize};
@@ -129,13 +131,12 @@ pub struct LocalExecHandlerConfig {
     /// Sandbox identity this endpoint serves. `None` leaves standalone
     /// Sidecars unbound.
     pub expected_sandbox_id: Option<SandboxId>,
-    /// Time-to-live for issued approval tokens. Only used by
-    /// [`LocalExecHandler::new`] when constructing the default
-    /// [`InMemoryTokenStore`]; ignored when using [`LocalExecHandler::with_store`].
-    pub token_ttl: Duration,
+    /// Time-to-live for issued approval tokens used by the default
+    /// [`InMemoryTokenStore`].
+    pub token_ttl: NonZeroDuration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (milliseconds).
-    pub retry_after_ms: u64,
+    pub retry_after_ms: NonZeroU64,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,9 +146,7 @@ pub struct LocalExecHandlerConfig {
 /// Stateful handler for local-exec governance and management requests.
 ///
 /// Holds an <code>Arc&lt;dyn [TokenStore]&gt;</code> and is safe to share across
-/// connections. The default store is [`InMemoryTokenStore`]; alternative
-/// backends (Redis, distributed stores, test doubles) are injected via
-/// [`LocalExecHandler::with_store`].
+/// connections. The default store is [`InMemoryTokenStore`].
 pub struct LocalExecHandler {
     config: LocalExecHandlerConfig,
     token_store: Arc<dyn TokenStore>,
@@ -161,15 +160,6 @@ impl LocalExecHandler {
         Self {
             config,
             token_store: Arc::new(store),
-        }
-    }
-
-    /// Build a handler with a custom token store.
-    #[must_use]
-    pub fn with_store(config: LocalExecHandlerConfig, store: Arc<dyn TokenStore>) -> Self {
-        Self {
-            config,
-            token_store: store,
         }
     }
 
@@ -307,7 +297,7 @@ impl LocalExecHandler {
                     decision: LocalExecDecision::PendingHitl,
                     reason: Some("awaiting human approval".to_string()),
                     approval_token: Some(token_id),
-                    retry_after_ms: Some(self.config.retry_after_ms),
+                    retry_after_ms: Some(self.config.retry_after_ms.get()),
                 }
             }
         }
@@ -360,7 +350,7 @@ impl LocalExecHandler {
                     decision: LocalExecDecision::PendingHitl,
                     reason: Some("awaiting operator approval".to_string()),
                     approval_token: Some(token_id.to_string()),
-                    retry_after_ms: Some(self.config.retry_after_ms),
+                    retry_after_ms: Some(self.config.retry_after_ms.get()),
                 }
             }
             TokenValidationResult::Revoked => {
@@ -481,14 +471,16 @@ fn compute_fingerprint(request: &LocalExecRequest) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn config(action: DefaultAction) -> LocalExecHandlerConfig {
         LocalExecHandlerConfig {
             default_action: action,
             expected_sandbox_id: None,
-            token_ttl: Duration::from_mins(1),
-            retry_after_ms: 500,
+            token_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+            retry_after_ms: NonZeroU64::new(500).unwrap(),
         }
     }
 

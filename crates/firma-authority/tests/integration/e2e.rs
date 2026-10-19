@@ -49,6 +49,8 @@ impl TestServer {
         .expect("failed to write issuance policy");
 
         let revocation_file = temp_dir.path().join("revocations.txt");
+        let mappings = temp_dir.path().join("mapping-rules.toml");
+        std::fs::write(&mappings, "rules = []\n").expect("write explicit empty mappings");
 
         let key_file = temp_dir.path().join("authority.key");
         let kp = AsymmetricKeyPair::<V4>::generate().expect("failed to generate key");
@@ -60,15 +62,20 @@ impl TestServer {
             path
         });
 
-        let config = AuthorityConfigBuilder::new(authority_schema::AuthorityConfig {
-            listen_addr: "127.0.0.1:0".to_string(),
-            policy_dir: policy_dir.clone(),
-            issuance_policy_dir: issuance_policy_dir.clone(),
-            schema_path,
-            revocation_file: revocation_file.clone(),
-            key_file,
-            ..authority_schema::AuthorityConfig::default()
-        })
+        let config = AuthorityConfigBuilder::new(
+            authority_schema::AuthorityConfig {
+                listen_addr: "127.0.0.1:0".to_string(),
+                policy_dir: policy_dir.clone(),
+                issuance_policy_dir: issuance_policy_dir.clone(),
+                schema_path,
+                mapping_rules_paths: vec![mappings],
+                revocation_file: Some(revocation_file.clone()),
+                key_file: Some(key_file),
+                ..authority_schema::AuthorityConfig::default()
+            },
+            &firma_runtime_state::RuntimeLayout::from_root(temp_dir.path()),
+        )
+        .without_tls()
         .build()
         .expect("valid authority config");
 
@@ -152,7 +159,7 @@ async fn issue_capability_e2e() {
         token.action_set,
         ["communication.external.send", "filesystem.read"]
     );
-    assert!(!token.signature.is_empty());
+    assert_ne!(token.signature, [] as [u8; 0]);
     let issued_at = token.issued_at.as_ref().expect("issued_at missing");
     let expiry = token.expiry.as_ref().expect("expiry missing");
     assert_eq!(expiry.seconds - issued_at.seconds, 300);
@@ -266,6 +273,9 @@ async fn watch_policy_bundle_streams_on_connect() {
 
     let mut stream = client
         .watch_policy_bundle(WatchPolicyBundleRequest {
+            supported_capabilities: vec![
+                firma_protobuf::v1::PolicyBundleCapability::ActionMappingSnapshotV1 as i32,
+            ],
             current_version: String::new(),
             credentials: None,
         })
@@ -280,7 +290,7 @@ async fn watch_policy_bundle_streams_on_connect() {
         .expect("stream ended");
 
     let bundle = update.bundle.expect("bundle missing");
-    assert!(!bundle.version.is_empty());
+    assert_ne!(bundle.version, "");
     assert_eq!(bundle.ttl_seconds, 30);
 
     server.stop();
@@ -296,6 +306,9 @@ async fn watch_policy_bundle_pushes_on_file_change() {
 
     let mut stream = client
         .watch_policy_bundle(WatchPolicyBundleRequest {
+            supported_capabilities: vec![
+                firma_protobuf::v1::PolicyBundleCapability::ActionMappingSnapshotV1 as i32,
+            ],
             current_version: String::new(),
             credentials: None,
         })
@@ -324,6 +337,71 @@ async fn watch_policy_bundle_pushes_on_file_change() {
     let v2 = update.bundle.expect("bundle missing").version;
 
     assert_ne!(v1, v2);
+
+    server.stop();
+}
+
+/// Mounted configuration (for example a Kubernetes `ConfigMap`) links each
+/// policy through a `..data` symlink and publishes an update by atomically
+/// retargeting it, so no event names a `.cedar` file in the policy directory.
+#[cfg(unix)]
+#[tokio::test]
+async fn watch_policy_bundle_pushes_on_symlink_swap() {
+    use std::os::unix::fs::symlink;
+
+    let server = TestServer::start().await;
+    let policies = &server.policy_dir;
+    std::fs::create_dir(policies.join("v1")).expect("create first revision");
+    std::fs::write(
+        policies.join("v1/permit_all.cedar"),
+        "permit(principal, action, resource);",
+    )
+    .expect("write first revision");
+    symlink("v1", policies.join("..data")).expect("link first revision");
+    std::fs::remove_file(policies.join("permit_all.cedar")).expect("remove regular policy");
+    symlink("..data/permit_all.cedar", policies.join("permit_all.cedar"))
+        .expect("link policy through ..data");
+    // Let the reload these setup events trigger finish, so only the swap below
+    // can publish the next version.
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect");
+    let mut stream = client
+        .watch_policy_bundle(WatchPolicyBundleRequest {
+            supported_capabilities: vec![
+                firma_protobuf::v1::PolicyBundleCapability::ActionMappingSnapshotV1 as i32,
+            ],
+            current_version: String::new(),
+            credentials: None,
+        })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+    let initial = tokio::time::timeout(tokio::time::Duration::from_millis(500), stream.message())
+        .await
+        .expect("timed out waiting for initial bundle")
+        .expect("stream error")
+        .expect("stream ended");
+    let v1 = initial.bundle.expect("bundle missing").version;
+
+    std::fs::create_dir(policies.join("v2")).expect("create second revision");
+    std::fs::write(
+        policies.join("v2/permit_all.cedar"),
+        "forbid(principal, action, resource);",
+    )
+    .expect("write second revision");
+    symlink("v2", policies.join("..data_tmp")).expect("stage second revision");
+    std::fs::rename(policies.join("..data_tmp"), policies.join("..data"))
+        .expect("swap to second revision");
+
+    let update = tokio::time::timeout(tokio::time::Duration::from_secs(5), stream.message())
+        .await
+        .expect("timed out waiting for bundle update")
+        .expect("stream error")
+        .expect("stream ended");
+    assert_ne!(update.bundle.expect("bundle missing").version, v1);
 
     server.stop();
 }

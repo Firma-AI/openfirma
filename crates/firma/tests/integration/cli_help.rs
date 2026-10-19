@@ -9,10 +9,7 @@
 
 use std::process::Command;
 
-fn firma_bin() -> std::path::PathBuf {
-    // CARGO_BIN_EXE_<name> is set by cargo for the [[bin]] under test.
-    std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
-}
+use super::firma_bin;
 
 fn assert_help(args: &[&str], expect: &[&str]) {
     let output = Command::new(firma_bin())

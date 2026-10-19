@@ -61,8 +61,7 @@ pub enum EnforcementStage {
 /// The enforcement pipeline discards the validated `CapabilityClaims` on the
 /// denial path, so without this the audit record for a Stage-2 (policy) or
 /// credential-injection denial has empty `agent_id`/`token_id`. That made
-/// `firma monitor --agent <id>` drop every deny while keeping allows — the
-/// gap reported in FIR-208.
+/// `firma monitor --agent <id>` drop every deny while keeping allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DenyIdentity {
     /// Verified token id.
@@ -91,7 +90,7 @@ impl DenyIdentity {
 /// information for the caller to construct the response, emit audit events,
 /// and proceed with credential injection on ALLOW, or forward the request
 /// unmodified on PASSTHROUGH.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EnforcementDecision {
     /// Request authorized. Proceed to connector dispatch.
     Allow {
@@ -112,7 +111,7 @@ pub enum EnforcementDecision {
         /// credential injection). `None` for pre-validation denials
         /// (malformed intent, token invalid/expired) where no identity
         /// is known. Carried into the audit record so denies remain
-        /// filterable by `--agent` in `firma monitor` (FIR-208).
+        /// filterable by `--agent` in `firma monitor`.
         identity: Option<DenyIdentity>,
     },
     /// Request was authorized, then aborted before completion.

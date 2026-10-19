@@ -5,9 +5,9 @@
 //! validates their host sources, and applies the control-plane and config masks
 //! before the parent backend emits the command.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::backend::{
@@ -19,6 +19,7 @@ use crate::env::ExecutionEnv;
 use crate::error::RunError;
 use crate::trust::SidecarTrustAnchor;
 use firma_config_loader::{CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_fs::normalize_absolute_path;
 use firma_runtime_state::RunEntryLayout;
 
 /// Mount table of the planning process, listing every host mount point and its
@@ -106,8 +107,10 @@ pub(super) struct BwrapMountPlan {
     control_plane_seals: BwrapMountPhase,
     /// Restoration of the current sandbox's runtime beneath the sealed root.
     sandbox_runtime: BwrapMountPhase,
-    /// Narrow backend facilities emitted only after all security seals.
+    /// Narrow backend facilities restored after the control-plane seal.
     infrastructure: BwrapMountPhase,
+    /// Login state masks applied after every host-source bind.
+    connection_seals: BwrapMountPhase,
 }
 
 /// Operations belonging to one fixed phase of a [`BwrapMountPlan`].
@@ -211,6 +214,7 @@ impl BwrapMountPlan {
             control_plane_seals: BwrapMountPhase::default(),
             sandbox_runtime: BwrapMountPhase::default(),
             infrastructure: BwrapMountPhase::default(),
+            connection_seals: BwrapMountPhase::default(),
         }
     }
 
@@ -268,11 +272,12 @@ impl BwrapMountPlan {
         // spelling. Rooting it at the layout's own path would reintroduce any
         // relative or unnormalized `FIRMA_STATE_DIR` spelling, and bwrap cannot
         // create a relative bind target beneath its read-only root.
-        let run_entry =
-            firma_runtime_state::RuntimeLayout::from_root(control_plane_runtime.clone())
-                .run_entry_layout(&handle.identity.sandbox_id);
+        let control_plane_layout =
+            firma_runtime_state::RuntimeLayout::from_root(control_plane_runtime.clone());
+        let run_entry = control_plane_layout.run_entry_layout(&handle.identity.sandbox_id);
         let runtime_paths = PlanRuntimePaths {
             control_plane: &control_plane_runtime,
+            control_plane_layout: &control_plane_layout,
             sandbox: &sandbox_runtime,
             run_entry: &run_entry,
         };
@@ -307,6 +312,7 @@ impl BwrapMountPlan {
             self.control_plane_seals,
             self.sandbox_runtime,
             self.infrastructure,
+            self.connection_seals,
         ] {
             phase.emit(command);
         }
@@ -448,7 +454,8 @@ fn mask_sensitive_paths(
 /// 5. the sandbox procfs re-established over every aliased host procfs;
 /// 6. the control-plane runtime seal;
 /// 7. the private runtime for the current sandbox;
-/// 8. narrowly validated sandbox infrastructure sourced from that runtime.
+/// 8. narrowly validated sandbox infrastructure sourced from that runtime;
+/// 9. host login state masks over the effective path and its bind aliases.
 fn append_filesystem_layout(
     plan: &mut BwrapMountPlan,
     handle: &SandboxHandle,
@@ -540,9 +547,10 @@ fn append_filesystem_layout(
     mount_ca_material(
         plan,
         runtime_paths.run_entry,
-        runtime_paths.control_plane,
+        runtime_paths.control_plane_layout,
         launch.trust_anchor.as_ref(),
     )?;
+    mask_connection_dirs(plan, mounts, launch)?;
     Ok(())
 }
 
@@ -550,10 +558,174 @@ fn append_filesystem_layout(
 struct PlanRuntimePaths<'a> {
     /// Canonical control-plane runtime root (`FIRMA_STATE_DIR`).
     control_plane: &'a Path,
+    /// Layout rooted at [`PlanRuntimePaths::control_plane`], which names the
+    /// artifacts a Sidecar defaults to outside any per-run entry.
+    control_plane_layout: &'a firma_runtime_state::RuntimeLayout,
     /// Canonical private runtime for the sandbox being planned.
     sandbox: &'a Path,
     /// Layout of this run's entry inside the control-plane runtime.
     run_entry: &'a RunEntryLayout,
+}
+
+/// Seal the host login store after every bind that could expose it. The host
+/// path is captured independently of the guest environment, which may also
+/// contain an operator-supplied `FIRMA_CONNECTION_DIR`.
+fn mask_connection_dirs(
+    plan: &mut BwrapMountPlan,
+    mounts: &[ValidatedMount],
+    launch: &LaunchSpec,
+) -> Result<(), RunError> {
+    let mut candidates = BTreeSet::new();
+    if let Some(host) = &launch.host_connection_dir {
+        candidates.insert(host.clone());
+    }
+    if let Some(guest) = launch.env.get("FIRMA_CONNECTION_DIR") {
+        let guest = PathBuf::from(guest);
+        if guest.is_absolute() {
+            candidates.insert(guest);
+        }
+    }
+
+    let mut targets = BTreeSet::new();
+    for candidate in candidates {
+        let resolved = resolve_path_allow_missing(&candidate, "connection directory")?;
+        match std::fs::metadata(&resolved) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => continue, // Not a usable connection directory.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(RunError::Backend {
+                    backend: BackendKind::Bwrap.to_string(),
+                    reason: format!(
+                        "failed to inspect connection directory {} before masking: {error}",
+                        resolved.display()
+                    ),
+                });
+            }
+        }
+        targets.insert(resolved.clone());
+        reject_connection_mount_overlap(plan, &resolved)?;
+        for mount in mounts {
+            if mount.spec.source.starts_with(&resolved) {
+                return Err(RunError::Backend {
+                    backend: BackendKind::Bwrap.to_string(),
+                    reason: format!(
+                        "mount source {} exposes host connection state {}; choose a source outside the connection directory",
+                        mount.spec.source.display(),
+                        resolved.display()
+                    ),
+                });
+            }
+            if let Ok(relative) = resolved.strip_prefix(&mount.spec.source) {
+                targets.insert(normalize_absolute_path(&mount.spec.target.join(relative)));
+            }
+        }
+    }
+
+    let mut masked = BTreeMap::new();
+    let mut targets = targets.into_iter().collect::<Vec<_>>();
+    targets.sort_by_key(|target| target.components().count());
+    for target in targets {
+        reject_connection_mount_overlap(plan, &target)?;
+        if !host_path_exposed_at_target(plan, &target) {
+            continue;
+        }
+        if !masked
+            .keys()
+            .any(|parent: &PathBuf| target.starts_with(parent))
+        {
+            emit_tmpfs(&mut plan.connection_seals, target, &mut masked);
+        }
+    }
+    Ok(())
+}
+
+/// Whether the earlier mount phases leave a host-backed path visible at
+/// `target`. A tmpfs over `/tmp`, for example, already hides a connection
+/// directory there unless a later workspace bind restores it.
+fn host_path_exposed_at_target(plan: &BwrapMountPlan, target: &Path) -> bool {
+    let mut exposed = false;
+    for phase in [
+        &plan.layout,
+        &plan.overlays,
+        &plan.config_seals,
+        &plan.protected_subpaths,
+        &plan.procfs_seals,
+        &plan.control_plane_seals,
+        &plan.sandbox_runtime,
+        &plan.infrastructure,
+    ] {
+        for step in &phase.steps {
+            match step {
+                BwrapPlanStep::Bind {
+                    role,
+                    target: mounted,
+                    ..
+                } if target.starts_with(mounted) => exposed = *role != BwrapPlanRole::Mask,
+                BwrapPlanStep::Tmpfs {
+                    target: mounted, ..
+                }
+                | BwrapPlanStep::Dev {
+                    target: mounted, ..
+                }
+                | BwrapPlanStep::Proc {
+                    target: mounted, ..
+                } if target.starts_with(mounted) => exposed = false,
+                _ => {}
+            }
+        }
+    }
+    exposed
+}
+
+/// A final connection mask cannot hide a later framework-required state
+/// mount. Reject the conflicting configuration instead of exposing credentials
+/// or breaking the required mount.
+fn reject_connection_mount_overlap(plan: &BwrapMountPlan, target: &Path) -> Result<(), RunError> {
+    let required_mounts = plan
+        .layout
+        .steps
+        .iter()
+        .filter(|step| {
+            matches!(
+                step,
+                BwrapPlanStep::Bind {
+                    role: BwrapPlanRole::SandboxInfrastructure,
+                    ..
+                }
+            )
+        })
+        .chain(&plan.protected_subpaths.steps)
+        .chain(&plan.sandbox_runtime.steps)
+        .chain(&plan.infrastructure.steps);
+    for step in required_mounts {
+        let BwrapPlanStep::Bind {
+            source,
+            target: mounted,
+            ..
+        } = step
+        else {
+            continue;
+        };
+        for required in [source, mounted] {
+            let resolved = resolve_path_allow_missing(required, "required mount")?;
+            let lexical = normalize_absolute_path(required);
+            if [resolved.as_path(), lexical.as_path()]
+                .into_iter()
+                .any(|path| target.starts_with(path) || path.starts_with(target))
+            {
+                return Err(RunError::Backend {
+                    backend: BackendKind::Bwrap.to_string(),
+                    reason: format!(
+                        "connection directory {} overlaps required sandbox mount {}; choose a separate FIRMA_CONNECTION_DIR",
+                        target.display(),
+                        mounted.display()
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Hide host-side Firma runtime state from the wrapped process tree.
@@ -620,10 +792,19 @@ fn mask_control_plane_runtime(
 /// MITM-intercepted handshake fails with `certificate signed by unknown
 /// authority`.
 ///
+/// Two CA directories are restored: this run's entry, written by a Sidecar
+/// `firma run` autostarted, and the control plane's `generated-firma-ca`,
+/// where a long-lived Sidecar mints its CA when `sidecar.ca.dir` names no
+/// directory. Both are public certificates a wrapped process must read;
+/// leaving the second masked is what made an external Sidecar's HTTPS MITM
+/// unusable on this backend.
+///
 /// Each file is bound individually and read-only. Binding
-/// [`RunEntryLayout::ca_dir`] as a directory would also expose
-/// [`RunEntryLayout::ca_key`] and let the wrapped process mint certificates
-/// trusted by anything configured to trust the Sidecar CA.
+/// [`RunEntryLayout::ca_dir`] or
+/// [`RuntimeLayout::generated_ca_dir`](firma_runtime_state::RuntimeLayout::generated_ca_dir)
+/// as a directory would also expose the matching signing key and let the
+/// wrapped process mint certificates trusted by anything configured to trust
+/// the Sidecar CA.
 ///
 /// Missing files are skipped: with HTTPS MITM disabled no CA is generated, and
 /// the bundle exists only under `ca_trust_mode = "append_system_roots"`.
@@ -643,13 +824,19 @@ fn mask_control_plane_runtime(
 fn mount_ca_material(
     plan: &mut BwrapMountPlan,
     run_entry: &RunEntryLayout,
-    control_plane_runtime: &Path,
+    control_plane: &firma_runtime_state::RuntimeLayout,
     trust_anchor: Option<&SidecarTrustAnchor>,
 ) -> Result<(), RunError> {
-    let restored = [run_entry.ca_cert(), run_entry.ca_bundle()]
-        .into_iter()
-        .filter(|source| source.is_file())
-        .collect::<Vec<_>>();
+    let control_plane_runtime = control_plane.root();
+    let restored = [
+        run_entry.ca_cert(),
+        run_entry.ca_bundle(),
+        control_plane.generated_ca_cert(),
+        control_plane.generated_ca_bundle(),
+    ]
+    .into_iter()
+    .filter(|source| source.is_file())
+    .collect::<Vec<_>>();
 
     if let Some(anchor) = trust_anchor {
         let anchor_path = resolve_path_allow_missing(anchor.path(), "sidecar trust anchor")?;
@@ -662,11 +849,12 @@ fn mount_ca_material(
             return Err(RunError::Backend {
                 backend: BackendKind::Bwrap.to_string(),
                 reason: format!(
-                    "trust anchor {} lies inside the masked control-plane runtime {} and is not CA material this run restores from {}; \
-                     move an external Sidecar's CA outside FIRMA_STATE_DIR",
+                    "trust anchor {} lies inside the masked control-plane runtime {} and is not CA material this run restores from {} or {}; \
+                     move an external Sidecar's CA to one of those directories or outside FIRMA_STATE_DIR",
                     anchor_path.display(),
                     control_plane_runtime.display(),
-                    run_entry.ca_dir().display()
+                    run_entry.ca_dir().display(),
+                    control_plane.generated_ca_dir().display()
                 ),
             });
         }
@@ -1046,28 +1234,6 @@ fn resolve_path_allow_missing(path: &Path, description: &str) -> Result<PathBuf,
             }
         }
     }
-}
-
-/// Lexically removes `.` and `..` components from an absolute path without
-/// following filesystem links.
-fn normalize_absolute_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if normalized
-                    .components()
-                    .next_back()
-                    .is_some_and(|part| matches!(part, Component::Normal(_)))
-                {
-                    normalized.pop();
-                }
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 
 /// Returns whether the normalized target is strictly beneath a `.firma`
@@ -1522,7 +1688,7 @@ mod tests {
 
         assert!(!hardening.readonly_rootfs);
         assert!(!hardening.runtime_home_isolation);
-        assert!(hardening.mask_home_paths.is_empty());
+        assert_eq!(hardening.mask_home_paths, [] as [String; 0]);
     }
 
     #[test]
@@ -1542,12 +1708,14 @@ mod tests {
             args: vec![],
             cwd: std::path::PathBuf::from("/tmp"),
             env: env.into(),
+            isolated_secret_shims: None,
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file: None,
+            host_connection_dir: None,
             trust_anchor: None,
         };
         let suffixes = vec![
@@ -1588,12 +1756,14 @@ mod tests {
             args: vec![],
             cwd,
             env: env.into(),
+            isolated_secret_shims: None,
             sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
             },
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
             config_file,
+            host_connection_dir: None,
             trust_anchor: None,
         }
     }
@@ -1875,6 +2045,105 @@ mod tests {
         assert!(
             !rendered.iter().any(|arg| arg == &ca_dir),
             "binding the CA directory would also expose the signing key"
+        );
+    }
+
+    /// A long-lived Sidecar with no `sidecar.ca.dir` mints into the control
+    /// plane's `generated-firma-ca`, which the mask would otherwise hide: the
+    /// wrapped process would fall back to the system roots and fail every
+    /// intercepted handshake.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_restores_the_state_dir_ca_for_an_external_sidecar() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let control_plane = temp.path().join("control-plane");
+        let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(control_plane.clone());
+        std::fs::create_dir_all(runtime_layout.generated_ca_dir()).expect("mkdir generated CA dir");
+        for path in [
+            runtime_layout.generated_ca_cert(),
+            runtime_layout.generated_ca_bundle(),
+            runtime_layout.generated_ca_key(),
+        ] {
+            std::fs::write(&path, "").expect("write CA material");
+        }
+
+        let handle = handle_with(runtime_dir, identity);
+        let mut launch = launch_with_cwd_and_config(cwd, None);
+        launch.trust_anchor = Some(trust_anchor_for(&runtime_layout.generated_ca_cert()));
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let plan = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect("an external Sidecar's state-dir CA must not fail the launch");
+
+        let rendered = rendered_plan(plan);
+        let mask = rendered
+            .iter()
+            .position(|arg| arg == &canonical(&control_plane))
+            .expect("control-plane runtime masked");
+        for public in [
+            runtime_layout.generated_ca_cert(),
+            runtime_layout.generated_ca_bundle(),
+        ] {
+            let path = public.display().to_string();
+            let bind = rendered
+                .windows(3)
+                .position(|win| win[0] == "--ro-bind" && win[1] == path && win[2] == path)
+                .unwrap_or_else(|| panic!("{path} bound read-only through the mask"));
+            assert!(
+                mask < bind,
+                "{path} must be restored after the control-plane mask"
+            );
+        }
+        let key = runtime_layout.generated_ca_key().display().to_string();
+        assert!(
+            !rendered.iter().any(|arg| arg == &key),
+            "the CA signing key must never be exposed to the sandbox"
+        );
+        let ca_dir = runtime_layout.generated_ca_dir().display().to_string();
+        assert!(
+            !rendered.iter().any(|arg| arg == &ca_dir),
+            "binding the CA directory would also expose the signing key"
+        );
+    }
+
+    /// A trust anchor inside the masked runtime that this run does not restore
+    /// still fails the launch: only the layout's own CA paths are unmasked.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn filesystem_layout_rejects_an_unrestored_anchor_inside_the_state_dir() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("mkdir workspace");
+        let runtime_dir = temp.path().join("runtime");
+        std::fs::create_dir_all(&runtime_dir).expect("mkdir runtime");
+
+        let identity =
+            crate::identity::RunIdentity::new(crate::identity::test_agent_id(), "generic");
+        let control_plane = temp.path().join("control-plane");
+        let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(control_plane.clone());
+        let elsewhere = control_plane.join("operator-ca");
+        std::fs::create_dir_all(&elsewhere).expect("mkdir operator CA dir");
+        let anchor = elsewhere.join("firma-ca.crt");
+        std::fs::write(&anchor, "").expect("write CA certificate");
+
+        let handle = handle_with(runtime_dir, identity);
+        let mut launch = launch_with_cwd_and_config(cwd, None);
+        launch.trust_anchor = Some(trust_anchor_for(&anchor));
+        let hardening = super::BwrapHardening::from_env(&launch.env);
+
+        let error = super::BwrapMountPlan::build(&runtime_layout, &handle, &launch, &hardening)
+            .expect_err("a masked anchor this run cannot restore must fail the launch");
+
+        assert!(
+            error.to_string().contains(&anchor.display().to_string()),
+            "the error must name the masked anchor: {error}"
         );
     }
 

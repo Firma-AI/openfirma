@@ -119,6 +119,7 @@ policy_dir          = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/issuance"
 revocation_file     = "/tmp/firma-standalone/revocations.txt"
 key_file            = "/tmp/firma-standalone/firma-authority.key"
+mapping_rules_paths = ["/tmp/firma-standalone/config/mapping-rules.toml"]
 max_ttl = "1h"
 bundle_ttl = "30s"
 EOF

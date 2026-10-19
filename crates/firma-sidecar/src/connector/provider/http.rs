@@ -18,6 +18,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use firma_config_utils::NonZeroDuration;
 use firma_core::{
     ActionParams, Connector, ConnectorError, ConnectorResponse, ExecutionIntent, HttpMethod,
     HttpParams, TransportView,
@@ -32,7 +33,7 @@ use governor::{
 type DirectRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 /// Default dispatch timeout applied when no per-host value is set.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_TIMEOUT: NonZeroDuration = NonZeroDuration::from_static(Duration::from_secs(30));
 
 /// Build-time configuration for a [`GenericHttpConnector`] instance.
 ///
@@ -44,7 +45,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct HttpConnectorConfig {
     /// Dispatch timeout for both the rate-limiter wait and the
     /// upstream call. Required.
-    pub timeout: Duration,
+    pub timeout: NonZeroDuration,
     /// Optional token-bucket rate limiter parameters.
     pub rate_limit: Option<RateLimitConfig>,
 }
@@ -95,7 +96,7 @@ pub enum HttpConnectorBuildError {
 pub struct GenericHttpConnector {
     client: Arc<reqwest::Client>,
     rate_limiter: Option<Arc<DirectRateLimiter>>,
-    timeout: Duration,
+    timeout: NonZeroDuration,
 }
 
 impl GenericHttpConnector {
@@ -203,20 +204,20 @@ impl GenericHttpConnector {
 
         let request = builder
             .build()
-            .map_err(|err| map_reqwest_error(&err, self.timeout))?;
+            .map_err(|err| map_reqwest_error(&err, self.timeout.duration()))?;
 
         let response = self
             .client
             .execute(request)
             .await
-            .map_err(|err| map_reqwest_error(&err, self.timeout))?;
+            .map_err(|err| map_reqwest_error(&err, self.timeout.duration()))?;
 
         let status = response.status().as_u16();
         let headers = HeaderMap(response.headers().clone());
         let body = response
             .bytes()
             .await
-            .map_err(|err| map_reqwest_error(&err, self.timeout))?
+            .map_err(|err| map_reqwest_error(&err, self.timeout.duration()))?
             .to_vec();
         let response_size = body.len();
 
@@ -267,9 +268,9 @@ impl Connector for GenericHttpConnector {
 
         let started = Instant::now();
         let inner = self.dispatch_inner(view, intent, http);
-        let result = tokio::time::timeout(self.timeout, inner)
+        let result = tokio::time::timeout(self.timeout.duration(), inner)
             .await
-            .unwrap_or(Err(ConnectorError::Timeout(self.timeout)));
+            .unwrap_or(Err(ConnectorError::Timeout(self.timeout.duration())));
         let elapsed = started.elapsed();
         let elapsed_micros = duration_to_u64_micros(elapsed);
 
@@ -720,7 +721,7 @@ mod tests {
             .await;
 
         let connector = GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: Duration::from_millis(100),
+            timeout: NonZeroDuration::from_static(Duration::from_millis(100)),
             rate_limit: None,
         })
         .expect("connector build should succeed");
@@ -791,7 +792,7 @@ mod tests {
             .await;
 
         let connector = GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: Duration::from_secs(5),
+            timeout: NonZeroDuration::from_static(Duration::from_secs(5)),
             rate_limit: Some(RateLimitConfig {
                 rps: NonZeroU32::new(2).expect("rps must be non-zero"),
                 burst: NonZeroU32::new(1).expect("burst must be non-zero"),
@@ -870,7 +871,7 @@ mod tests {
             .await;
 
         let connector = GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: Duration::from_millis(100),
+            timeout: NonZeroDuration::from_static(Duration::from_millis(100)),
             rate_limit: Some(RateLimitConfig {
                 rps: NonZeroU32::new(1).expect("rps must be non-zero"),
                 burst: NonZeroU32::new(1).expect("burst must be non-zero"),

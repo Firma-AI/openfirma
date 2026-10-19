@@ -135,7 +135,7 @@ fn missing_record_value_fails_before_minting() {
         }
     );
     insta::assert_snapshot!(error.to_string(), @"json matcher value_path selected 0 node(s) in record 1; expected exactly one");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn json_empty_matches_are_rejected() {
         }
     );
     insta::assert_snapshot!(error.to_string(), @"json matcher name selected a whitespace string in record 0");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -243,7 +243,7 @@ fn multiple_value_matches_fail_before_minting() {
         }
     );
     insta::assert_snapshot!(error.to_string(), @"json matcher value_path selected 2 node(s) in record 0; expected exactly one");
-    assert!(minted.is_empty());
+    assert_eq!(minted, [] as [std::string::String; 0]);
 }
 
 #[test]

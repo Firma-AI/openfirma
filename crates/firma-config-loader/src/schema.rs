@@ -32,7 +32,8 @@ impl FirmaConfig {
     ///
     /// # Errors
     ///
-    /// Returns a TOML parse error or an error for an unknown top-level key.
+    /// Returns a TOML parse error, an error for an unknown top-level key, or
+    /// an error for the removed `[sidecar.mapping]` table.
     pub fn parse(origin: impl Into<PathBuf>, text: &str) -> anyhow::Result<Self> {
         let origin = origin.into();
         let table: toml::Table = text
@@ -45,6 +46,29 @@ impl FirmaConfig {
                     origin.display()
                 );
             }
+        }
+        // Checked here, ahead of section parsing, so every command that reads
+        // the file names where mappings live now instead of reporting an
+        // unknown `[sidecar]` field, or ignoring it when it does not read that
+        // section.
+        if sidecar_table(&table).is_some_and(|sidecar| sidecar.contains_key("mapping")) {
+            // A Sidecar that names an Authority URL without configuring a local
+            // Authority uses a remote one; adding `[authority]` to its file
+            // would start a local Authority instead.
+            let remote = !table.contains_key("authority")
+                && sidecar_table(&table)
+                    .and_then(|sidecar| sidecar.get("authority"))
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|authority| authority.contains_key("url"));
+            let destination = if remote {
+                "configure mappings on the Authority this Sidecar connects to"
+            } else {
+                "list its files in `[authority].mapping_rules_paths`"
+            };
+            bail!(
+                "{}: `[sidecar.mapping]` is no longer supported because the Authority owns mappings; delete it and {destination}",
+                origin.display()
+            );
         }
         Ok(Self { table, origin })
     }
@@ -177,4 +201,8 @@ impl FirmaConfig {
 /// Returns the read/parse error, or a "missing section" error.
 pub fn load_section(path: &Path, section: &str) -> anyhow::Result<String> {
     FirmaConfig::load(path)?.raw_section(section)
+}
+
+fn sidecar_table(table: &toml::Table) -> Option<&toml::Table> {
+    table.get("sidecar").and_then(toml::Value::as_table)
 }

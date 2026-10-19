@@ -116,15 +116,6 @@ impl<'a> Sources<'a> {
         Self::with_policy_rewrite_queue(audit_rows, PolicyRewriteQueue::new())
     }
 
-    /// Creates sources with an injected rewrite handler for tests.
-    #[must_use]
-    pub fn with_policy_rewrite_handler(
-        audit_rows: Option<&'a Receiver<AuditRow>>,
-        handler: PolicyRewriteHandler,
-    ) -> Self {
-        Self::with_policy_rewrite_queue(audit_rows, PolicyRewriteQueue::with_handler(handler))
-    }
-
     /// Creates sources with an injected rewrite handler and dispatch probe.
     #[must_use]
     pub(crate) fn with_observed_policy_rewrite_handler(

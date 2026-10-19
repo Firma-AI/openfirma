@@ -5,11 +5,9 @@
 
 use std::hint::black_box;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
-use firma_config_schema::sidecar::TenancyMode;
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 use firma_http::{Authority, HeaderMap, Method};
 use firma_identifiers::TokenId;
@@ -62,7 +60,7 @@ fn mapping_table() -> MappingTable {
             action_class: "communication.external.send".to_string(),
         }],
     };
-    MappingTable::from_config(&rules, &registry, true).expect("mapping compiles")
+    MappingTable::from_config(&rules, &registry).expect("mapping compiles")
 }
 
 fn bench_stage1_validate(c: &mut Criterion) {
@@ -88,8 +86,6 @@ fn bench_stage1_validate(c: &mut Criterion) {
         }]),
         Arc::new(MockVerifier { claims }),
         revocations,
-        Duration::from_secs(0),
-        TenancyMode::SingleAgent,
     );
 
     c.bench_function("stage1_enforce", |b| {

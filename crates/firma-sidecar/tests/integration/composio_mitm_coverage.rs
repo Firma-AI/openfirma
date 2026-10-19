@@ -1,8 +1,7 @@
 //! Startup coverage checks for Composio HTTPS MITM interception.
 
-use firma_http::Method;
-use firma_sidecar::config::{HttpsMitmConfig, MappingRuleConfig, MappingRulesFile};
-use firma_sidecar::startup::{composio_mitm_coverage_warnings, mapping_references_composio_hosts};
+use firma_sidecar::config::{HttpsMitmConfig, MappingRulesFile};
+use firma_sidecar::startup::{composio_mitm_coverage_warnings, mapping_hosts_reference_composio};
 
 fn covering_config() -> HttpsMitmConfig {
     HttpsMitmConfig::default()
@@ -15,15 +14,6 @@ fn covering_config() -> HttpsMitmConfig {
             "backend.composio.dev".to_string(),
         ])
         .with_bypass_hosts(Vec::new())
-}
-
-fn rule(host: &str) -> MappingRuleConfig {
-    MappingRuleConfig {
-        method: Some(Method::POST),
-        host: host.to_string(),
-        path: Some("/*".to_string()),
-        action_class: "communication.external.send".to_string(),
-    }
 }
 
 /// The opt-in signal for the coverage check must recognize every host form a
@@ -48,19 +38,15 @@ fn mapping_reference_detection_handles_pattern_and_port_forms() {
         "*",
     ] {
         assert!(
-            mapping_references_composio_hosts(&MappingRulesFile {
-                rules: vec![rule(host)],
-            }),
+            mapping_hosts_reference_composio([host]),
             "{host} must count as a Composio reference"
         );
     }
-    assert!(!mapping_references_composio_hosts(&MappingRulesFile {
-        rules: vec![
-            rule("api.github.com"),
-            rule("*.github.com"),
-            rule("composio.dev.attacker.example"),
-        ],
-    }));
+    assert!(!mapping_hosts_reference_composio([
+        "api.github.com",
+        "*.github.com",
+        "composio.dev.attacker.example",
+    ]));
 }
 
 /// The mapping file shipped for Composio must trigger the coverage check.
@@ -68,7 +54,9 @@ fn mapping_reference_detection_handles_pattern_and_port_forms() {
 fn shipped_composio_mapping_opts_into_the_coverage_check() -> anyhow::Result<()> {
     let rules: MappingRulesFile =
         toml::from_str(include_str!("../../config/mappings/composio.toml"))?;
-    assert!(mapping_references_composio_hosts(&rules));
+    assert!(mapping_hosts_reference_composio(
+        rules.rules.iter().map(|rule| rule.host.as_str())
+    ));
     Ok(())
 }
 

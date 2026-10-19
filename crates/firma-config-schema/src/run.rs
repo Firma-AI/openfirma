@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{secret_provider::SecretProviderPatch, utils::NonZeroDuration};
+use firma_config_utils::NonZeroDuration;
+
+use crate::secret_provider::SecretProviderPatch;
 
 /// Sandbox backend selected for a Run profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

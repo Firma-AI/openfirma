@@ -14,13 +14,16 @@ cedar-policy = { workspace = true }
 chrono = { workspace = true }
 firma-config-loader = { workspace = true }
 firma-config-schema = { workspace = true }
+firma-config-utils.workspace = true
 firma-core = { workspace = true }
 firma-identifiers = { workspace = true }
 firma-protobuf = { workspace = true }
+firma-runtime-state = { workspace = true }
 hex = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 notify = { workspace = true }
 pasetors = { workspace = true }
+prost = { workspace = true }
 prost-types = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
@@ -39,7 +42,9 @@ tracing-subscriber = { workspace = true }
 x509-parser = { workspace = true }
 
 [dev-dependencies]
+firma-test-helpers = { workspace = true }
 fs-err = { workspace = true }
+insta = { workspace = true }
 rcgen = { workspace = true }
 tempfile = { workspace = true }
 

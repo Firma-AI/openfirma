@@ -11,8 +11,7 @@ pub(super) struct LruSet {
 }
 
 impl LruSet {
-    pub(super) fn new(capacity: usize) -> Self {
-        let capacity = NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
+    pub(super) fn new(capacity: NonZeroUsize) -> Self {
         Self {
             inner: Mutex::new(LruCache::new(capacity)),
         }
@@ -37,14 +36,14 @@ mod tests {
 
     #[test]
     fn insert_then_contains_returns_true() {
-        let set = LruSet::new(10);
+        let set = LruSet::new(NonZeroUsize::new(10).unwrap());
         set.insert("a".to_string());
         assert!(set.contains("a"));
     }
 
     #[test]
     fn eviction_drops_oldest_when_full() {
-        let set = LruSet::new(2);
+        let set = LruSet::new(NonZeroUsize::new(2).unwrap());
         set.insert("a".to_string());
         set.insert("b".to_string());
         set.insert("c".to_string());

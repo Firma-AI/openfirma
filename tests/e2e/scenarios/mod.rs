@@ -1,8 +1,10 @@
 mod allow_http_dispatch;
 mod authority_key_regeneration;
+mod authority_mappings;
 mod capability_trust_and_refresh;
 mod child_process_governance;
 mod config_masking;
+mod connection_masking;
 mod connector_failure;
 mod control_plane_runtime_isolation;
 mod deny_http_dispatch;

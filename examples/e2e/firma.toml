@@ -5,11 +5,12 @@
 #
 # Interceptor: HTTP forward proxy on :8080
 # Enforcement: policy bundle streamed from Authority on :50051
-# Default: unlisted hosts PASSTHROUGH (default_protected = false)
+# Default: unlisted hosts DENY (protected Authority snapshots).
 
 # ── Mini Authority ───────────────────────────────────────────────────────────
 
 [authority]
+mapping_rules_paths = ["mapping-rules.toml"]
 listen_addr = "127.0.0.1:50051"
 policy_dir = "../policies/"
 issuance_policy_dir = "issuance-policies/"
@@ -29,6 +30,8 @@ mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 drain_timeout = "30s"
 
+# Listing `intercept_hosts` replaces the intercept-everything default, pinning
+# this end-to-end run to the one host its assertions cover.
 [sidecar.interceptor.https_mitm]
 enabled = true
 intercept_hosts = ["paste.rs"]
@@ -38,13 +41,6 @@ dir = "../policies"
 
 [sidecar.ca]
 dir = "examples/e2e/firma-ca"
-
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-default_protected = false
-
-[sidecar.capability_validation]
-clock_skew_tolerance = "0s"
 
 [sidecar.constraint_enforcement]
 # Session-state cache capacity (AARM R2 G4). Raise to reduce LRU eviction

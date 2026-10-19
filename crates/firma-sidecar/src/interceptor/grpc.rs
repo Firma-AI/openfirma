@@ -219,8 +219,9 @@ impl GrpcInterceptor {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use std::collections::HashMap;
-    use std::time::Duration;
 
     use chrono::Utc;
     use firma_core::*;
@@ -230,7 +231,6 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use firma_config_schema::sidecar::TenancyMode;
 
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
@@ -307,8 +307,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -318,8 +317,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -329,7 +326,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -382,16 +379,13 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -401,7 +395,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -436,8 +430,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&rules, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
@@ -447,8 +440,6 @@ mod tests {
             }]),
             Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
-            Duration::from_secs(0),
-            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -458,7 +449,7 @@ mod tests {
             constraint_enforcer,
             credential_injector: Box::new(FailingCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -547,7 +538,7 @@ mod tests {
         let response = response.unwrap().into_inner();
 
         assert!(response.allowed);
-        assert!(response.reason.is_empty());
+        assert_eq!(response.reason, "");
 
         cancel.cancel();
         upstream_cancel.cancel();
@@ -588,7 +579,7 @@ mod tests {
         let response = response.unwrap().into_inner();
 
         assert!(!response.allowed);
-        assert!(!response.reason.is_empty());
+        assert_ne!(response.reason, "");
 
         cancel.cancel();
         server_handle.await.unwrap().unwrap();

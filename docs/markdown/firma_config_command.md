@@ -1,5 +1,11 @@
 # `firma config`
 
+Remote mode uses complete Authority mapping snapshots and generates no local
+mapping files. `--mapping` and `--extra-hosts` are local Authority options and
+are rejected in `agent-remote`. Conversion removes local path references but
+leaves files untouched, including with `--force`. Local generation supplies
+the mini-authority's `[authority].mapping_rules_paths`.
+
 `firma run` works out of the box with no prior setup — it auto-scaffolds a
 default config on first use. `firma config` lets you override those defaults:
 posture, mappings, authority mode, workspace path, and more. Run it when you
@@ -14,8 +20,11 @@ normally removes the top-level `[authority]` section from the generated
 `firma.toml`; otherwise `firma run` starts the Authority locally instead
 of using only the remote Authority. Non-force runs warn about that.
 Interactive runs ask whether to keep the section and use that answer to
-rewrite `firma.toml`; non-interactive non-force runs preserve the existing
-file. `--force` overwrites the config directly and removes the section.
+rewrite `firma.toml`; non-interactive runs remove the section even without
+`--force`. The command merges `firma.toml` on every run. Switching back to
+`agent-local` removes the remote physical connection override, trust paths,
+mTLS client identity, and PSK credentials so the Sidecar uses the local
+mini-authority. Remote re-runs preserve those connection settings.
 
 ## Quickstart
 
@@ -48,25 +57,29 @@ firma config [--mode <mode>] [--profile <profile>] [--agent-id <agent-id>]
              [--yes] [--force] [--dry-run] [--list-templates]
 ```
 
-| Flag                         | Short | Default                  | Description                                                                     |
-| ---------------------------- | ----- | ------------------------ | ------------------------------------------------------------------------------- |
-| `--mode <mode>`              |       | wizard / `agent-local`   | What to configure: `agent-local`, `agent-remote`, or `authority`                |
-| `--profile <profile>`        |       | wizard / `generic`       | Execution profile written to `[run].profile`                                    |
-| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`              |
-| `--posture <posture>`        |       | wizard / `dev`           | Cedar policy posture written under `policies/`                                  |
-| `--mapping <mapping>`        |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                                |
-| `--extra-hosts <hosts>`      |       | none                     | Comma-separated extra hosts the agent may reach                                 |
-| `--workspace <dir>`          |       | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount      |
-| `--output-dir <dir>`         | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings are written                 |
-| `--state-dir <dir>`          |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                     |
-| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority]` (`agent-local` / `authority` only) |
-| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)             |
-| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                     |
-| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path (`agent-remote`)                                      |
-| `--yes`                      | `-y`  | off                      | Skip all interactive prompts; use existing values or flag defaults              |
-| `--force`                    |       | off                      | Overwrite existing files including the authority keypair                        |
-| `--dry-run`                  |       | off                      | Print generated files to stdout without writing to disk                         |
-| `--list-templates`           |       | off                      | Print the posture × mapping catalogue and exit                                  |
+| Flag                         | Short | Default                  | Description                                                                                                                                                               |
+| ---------------------------- | ----- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--mode <mode>`              |       | wizard / `agent-local`   | What to configure: `agent-local`, `agent-remote`, or `authority`                                                                                                          |
+| `--profile <profile>`        |       | wizard / `generic`       | Execution profile written to `[run].profile`                                                                                                                              |
+| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`                                                                                                        |
+| `--posture <posture>`        |       | wizard / `dev`           | Cedar policy posture written under `policies/`                                                                                                                            |
+| `--mapping <mapping>`        |       | wizard / profile default | Mapping file(s) listed in `[authority].mapping_rules_paths` — repeat for multiple (`agent-local` / `authority`; rejected in `agent-remote`)                               |
+| `--extra-hosts <hosts>`      |       | none                     | Comma-separated extra hosts the agent may reach, written to `mapping-rules.toml` (`agent-local` / `authority`; rejected in `agent-remote`)                                |
+| `--workspace <dir>`          |       | CWD                      | Agent RW path for the sandbox. Written to `firma.toml` only when it differs from the project root (the directory holding `.firma/`), which `firma run` derives on its own |
+| `--output-dir <dir>`         | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings are written                                                                                                           |
+| `--state-dir <dir>`          |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                                                                                                               |
+| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority]` (`agent-local` / `authority` only)                                                                                           |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)                                                                                                       |
+| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                                                                                                               |
+| `--authority-pub-key <path>` |       | adopted from state dir   | Authority public key path (`agent-remote`)                                                                                                                                |
+| `--yes`                      | `-y`  | off                      | Skip all interactive prompts; use existing values or flag defaults                                                                                                        |
+| `--force`                    |       | off                      | Overwrite existing files including the authority keypair                                                                                                                  |
+| `--dry-run`                  |       | off                      | Print generated files to stdout without writing to disk                                                                                                                   |
+| `--list-templates`           |       | off                      | Print the posture × mapping catalogue and exit                                                                                                                            |
+
+Mappings belong to the Authority that publishes them. In `agent-remote` mode,
+configure mappings on the remote Authority; `--mapping` and `--extra-hosts`
+are rejected there.
 
 An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
 file even without `--force`; other existing generated files are still
@@ -121,17 +134,21 @@ preserved unless `--force` is set.
 `agent-remote` produces only the `[sidecar.authority]` connect block.
 `authority` mode produces only `[authority]`.
 
+Artifact paths are not written: each has a default that resolves to the state
+directory the material was generated in. Every key remains settable as an
+override.
+
 ```toml
 [authority] # present for agent-local and authority modes
 listen_addr = "127.0.0.1:9443"
-key_file = "/path/to/state/authority.key"
+policy_dir = "policies/"
 # ...
 
 [sidecar.authority] # connect coords for agent-local / agent-remote
 agent_id = "agt_01j0000000e008000000000001"
 url = "https://127.0.0.1:9443"
-ca_cert_path = "/path/to/state/tls/authority-ca.crt"
-public_key_path = "/path/to/state/authority.pub"
+# `agent-remote` also carries ca_cert_path / public_key_path: a remote
+# Authority's anchors are operator-supplied; there is no default.
 # ... plus connect_timeout / reconnect_* / revocation_* tuning
 
 # Uncomment for remote Authorities that require Sidecar PSK authentication.

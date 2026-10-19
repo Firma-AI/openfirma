@@ -9,7 +9,9 @@
 //! [`RequestHandler::with_http_secret_providers`]), it additionally
 //! intercepts and mints placeholders for matching HTTP-vault responses.
 
-use std::{borrow::Cow, collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{
+    borrow::Cow, collections::HashMap, fmt::Display, num::NonZeroUsize, str::FromStr, sync::Arc,
+};
 
 use firma_core::{
     AbortReason, ActionParams, ConnectorError, ConnectorResponse, DenyReason, ExecutionEnvelope,
@@ -36,7 +38,7 @@ use crate::{
     },
     pipeline::{
         CompositeActionResult, CompositeDisposition, EnforcementDecision, EnforcementPipeline,
-        RawRequest, audit_payload_from_decision, monitor_override,
+        RawRequest,
     },
     secret_rewrite::{ContentType, mask_body, rehydrate_body},
     secret_store::SidecarSecretStore,
@@ -61,8 +63,8 @@ pub enum HandledResponse {
         /// interceptors). See FEP §5.1–§5.2.
         ///
         /// In V1 all wired interceptors serve HTTP-class traffic and
-        /// treat both contexts identically (403 + `deny_body_json`)
-        /// per the task 008 V1 scope note. The field is populated so
+        /// treat both contexts identically (403 + `deny_body_json`).
+        /// The field is populated so
         /// a future tool-call transport can read it without any
         /// further handler/pipeline change.
         // V1 interceptors discard `context` (Tool and Api get the
@@ -546,7 +548,7 @@ type InterceptAbort = (AbortReason, String);
 async fn decode_for_inspection<'a>(
     dispatched: &'a DispatchedResponse,
     provider_id: &str,
-    max_decompressed_body_bytes: usize,
+    max_decompressed_body_bytes: NonZeroUsize,
 ) -> Result<(Cow<'a, [u8]>, Option<SupportedEncoding>), InterceptAbort> {
     body_encoding::decode_body(
         &dispatched.body,
@@ -612,7 +614,7 @@ async fn recompress_after_rewrite(
 async fn mask_dispatched(
     mut dispatched: DispatchedResponse,
     store: &SidecarSecretStore,
-    max_decompressed_body_bytes: usize,
+    max_decompressed_body_bytes: NonZeroUsize,
 ) -> Result<DispatchedResponse, InterceptAbort> {
     if dispatched.body.is_empty() {
         return Ok(dispatched);
@@ -665,7 +667,7 @@ async fn mask_dispatched(
 async fn mask_handled_response(
     response: HandledResponse,
     store: &SidecarSecretStore,
-    max_decompressed_body_bytes: usize,
+    max_decompressed_body_bytes: NonZeroUsize,
     audit_payload: &mut AuditPayload,
 ) -> HandledResponse {
     match response {
@@ -699,7 +701,8 @@ struct HttpSecretMediation {
 /// explicitly configured via [`RequestHandler::with_max_decompressed_body_bytes`].
 /// Mirrors [`crate::config::SidecarConfig`]'s own default for
 /// `sidecar.interceptor.max_decompressed_body_size`.
-const DEFAULT_MAX_DECOMPRESSED_BODY_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_MAX_DECOMPRESSED_BODY_BYTES: NonZeroUsize =
+    NonZeroUsize::new(16 * 1024 * 1024).unwrap();
 
 /// Shared handler used by every interceptor.
 pub struct RequestHandler {
@@ -709,7 +712,7 @@ pub struct RequestHandler {
     pipeline: Arc<EnforcementPipeline>,
     gateway_client: Option<Arc<GatewayClient>>,
     http_secret_mediation: Option<HttpSecretMediation>,
-    max_decompressed_body_bytes: usize,
+    max_decompressed_body_bytes: NonZeroUsize,
 }
 
 impl RequestHandler {
@@ -737,7 +740,10 @@ impl RequestHandler {
     /// `Content-Encoding`'d body for secret rehydration or masking. Guards
     /// against a decompression bomb forcing an unbounded allocation.
     #[must_use]
-    pub fn with_max_decompressed_body_bytes(mut self, max_decompressed_body_bytes: usize) -> Self {
+    pub fn with_max_decompressed_body_bytes(
+        mut self,
+        max_decompressed_body_bytes: NonZeroUsize,
+    ) -> Self {
         self.max_decompressed_body_bytes = max_decompressed_body_bytes;
         self
     }
@@ -937,9 +943,7 @@ impl RequestHandler {
         // needlessly reveals the request's placeholder tokens to the broker.
         let dispatches = matches!(
             decision,
-            EnforcementDecision::Allow { .. }
-                | EnforcementDecision::Modify { .. }
-                | EnforcementDecision::Passthrough { .. }
+            EnforcementDecision::Allow { .. } | EnforcementDecision::Modify { .. }
         );
         let (request, rehydrate_result) = if dispatches {
             self.rehydrate_request(request).await
@@ -1055,18 +1059,10 @@ impl RequestHandler {
                     .await
                 }
             },
-            EnforcementDecision::Passthrough { .. } => match pre_dispatch_gate(
-                rehydrate_result,
-                blocked_provider,
-                DenialContext::Api,
-                audit_payload,
-            ) {
-                Some(response) => response,
-                None => {
-                    self.dispatch_passthrough(request, session_id, audit_payload)
-                        .await
-                }
-            },
+            EnforcementDecision::Passthrough { .. } => {
+                let (reason, detail) = unexpected_passthrough();
+                deny_response(reason, detail, None, request, session_id)
+            }
             EnforcementDecision::Deny {
                 reason,
                 detail,
@@ -1312,36 +1308,6 @@ impl RequestHandler {
         Ok(dispatched)
     }
 
-    /// Dispatches a `PASSTHROUGH` decision: builds a minimal envelope and
-    /// forwards without enforcement credentials. Re-wraps `Ok` as `Passthrough`
-    /// so callers can distinguish authorized traffic from non-protected traffic.
-    async fn dispatch_passthrough(
-        &self,
-        request: &RawRequest,
-        session_id: &str,
-        audit_payload: &mut AuditPayload,
-    ) -> HandledResponse {
-        match passthrough_envelope(request, session_id) {
-            Ok(envelope) => {
-                let (response, outcome) =
-                    self.dispatch(envelope, InjectedCredentials::empty()).await;
-                outcome.enrich(audit_payload);
-                if let HandledResponse::Ok(dispatched) = response {
-                    HandledResponse::Passthrough(dispatched)
-                } else {
-                    response
-                }
-            }
-            Err(err) => {
-                let detail = err.to_string();
-                audit_payload.decision = Decision::Abort;
-                audit_payload.deny_reason =
-                    format!("{}: {detail}", AbortReason::ConnectorInvalidRequest.code());
-                handle_error(detail)
-            }
-        }
-    }
-
     /// Dispatches an `ALLOW` decision through the connector registry.
     async fn dispatch_allow(
         &self,
@@ -1390,23 +1356,9 @@ impl RequestHandler {
                     envelope: None,
                     identity: None,
                 };
-                let mut audit_payload = audit_payload_from_decision(
-                    &decision,
-                    request,
-                    session_id,
-                    std::time::Duration::ZERO,
-                    None,
-                );
-                // Monitor mode observes protocol-level denials too: forward
-                // the original request once and keep the would-deny reason in
-                // the audit record, matching the pipeline's monitor override.
-                if self.pipeline.is_monitor() {
-                    monitor_override(&mut audit_payload);
-                    return Some(
-                        self.forward_composio_observed(request, session_id, audit_payload)
-                            .await,
-                    );
-                }
+                let audit_payload = self
+                    .pipeline
+                    .audit_protocol_denial(&decision, request, session_id);
                 self.emit_audit(audit_payload).await;
                 Some(response_from_blocking_decision(&decision))
             }
@@ -1418,16 +1370,11 @@ impl RequestHandler {
         request: &RawRequest,
         session_id: &str,
     ) -> HandledResponse {
-        let decision = EnforcementDecision::Passthrough {
-            detail: "recognized Composio non-execution request".to_string(),
-        };
-        let audit_payload = audit_payload_from_decision(
-            &decision,
-            request,
-            session_id,
-            std::time::Duration::ZERO,
-            None,
-        );
+        let (decision, audit_payload) = self.pipeline.composio_passthrough(request, session_id);
+        if !matches!(decision, EnforcementDecision::Passthrough { .. }) {
+            self.emit_audit(audit_payload).await;
+            return response_from_blocking_decision(&decision);
+        }
         self.forward_composio_observed(request, session_id, audit_payload)
             .await
     }
@@ -1469,34 +1416,13 @@ impl RequestHandler {
             .await;
         let response = match result.disposition {
             CompositeDisposition::Dispatch {
-                transport,
-                monitor_override,
+                transport: (envelope, credentials),
             } => {
-                let dispatch = match transport {
-                    Some((envelope, credentials)) => {
-                        let mut dispatch_envelope = *envelope;
-                        hydrate_dispatch_http_fields(&mut dispatch_envelope, request);
-                        self.dispatch(dispatch_envelope, credentials).await
-                    }
-                    None => match passthrough_envelope(request, session_id) {
-                        Ok(envelope) => self.dispatch(envelope, InjectedCredentials::empty()).await,
-                        Err(err) => {
-                            let response = handle_error(err);
-                            let outcome = DispatchOutcome::abort_from_connector(
-                                AbortReason::ConnectorInvalidRequest,
-                                "could not construct Composio monitor dispatch",
-                            );
-                            (response, outcome)
-                        }
-                    },
-                };
-                let (response, outcome) = dispatch;
-                let mut response = response;
+                let mut dispatch_envelope = *envelope;
+                hydrate_dispatch_http_fields(&mut dispatch_envelope, request);
+                let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
                 for child in result.children {
                     self.emit_enriched_composite_audit(child, &outcome).await;
-                }
-                if monitor_override && let HandledResponse::Ok(dispatched) = response {
-                    response = HandledResponse::Passthrough(dispatched);
                 }
                 return response;
             }
@@ -1588,9 +1514,13 @@ impl RequestHandler {
         let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         let outcome = match decision {
-            EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
+            EnforcementDecision::Allow { .. } => {
                 audit_payload.dispatch_status = 200;
                 ConnectDecision::Allow
+            }
+            EnforcementDecision::Passthrough { .. } => {
+                let (reason, detail) = unexpected_passthrough();
+                ConnectDecision::Deny { reason, detail }
             }
             EnforcementDecision::Modify { modifications, .. } => {
                 // AARM R4 `MODIFY`: apply the redaction to the request headers
@@ -1643,23 +1573,9 @@ impl RequestHandler {
                 envelope: None,
                 identity: None,
             };
-            let mut audit_payload = audit_payload_from_decision(
-                &decision,
-                &request,
-                session_id,
-                std::time::Duration::ZERO,
-                None,
-            );
-            // Monitor mode observes the upgrade instead of blocking it: the
-            // relay proceeds without injected credentials and the audit
-            // record keeps the would-deny reason.
-            if self.pipeline.is_monitor() {
-                monitor_override(&mut audit_payload);
-                return UpgradeAuthorization::Allow {
-                    credentials: InjectedCredentials::empty(),
-                    audit_payload: Box::new(audit_payload),
-                };
-            }
+            let audit_payload = self
+                .pipeline
+                .audit_protocol_denial(&decision, &request, session_id);
             if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
                 tracing::error!("failed to send audit event: {err}");
             }
@@ -1691,10 +1607,13 @@ impl RequestHandler {
                     audit_payload: Box::new(audit_payload),
                 }
             }
-            EnforcementDecision::Passthrough { .. } => UpgradeAuthorization::Allow {
-                credentials: InjectedCredentials::empty(),
-                audit_payload: Box::new(audit_payload),
-            },
+            EnforcementDecision::Passthrough { .. } => {
+                if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+                    tracing::error!("failed to send audit event: {err}");
+                }
+                let (reason, detail) = unexpected_passthrough();
+                UpgradeAuthorization::Deny { reason, detail }
+            }
             EnforcementDecision::Deny { reason, detail, .. } => {
                 if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
                     tracing::error!("failed to send audit event: {err}");
@@ -1803,7 +1722,7 @@ impl RequestHandler {
     /// Covers fail-closed paths an interceptor rejects up front —
     /// malformed requests and strict-MITM preflight failures — that
     /// otherwise return 403 to the client with no audit trail, leaving
-    /// the deny invisible to `firma monitor` (FIR-208). No capability was
+    /// the deny invisible to `firma monitor`. No capability was
     /// validated on these paths, so `agent_id` / `token_id` are empty.
     pub(crate) async fn emit_synthetic_deny(
         &self,
@@ -2034,6 +1953,16 @@ fn apply_modification_to_request(
     }
 }
 
+/// Every protected request is classified or denied, so general enforcement
+/// never yields `PASSTHROUGH`; only recognized catalog discovery forwards
+/// unenforced, through its own path. Fail closed if that contract breaks.
+fn unexpected_passthrough() -> (DenyReason, String) {
+    (
+        DenyReason::FailClosed,
+        "enforcement returned an unclassified passthrough; failing closed".to_string(),
+    )
+}
+
 /// Builds a minimal [`ExecutionEnvelope`] for a non-protected
 /// (Passthrough) request so it can flow through the same connector
 /// dispatch path as authorized traffic.
@@ -2103,6 +2032,8 @@ fn passthrough_session_id() -> SessionId {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::num::NonZeroUsize;
+
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use async_trait::async_trait;
@@ -2135,7 +2066,7 @@ pub(crate) mod tests {
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
         MappingTable, PipelineArgs,
     };
-    use firma_config_schema::{gateway::GatewayConfig, sidecar::TenancyMode};
+    use firma_config_schema::gateway::GatewayConfig;
 
     #[expect(
         clippy::redundant_pub_crate,
@@ -2311,23 +2242,20 @@ pub(crate) mod tests {
 
     fn test_pipeline(
         rules: Vec<MappingRuleConfig>,
-        default_protected: bool,
         has_capability: bool,
     ) -> Arc<EnforcementPipeline> {
-        test_pipeline_for_session(rules, default_protected, has_capability, "sess_001")
+        test_pipeline_for_session(rules, has_capability, "sess_001")
     }
 
     fn test_pipeline_for_session(
         rules: Vec<MappingRuleConfig>,
-        default_protected: bool,
         has_capability: bool,
         session_id: &str,
     ) -> Arc<EnforcementPipeline> {
         let claims = test_claims_for_session(session_id);
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile { rules };
-        let table = MappingTable::from_config(&file, &registry, default_protected)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
         let entries = if has_capability {
             vec![CapabilityEntry {
                 raw_token: "v4.public.test_token".to_string(),
@@ -2343,13 +2271,11 @@ pub(crate) mod tests {
                 CapabilityMap::new(entries),
                 Arc::new(MockVerifier { claims }),
                 std::sync::Arc::new(NoRevocations),
-                Duration::from_secs(0),
-                TenancyMode::SingleAgent,
             ),
             constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2361,8 +2287,7 @@ pub(crate) mod tests {
         let claims = test_claims_for_session(session_id);
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile { rules };
-        let table =
-            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer: IntentNormalizer::new(table),
@@ -2373,13 +2298,11 @@ pub(crate) mod tests {
                 }]),
                 Arc::new(MockVerifier { claims }),
                 std::sync::Arc::new(NoRevocations),
-                Duration::from_secs(0),
-                TenancyMode::SingleAgent,
             ),
             constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(FailingCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2395,8 +2318,7 @@ pub(crate) mod tests {
         let claims = test_claims_for_session(session_id);
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile { rules };
-        let table =
-            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &registry).unwrap_or_else(|e| panic!("{e}"));
 
         Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer: IntentNormalizer::new(table),
@@ -2407,13 +2329,11 @@ pub(crate) mod tests {
                 }]),
                 Arc::new(MockVerifier { claims }),
                 std::sync::Arc::new(NoRevocations),
-                Duration::from_secs(0),
-                TenancyMode::SingleAgent,
             ),
             constraint_enforcer: ConstraintEnforcer::new(policy),
             credential_injector: Box::new(NullCredentialInjector),
             session_state_store: std::sync::Arc::new(
-                crate::enforcement::LruSessionStateStore::new(16),
+                crate::enforcement::LruSessionStateStore::new(NonZeroUsize::new(16).unwrap()),
             ),
         }))
     }
@@ -2470,7 +2390,7 @@ pub(crate) mod tests {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_allow"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_allow"),
             test_connector_registry(),
             tx,
         );
@@ -2511,7 +2431,7 @@ pub(crate) mod tests {
     async fn test_handle_deny_skips_forward_and_emits_audit() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, false),
+            test_pipeline(vec![allow_rule()], false),
             test_connector_registry(),
             tx,
         );
@@ -2530,7 +2450,7 @@ pub(crate) mod tests {
                 context,
             } => {
                 assert_eq!(reason, DenyReason::TokenInvalid);
-                assert!(!detail.is_empty());
+                assert_ne!(detail, "");
                 // Stage 1 TokenInvalid denies carry no envelope, so
                 // the handler falls back to Api per the fail-closed
                 // default.
@@ -2552,7 +2472,7 @@ pub(crate) mod tests {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_audit"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_audit"),
             test_connector_registry(),
             tx,
         );
@@ -2578,7 +2498,7 @@ pub(crate) mod tests {
             payload.dispatch_latency_us >= 0,
             "dispatch_latency_us must be populated"
         );
-        assert!(payload.deny_reason.is_empty());
+        assert_eq!(payload.deny_reason, "");
         upstream_cancel.cancel();
     }
 
@@ -2586,7 +2506,7 @@ pub(crate) mod tests {
     async fn test_handle_deny_audit_has_zero_dispatch_fields() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, false),
+            test_pipeline(vec![allow_rule()], false),
             test_connector_registry(),
             tx,
         );
@@ -2611,7 +2531,7 @@ pub(crate) mod tests {
     async fn test_handle_connector_network_error_aborts() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_net"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_net"),
             test_connector_registry(),
             tx,
         );
@@ -2654,7 +2574,7 @@ pub(crate) mod tests {
         // strip, so the handler must fail closed instead of dispatching.
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, true),
+            test_pipeline(vec![allow_rule()], true),
             test_connector_registry(),
             tx,
         );
@@ -2762,7 +2682,7 @@ pub(crate) mod tests {
         // host (including the wiremock one) goes through it and trips
         // the timeout well before wiremock replies.
         let fast_default = GenericHttpConnector::new(&HttpConnectorConfig {
-            timeout: Duration::from_millis(100),
+            timeout: firma_config_utils::NonZeroDuration::from_static(Duration::from_millis(100)),
             rate_limit: None,
         })
         .expect("fast default connector should build");
@@ -2776,7 +2696,7 @@ pub(crate) mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_timeout"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_timeout"),
             registry,
             tx,
         );
@@ -2809,7 +2729,7 @@ pub(crate) mod tests {
     async fn test_handle_connector_invalid_request_aborts() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_invalid"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_invalid"),
             Arc::new(crate::connector::ConnectorRegistry::new(Arc::new(
                 InvalidRequestConnector,
             ))),
@@ -2857,7 +2777,7 @@ pub(crate) mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_5xx"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_5xx"),
             test_connector_registry(),
             tx,
         );
@@ -2961,18 +2881,10 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_passthrough_with_unsupported_method_aborts() {
-        // TRACE is accepted by `firma_http::Method` but rejected by
-        // `HttpMethod::try_from` (envelope.rs only recognizes GET/POST/PUT/
-        // DELETE/PATCH/HEAD/OPTIONS/CONNECT). A passthrough request with an
-        // unrecognized method never reaches the mapping table's method
-        // check (that only runs for matched/protected requests), so it must
-        // fail later, in `passthrough_envelope`, and the handler must
-        // convert that error into an abort rather than panicking or
-        // silently dropping the request.
+    async fn test_handle_unmapped_unsupported_method_denies() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], false, true),
+            test_pipeline(vec![allow_rule()], true),
             test_connector_registry(),
             tx,
         );
@@ -2985,11 +2897,11 @@ pub(crate) mod tests {
             .await;
 
         match response {
-            HandledResponse::Aborted { reason, detail } => {
-                assert_eq!(reason, AbortReason::ConnectorInvalidRequest);
-                assert!(!detail.is_empty());
+            HandledResponse::Deny { reason, detail, .. } => {
+                assert_eq!(reason, DenyReason::UnclassifiedIntent);
+                assert_ne!(detail, "");
             }
-            other => panic!("expected aborted for unsupported method, got {other:?}"),
+            other => panic!("expected denial for unmapped method, got {other:?}"),
         }
 
         let payload = rx
@@ -2998,14 +2910,12 @@ pub(crate) mod tests {
         assert_eq!(payload.session_id, "sess_trace");
         assert_eq!(
             payload.decision,
-            Decision::Abort,
-            "the audit must record the abort, not the pre-dispatch Allow"
+            Decision::Deny,
+            "the audit must record the normalization denial"
         );
         assert!(
-            payload
-                .deny_reason
-                .contains(AbortReason::ConnectorInvalidRequest.code()),
-            "deny_reason should carry the abort reason, got: {}",
+            payload.deny_reason.contains("unclassified intent"),
+            "deny_reason should carry the classification failure, got: {}",
             payload.deny_reason
         );
     }
@@ -3130,7 +3040,7 @@ pub(crate) mod tests {
 
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_rehydrate"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_rehydrate"),
             test_connector_registry(),
             tx,
         )
@@ -3194,7 +3104,7 @@ pub(crate) mod tests {
 
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_raw_rehydrate"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_raw_rehydrate"),
             test_connector_registry(),
             tx,
         )
@@ -3267,7 +3177,7 @@ pub(crate) mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_rehydrate_fail"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_rehydrate_fail"),
             test_connector_registry(),
             tx,
         )
@@ -3348,7 +3258,7 @@ pub(crate) mod tests {
 
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_secret"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_http_secret"),
             test_connector_registry(),
             tx,
         )
@@ -3450,7 +3360,7 @@ pub(crate) mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_push_fail"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_http_push_fail"),
             test_connector_registry(),
             tx,
         )
@@ -3573,7 +3483,7 @@ pub(crate) mod tests {
             .expect("valid authority");
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_order"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_order"),
             test_connector_registry(),
             tx,
         )
@@ -3641,7 +3551,7 @@ pub(crate) mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         // No `with_http_secret_providers` call: interception must be a no-op.
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_secret_none"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_http_secret_none"),
             test_connector_registry(),
             tx,
         );
@@ -3708,7 +3618,7 @@ pub(crate) mod tests {
             .expect("valid authority");
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_blocked"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_http_blocked"),
             test_connector_registry(),
             tx,
         )
@@ -3755,7 +3665,7 @@ pub(crate) mod tests {
             .expect("valid authority");
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_safe"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_http_safe"),
             test_connector_registry(),
             tx,
         )
@@ -3798,7 +3708,7 @@ pub(crate) mod tests {
             .expect("valid authority");
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_http_no_gateway"),
+            test_pipeline_for_session(vec![allow_rule()], true, "sess_http_no_gateway"),
             test_connector_registry(),
             tx,
         )
@@ -3874,7 +3784,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn deny_body_json_shape_unchanged_by_task_008() {
+    fn deny_body_json_shape_is_stable() {
         let body = deny_body_json(DenyReason::ScopeViolation, "out of scope");
         let parsed: serde_json::Value =
             serde_json::from_slice(&body).expect("body should be valid JSON");
@@ -3995,11 +3905,11 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_passthrough_forwards_and_emits_audit() {
+    async fn test_handle_unmapped_host_denies_and_emits_audit() {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], false, true),
+            test_pipeline(vec![allow_rule()], true),
             test_connector_registry(),
             tx,
         );
@@ -4016,32 +3926,31 @@ pub(crate) mod tests {
             .await;
 
         match response {
-            HandledResponse::Passthrough(dispatched) => {
-                assert_eq!(dispatched.status, 201);
-                assert_eq!(dispatched.body, b"OK");
+            HandledResponse::Deny { reason, .. } => {
+                assert_eq!(reason, DenyReason::UnclassifiedIntent);
             }
-            other => panic!("expected passthrough response, got {other:?}"),
+            other => panic!("expected normalization denial, got {other:?}"),
         }
 
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_passthrough");
-        assert_eq!(payload.decision, Decision::Allow);
+        assert_eq!(payload.decision, Decision::Deny);
         assert!(rx.try_recv().is_err());
         upstream_cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_emit_synthetic_deny_sends_deny_audit_event() {
-        // Regression (FIR-208): pre-pipeline network-layer denials
+        // Regression: pre-pipeline network-layer denials
         // (malformed request, strict-MITM preflight fail-closed) return
         // 403 to the client but historically emitted NO audit event, so
         // they never surfaced in `firma monitor`. emit_synthetic_deny
         // gives those paths an audit record.
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, false),
+            test_pipeline(vec![allow_rule()], false),
             test_connector_registry(),
             tx,
         );
@@ -4083,7 +3992,7 @@ pub(crate) mod tests {
         // preserving the verified agent/token attribution.
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, false),
+            test_pipeline(vec![allow_rule()], false),
             test_connector_registry(),
             tx,
         );
@@ -4145,7 +4054,6 @@ pub(crate) mod tests {
                     action_class: "communication.external.send".to_string(),
                 }],
                 true,
-                true,
             ),
             test_connector_registry(),
             tx,
@@ -4185,7 +4093,6 @@ pub(crate) mod tests {
                     path: Some("/".to_string()),
                     action_class: "communication.external.send".to_string(),
                 }],
-                true,
                 false,
             ),
             test_connector_registry(),
@@ -4343,7 +4250,7 @@ pub(crate) mod tests {
     #[test]
     fn collect_placeholders_returns_empty_when_none_present() {
         let body = b"no placeholders here";
-        assert!(collect_placeholders(body).is_empty());
+        assert_eq!(collect_placeholders(body), [] as [SecretPlaceholder; 0]);
     }
 
     #[test]

@@ -48,6 +48,35 @@ fn default_listen_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), 50051)
 }
 
+/// Admit a persisted local section even when its daemon will be reused.
+///
+/// # Errors
+/// Returns file/schema errors or the Authority builder's validation failure.
+pub(crate) fn validate_local_config(
+    path: &Path,
+    state: &firma_runtime_state::RuntimeLayout,
+) -> Result<(), RunError> {
+    let file =
+        firma_config_loader::FirmaConfig::load(path).map_err(|error| RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    let schema = file
+        .section::<firma_config_schema::authority::AuthorityConfig>("authority")
+        .map_err(|error| RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    firma_authority::AuthorityConfigBuilder::new(schema, state)
+        .rebase_defaults(path.parent().unwrap_or_else(|| Path::new(".")))
+        .without_tls()
+        .build()
+        .map_err(|error| {
+            RunError::ConfigValidation(format!("invalid authority config: {error}"))
+        })?;
+    Ok(())
+}
+
 /// Read the routing snapshot from `firma.toml`.
 ///
 /// Returns `Ok(None)` when the file does not exist or carries neither

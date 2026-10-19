@@ -1,7 +1,8 @@
 import asyncio
+import os
 
 import dotenv
-from agents import Agent
+from agents import Agent, ModelSettings
 from agents.repl import run_demo_loop
 
 from agent.tools.database import db_query
@@ -21,6 +22,11 @@ dotenv.load_dotenv()
 agent = Agent(
     name="firma-demo-agent",
     model="gpt-4.1",
+    model_settings=ModelSettings(
+        extra_headers={
+            "x-firma-session-id": os.environ.get("FIRMA_SESSION_ID", "demo-session"),
+        }
+    ),
     instructions=(
         "You are the Firma Demo Agent. You have access to tools for checking weather, "
         "looking up IP information, querying a hosted Postgres database, reading and "

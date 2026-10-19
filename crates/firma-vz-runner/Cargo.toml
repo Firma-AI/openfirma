@@ -31,6 +31,7 @@ block2 = { workspace = true }
 dispatch2 = { workspace = true }
 libc = { workspace = true }
 objc2 = { workspace = true }
+socket2 = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
 workspace = true

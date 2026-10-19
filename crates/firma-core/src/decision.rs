@@ -103,7 +103,7 @@ pub enum DenyReason {
     /// Sidecar failed to inject credentials for Stage 3.
     ///
     /// No current producer: credential-injection failure after ALLOW is
-    /// raised as [`AbortReason::CredentialInjectionFailed`] (FIR-46), not a
+    /// raised as [`AbortReason::CredentialInjectionFailed`], not a
     /// DENY. Retained for serialized backward compatibility of this enum.
     #[error("credential injection failed")]
     CredentialInjectionFailed,
@@ -118,7 +118,7 @@ pub enum DenyReason {
     /// well-formed target request.
     ///
     /// No current producer: a connector that fails to build a request after
-    /// ALLOW is raised as [`AbortReason::ConnectorInvalidRequest`] (FIR-46),
+    /// ALLOW is raised as [`AbortReason::ConnectorInvalidRequest`],
     /// not a DENY. Retained for serialized backward compatibility of this enum.
     #[error("connector invalid request")]
     ConnectorInvalidRequest,

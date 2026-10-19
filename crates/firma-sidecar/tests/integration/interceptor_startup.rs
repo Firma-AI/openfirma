@@ -8,6 +8,7 @@ use std::sync::Arc;
 #[cfg(unix)]
 use std::path::Path;
 
+use super::state_layout::empty_state_beside;
 #[cfg(unix)]
 use firma_config_schema::sidecar::InterceptorMode;
 use firma_grpc_interceptor_proto::InterceptRequest;
@@ -24,17 +25,6 @@ fn grpc_config_and_handler(
     listen_addr: SocketAddr,
 ) -> anyhow::Result<(SidecarConfig, Arc<RequestHandler>)> {
     let temp = tempfile::tempdir()?;
-    let rules_path = temp.path().join("mapping-rules.toml");
-    fs::write(
-        &rules_path,
-        r#"
-[[rules]]
-method = "GET"
-host = "example.com"
-path = "/"
-action_class = "communication.external.send"
-"#,
-    )?;
     let config_path = temp.path().join("firma.toml");
     fs::write(
         &config_path,
@@ -44,15 +34,14 @@ action_class = "communication.external.send"
 mode = "grpc"
 listen_addr = "{listen_addr}"
 
-[mapping]
-rules_path = '{}'
-default_protected = false
+[authority]
+url = "http://127.0.0.1:50051"
 "#,
-            rules_path.display()
         ),
     )?;
 
-    let config = SidecarConfig::load_from_path(&config_path).map_err(anyhow::Error::msg)?;
+    let config = SidecarConfig::load_from_path(&config_path, &empty_state_beside(&config_path))
+        .map_err(anyhow::Error::msg)?;
     let runtime_layout = RuntimeLayout::from_root(temp.path());
     let runtime = build_pipeline_runtime(&runtime_layout, &config)?;
     let connectors = build_connector_registry(&config.connector)?;

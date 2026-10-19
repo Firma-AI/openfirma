@@ -34,7 +34,7 @@ fn read(path: &Path) -> toml::Value {
 fn synthesized_mapping_table(rules_path: &Path) -> MappingTable {
     let rules = fs::read_to_string(rules_path).expect("read mapping rules");
     let file = toml::from_str(&rules).expect("parse mapping rules");
-    MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).expect("mapping table")
+    MappingTable::from_config(&file, &ActionClassRegistry::v0_1()).expect("mapping table")
 }
 
 /// Reads `[sidecar.audit]` from a synthesized config file.
@@ -49,7 +49,7 @@ fn audit_table(value: &toml::Value) -> &toml::value::Table {
 }
 
 /// Default [`SynthesizeRequest`] for tests. Override specific fields with
-/// struct-update syntax: `SynthesizeRequest { monitor_mode: true, ..req(&sock, &out) }`.
+/// struct-update syntax: `SynthesizeRequest { listen_addr: Some(addr), ..req(&sock, &out) }`.
 fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
     SynthesizeRequest {
         agent_id: super::helper::agent_id(),
@@ -65,9 +65,79 @@ fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
         authority_credentials: None,
         capability_seed_path: None,
         audit_fallback_path: None,
-        monitor_mode: false,
+        audit_signing_key_path: None,
         http_secret_providers: &[],
     }
+}
+
+/// A GitHub host the operator names in either intercept list stays
+/// intercepted (bypass would win over both), in any spelling; the profile
+/// still bypasses the GitHub hosts the operator left unnamed.
+#[test]
+fn connected_vscode_synthesis_preserves_explicit_mitm_routing_without_credentials() {
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &template,
+        "[sidecar.interceptor.https_mitm]\nenabled = true\nintercept_hosts = ['api.github.com']\nstrict_hosts = ['UPLOADS.github.com']\n",
+    )
+    .expect("template");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    synthesize(SynthesizeRequest {
+        execution_profile: AgentProfile::Vscode,
+        authority_url: Some("http://127.0.0.1:9000"),
+        template: resolve_template_sources(Some(&template)).expect("template"),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+    let schema: firma_config_schema::sidecar::SidecarConfig = read(&out)["sidecar"]
+        .clone()
+        .try_into()
+        .expect("parse synthesized Sidecar config");
+    let mitm = &schema.interceptor.https_mitm;
+    assert_eq!(mitm.intercept_hosts, ["api.github.com"]);
+    assert_eq!(mitm.strict_hosts, ["UPLOADS.github.com"]);
+    assert_eq!(mitm.bypass_hosts, ["github.com"]);
+}
+
+/// Unrelated interception settings must not cost VS Code its GitHub bypass.
+///
+/// The VS Code fallback mapping classifies `github.com` only at CONNECT level,
+/// so decrypting it leaves sign-in requests unclassified and denied. Every
+/// local `firma run` Sidecar is connected to an Authority, so this is the
+/// default runner path, not a remote-Authority corner case.
+#[test]
+fn connected_vscode_synthesis_keeps_github_bypass_beside_unrelated_mitm_settings() {
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &template,
+        "[sidecar.interceptor.https_mitm]\nbypass_hosts = ['corp.example']\n",
+    )
+    .expect("template");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    synthesize(SynthesizeRequest {
+        execution_profile: AgentProfile::Vscode,
+        authority_url: Some("http://127.0.0.1:9000"),
+        template: resolve_template_sources(Some(&template)).expect("template"),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+    let schema: firma_config_schema::sidecar::SidecarConfig = read(&out)["sidecar"]
+        .clone()
+        .try_into()
+        .expect("parse synthesized Sidecar config");
+    assert_eq!(
+        schema.interceptor.https_mitm.bypass_hosts,
+        [
+            "corp.example",
+            "github.com",
+            "api.github.com",
+            "uploads.github.com"
+        ]
+    );
 }
 
 #[test]
@@ -75,7 +145,7 @@ fn minimal_template_defaults_audit_to_monitorable_file_sink() {
     // With no template, the synthesized per-run sidecar must default its audit
     // sink to a file at the shared state dir so `firma monitor` can tail it.
     // Otherwise the default `stdout` sink writes to the spawned sidecar's null
-    // stdout and `firma monitor` shows nothing (FIR-193).
+    // stdout and `firma monitor` shows nothing.
     let tmp = TempDir::new().expect("tmp");
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
@@ -98,6 +168,132 @@ fn minimal_template_defaults_audit_to_monitorable_file_sink() {
     );
 }
 
+/// A template that names no signing key, with the shared one provisioned, must
+/// leave the field unset so the Sidecar's own `StateDefault` resolves it.
+/// Minting a per-run key instead would leave the shared audit log holding events
+/// signed by material that is deleted with the marker directory.
+#[test]
+fn an_unnamed_signing_key_is_left_to_the_sidecars_state_default() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("marker").join("sidecar.toml");
+    std::fs::create_dir_all(out.parent().expect("marker dir")).expect("create marker dir");
+    let sock = tmp.path().join("sidecar.sock");
+    let shared_key = tmp.path().join("audit.key");
+    std::fs::write(&shared_key, "shared").expect("write shared audit key");
+
+    synthesize(SynthesizeRequest {
+        audit_signing_key_path: Some(&shared_key),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    assert_eq!(
+        audit_table(&read(&out)).get("signing_key_path"),
+        None,
+        "the Sidecar owns this default; the run must not restate it"
+    );
+    assert!(
+        !out.parent().expect("marker dir").join("audit.key").exists(),
+        "no throwaway key may be minted while the shared one is provisioned"
+    );
+}
+
+/// `signing_key_path` records where the operator put a key, so a run must not
+/// silently sign with other material when that file is missing. The pinned path
+/// reaches the Sidecar, which reports it and fails closed; substituting the
+/// shared key would instead append events to the shared audit log under a key
+/// nobody selected.
+#[test]
+fn a_pinned_signing_key_survives_even_when_its_file_is_missing() {
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join(CONFIG_FILE_NAME);
+    let pinned = tmp.path().join("pinned-audit.key");
+    // A TOML literal string: a Windows path's separators are not escapes.
+    fs::write(
+        &template,
+        format!(
+            "[sidecar.audit]\nsigning_key_path = '{}'\n",
+            pinned.display()
+        ),
+    )
+    .expect("write template");
+    let out = tmp.path().join("marker").join("sidecar.toml");
+    fs::create_dir_all(out.parent().expect("marker dir")).expect("create marker dir");
+    let sock = tmp.path().join("sidecar.sock");
+    let shared_key = tmp.path().join("audit.key");
+    fs::write(&shared_key, "shared").expect("write shared audit key");
+
+    synthesize(SynthesizeRequest {
+        template: resolve_template_sources(Some(&template)).expect("resolve Sidecar template"),
+        audit_signing_key_path: Some(&shared_key),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    assert_eq!(
+        audit_table(&read(&out))
+            .get("signing_key_path")
+            .and_then(toml::Value::as_str),
+        Some(pinned.display().to_string()).as_deref()
+    );
+}
+
+/// Before `firma config` has ever run there is nothing to share, so the run
+/// still has to be self-contained.
+#[test]
+fn an_absent_shared_signing_key_still_yields_a_per_run_key() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("marker").join("sidecar.toml");
+    std::fs::create_dir_all(out.parent().expect("marker dir")).expect("create marker dir");
+    let sock = tmp.path().join("sidecar.sock");
+    let missing = tmp.path().join("audit.key");
+
+    synthesize(SynthesizeRequest {
+        audit_signing_key_path: Some(&missing),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let configured = audit_table(&value)
+        .get("signing_key_path")
+        .and_then(toml::Value::as_str)
+        .expect("signing_key_path");
+    assert_ne!(Path::new(configured), missing);
+    assert!(Path::new(configured).is_file(), "{configured}");
+}
+
+/// The per-run key is private key material, so it is written like every other
+/// secret this crate lays down rather than with the process umask.
+#[cfg(unix)]
+#[test]
+fn a_per_run_signing_key_is_readable_only_by_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("marker").join("sidecar.toml");
+    fs::create_dir_all(out.parent().expect("marker dir")).expect("create marker dir");
+    let sock = tmp.path().join("sidecar.sock");
+
+    synthesize(req(&sock, &out)).expect("synthesize");
+
+    let value = read(&out);
+    let key_path = audit_table(&value)
+        .get("signing_key_path")
+        .and_then(toml::Value::as_str)
+        .expect("signing_key_path");
+    let mode = fs::metadata(key_path)
+        .expect("stat key")
+        .permissions()
+        .mode();
+    assert_eq!(
+        mode & 0o777,
+        0o600,
+        "{key_path} has mode {:o}",
+        mode & 0o777
+    );
+}
+
 /// Reads `[sidecar.ca].dir` from a synthesized config file.
 fn ca_dir(value: &toml::Value) -> &str {
     value
@@ -113,7 +309,7 @@ fn ca_dir(value: &toml::Value) -> &str {
 
 #[test]
 fn ca_dir_is_pinned_to_the_run_entry_layout() {
-    // `firma run` derives the sandbox trust env and the bwrap CA bind from
+    // `firma run` builds the sandbox trust env and the bwrap CA bind from
     // `RunEntryLayout`, so the sidecar must write its MITM CA to exactly that
     // directory. A template's own `ca.dir` (and the CWD-relative default)
     // would land the material outside the mounted path, leaving the sandbox
@@ -220,16 +416,6 @@ fn missing_template_writes_minimal_config() {
             "windows minimal config must have a listen_addr for http_proxy"
         );
     }
-    let mapping = sidecar
-        .get("mapping")
-        .and_then(|v| v.as_table())
-        .expect("mapping table");
-    assert_eq!(
-        mapping
-            .get("default_protected")
-            .and_then(toml::Value::as_bool),
-        Some(true)
-    );
 }
 
 #[test]
@@ -277,9 +463,6 @@ listen_addr = "127.0.0.1:9090"
 
 [sidecar.interceptor.https_mitm]
 enabled = false
-
-[sidecar.mapping]
-rules_path = "/etc/firma/mapping.toml"
 
 [sidecar.capability_seed]
 paths = ["/etc/firma/cap.toml"]
@@ -339,7 +522,6 @@ paths = ["/etc/firma/cap.toml"]
         mitm.get("enabled").and_then(toml::Value::as_bool),
         Some(false)
     );
-    assert!(sidecar.contains_key("mapping"));
     assert!(sidecar.contains_key("capability_seed"));
 }
 
@@ -465,9 +647,9 @@ fn relative_template_resource_paths_rebase_to_template_dir() {
     // NOT absolute on Windows (no drive prefix), so it would be rebased
     // instead of left untouched. Drive-prefixed paths are absolute on both.
     #[cfg(windows)]
-    let (abs_keep, abs_seed) = ("C:/abs/keep.toml", "C:/abs/seed.toml");
+    let abs_seed = "C:/abs/seed.toml";
     #[cfg(not(windows))]
-    let (abs_keep, abs_seed) = ("/abs/keep.toml", "/abs/seed.toml");
+    let abs_seed = "/abs/seed.toml";
 
     fs::write(
         &template,
@@ -480,12 +662,10 @@ file_path = "audit/events.jsonl"
 [sidecar.policy]
 dir = "policies"
 
-[sidecar.mapping]
-rules_path = "mapping-rules.toml"
-rules_paths = ["extras/github.toml", "{abs_keep}"]
-
 [sidecar.authority]
 public_key_path = "keys/authority.pub"
+tls_client_cert_path = "tls/client.crt"
+tls_client_key_path = "tls/client.key"
 
 [sidecar.capability_seed]
 paths = ["seeds/dev.toml", "{abs_seed}"]
@@ -542,38 +722,6 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
         Some(template_dir.join("policies").display().to_string()).as_deref()
     );
 
-    let mapping = sidecar
-        .get("mapping")
-        .and_then(|v| v.as_table())
-        .expect("mapping");
-    assert_eq!(
-        mapping.get("rules_path").and_then(|v| v.as_str()),
-        Some(
-            template_dir
-                .join("mapping-rules.toml")
-                .display()
-                .to_string()
-        )
-        .as_deref()
-    );
-    let rules_paths = mapping
-        .get("rules_paths")
-        .and_then(|v| v.as_array())
-        .expect("rules_paths array");
-    assert_eq!(
-        rules_paths
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .collect::<Vec<_>>(),
-        vec![
-            template_dir
-                .join("extras/github.toml")
-                .display()
-                .to_string(),
-            abs_keep.to_string()
-        ]
-    );
-
     let authority = sidecar
         .get("authority")
         .and_then(|v| v.as_table())
@@ -588,6 +736,16 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
         )
         .as_deref()
     );
+    for (field, relative) in [
+        ("tls_client_cert_path", "tls/client.crt"),
+        ("tls_client_key_path", "tls/client.key"),
+    ] {
+        assert_eq!(
+            authority.get(field).and_then(toml::Value::as_str),
+            Some(template_dir.join(relative).display().to_string()).as_deref(),
+            "{field} must still refer to the operator's client identity"
+        );
+    }
 
     let capability_seed = sidecar
         .get("capability_seed")
@@ -625,6 +783,44 @@ fn nonexistent_template_fails() {
 }
 
 #[test]
+fn vscode_minimal_mapping_classifies_requests_under_default_interception() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    synthesize(SynthesizeRequest {
+        execution_profile: AgentProfile::Vscode,
+        listen_addr: Some("127.0.0.1:18080".parse().expect("listen addr")),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    let schema: firma_config_schema::sidecar::SidecarConfig = read(&out)["sidecar"]
+        .clone()
+        .try_into()
+        .expect("parse synthesized Sidecar config");
+    let mitm = &schema.interceptor.https_mitm;
+    let authority = super::authority_bootstrap_prompt::generated_mapping_file("vscode");
+    let table = synthesized_mapping_table(&authority.path().join("mapping-rules.toml"));
+    let host = Authority::from_static("marketplace.visualstudio.com");
+    assert!(mitm.enabled);
+    assert_eq!(mitm.intercept_hosts, ["*"]);
+    assert_eq!(mitm.strict_hosts, ["*"]);
+    assert!(!mitm.bypass_hosts.contains(&host.to_string()));
+    assert!(matches!(
+        table.find_match(&Method::CONNECT, &host, "/"),
+        MatchResult::Matched(_)
+    ));
+    match table.find_match(&Method::POST, &host, "/_apis/public/gallery/extensionquery") {
+        MatchResult::Matched(rule) => {
+            assert_eq!(rule.action_class, "communication.external.send");
+        }
+        other @ MatchResult::UnclassifiedProtected => {
+            panic!("default MITM must classify the marketplace request, got {other:?}")
+        }
+    }
+}
+
+#[test]
 fn vscode_minimal_mapping_covers_github_sign_in_hosts() {
     let tmp = TempDir::new().expect("tmp");
     let out = tmp.path().join("sidecar.toml");
@@ -655,7 +851,8 @@ fn vscode_minimal_mapping_covers_github_sign_in_hosts() {
         ["github.com", "api.github.com", "uploads.github.com"]
     );
 
-    let table = synthesized_mapping_table(&tmp.path().join("mapping-rules.toml"));
+    let authority = super::authority_bootstrap_prompt::generated_mapping_file("vscode");
+    let table = synthesized_mapping_table(&authority.path().join("mapping-rules.toml"));
     for host in [
         Authority::from_static("github.com"),
         Authority::from_static("api.github.com"),
@@ -675,52 +872,11 @@ fn vscode_minimal_mapping_covers_github_sign_in_hosts() {
             MatchResult::Matched(rule) => {
                 assert_eq!(rule.action_class, "communication.external.send", "{host}");
             }
-            other => panic!("expected {host} to be mapped, got {other:?}"),
+            other @ MatchResult::UnclassifiedProtected => {
+                panic!("expected {host} to be mapped, got {other:?}")
+            }
         }
     }
-}
-
-#[test]
-fn monitor_mode_injects_mode_monitor_into_sidecar_section() {
-    let tmp = TempDir::new().expect("tmp");
-    let out = tmp.path().join("sidecar.toml");
-    let sock = tmp.path().join("sidecar.sock");
-    synthesize(SynthesizeRequest {
-        monitor_mode: true,
-        ..req(&sock, &out)
-    })
-    .expect("synthesize");
-
-    let value = read(&out);
-    let sidecar = value
-        .as_table()
-        .and_then(|t| t.get("sidecar"))
-        .and_then(|v| v.as_table())
-        .expect("sidecar table");
-    assert_eq!(
-        sidecar.get("mode").and_then(toml::Value::as_str),
-        Some("monitor"),
-        "monitor_mode=true must inject mode = \"monitor\" into [sidecar]"
-    );
-}
-
-#[test]
-fn no_monitor_mode_does_not_inject_mode_field() {
-    let tmp = TempDir::new().expect("tmp");
-    let out = tmp.path().join("sidecar.toml");
-    let sock = tmp.path().join("sidecar.sock");
-    synthesize(req(&sock, &out)).expect("synthesize");
-
-    let value = read(&out);
-    let sidecar = value
-        .as_table()
-        .and_then(|t| t.get("sidecar"))
-        .and_then(|v| v.as_table())
-        .expect("sidecar table");
-    assert!(
-        sidecar.get("mode").is_none(),
-        "monitor_mode=false must not inject a mode field"
-    );
 }
 
 #[test]

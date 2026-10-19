@@ -59,11 +59,13 @@ pub struct InitArgs {
     #[arg(long, value_enum)]
     pub posture: Option<Posture>,
 
-    /// Mapping file(s) to include — may be repeated. Not used in `authority` mode.
+    /// Mapping file(s) the local Authority publishes — may be repeated.
+    /// Rejected in `agent-remote` mode; manage remote Authority mappings there.
     #[arg(long, value_enum)]
     pub mapping: Vec<Mapping>,
 
-    /// Comma-separated extra hosts the agent is allowed to reach.
+    /// Comma-separated extra hosts the local Authority classifies. Rejected in
+    /// `agent-remote` mode.
     #[arg(long)]
     pub extra_hosts: Option<String>,
 
@@ -159,6 +161,15 @@ impl Posture {
     }
 }
 
+/// GitHub hosts the `copilot` mapping keeps out of interception.
+///
+/// That mapping classifies them at CONNECT level only, so intercepting them
+/// would deny every decrypted request as unclassified. The `vscode` profile
+/// takes the other route and loads the `github` mapping, which classifies those
+/// endpoints individually; `copilot` cannot, because its CONNECT classes for
+/// the same hosts would duplicate GitHub's.
+const GITHUB_BYPASS_HOSTS: &[&str] = &["github.com", "api.github.com", "uploads.github.com"];
+
 /// Mapping file selection for `firma config`.
 #[derive(Debug, Clone, ValueEnum)]
 #[cfg_attr(test, derive(strum::EnumIter))]
@@ -223,46 +234,37 @@ impl Mapping {
     /// Human-readable description for catalogue display.
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Anthropic => "api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)",
-            Self::Openai => "api.openai.com — OpenAI API (CONNECT, no MITM)",
-            Self::Github => {
-                "api.github.com — GitHub REST API (MITM for per-endpoint classification)"
-            }
-            Self::Gmail => {
-                "gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification)"
-            }
+            Self::Anthropic => "api.anthropic.com — Anthropic Claude API (coarse per-request)",
+            Self::Openai => "api.openai.com — OpenAI API (coarse per-request)",
+            Self::Github => "api.github.com — GitHub REST API (per-endpoint classification)",
+            Self::Gmail => "gmail.googleapis.com — Gmail REST API (per-endpoint classification)",
             Self::Npm => "registry.npmjs.org — npm package registry",
             Self::Pypi => "pypi.org, files.pythonhosted.org — PyPI",
             Self::Cargo => "crates.io, static.crates.io — Rust package registry",
             Self::Stripe => {
-                "api.stripe.com — Stripe REST API (MITM optional — check SDK cert pinning first)"
+                "api.stripe.com — Stripe REST API (bypass it if your SDK pins certificates)"
             }
-            Self::Copilot => "GitHub Copilot CLI hosts (CONNECT only; github MITM-bypassed)",
+            Self::Copilot => "GitHub Copilot CLI hosts (github MITM-bypassed)",
             Self::Composio => {
                 "app.composio.dev, backend.composio.dev — governed execution (strict MITM)"
             }
             Self::Vscode => {
-                "Visual Studio Code hosts (CONNECT only; core services, marketplace, accounts, GitHub, Copilot)"
+                "Visual Studio Code hosts (core services, marketplace, accounts, Copilot; \
+                 selects github for repository endpoints)"
             }
-        }
-    }
-
-    /// Hosts that require HTTPS MITM for per-endpoint REST classification.
-    pub fn mitm_hosts(&self) -> &'static [&'static str] {
-        match self {
-            Self::Github => &["api.github.com"],
-            Self::Gmail => &["gmail.googleapis.com"],
-            Self::Composio => &["app.composio.dev", "backend.composio.dev"],
-            _ => &[],
         }
     }
 
     /// Hosts to add to `sidecar.interceptor.https_mitm.bypass_hosts` —
     /// intercepted-by-default hosts this agent needs passed through untouched
     /// (real upstream TLS).
+    ///
+    /// There is no counterpart listing hosts to intercept: the Sidecar
+    /// intercepts every host by default, so naming hosts here is the only
+    /// per-mapping interception decision left.
     pub fn mitm_bypass_hosts(&self) -> &'static [&'static str] {
         match self {
-            Self::Copilot => &["github.com", "api.github.com", "uploads.github.com"],
+            Self::Copilot => GITHUB_BYPASS_HOSTS,
             _ => &[],
         }
     }
@@ -289,14 +291,15 @@ impl Mapping {
 mod tests {
     use super::*;
 
+    /// `copilot` classifies these hosts at CONNECT level only, so leaving them
+    /// intercepted denies ordinary repository traffic as unclassified. `vscode`
+    /// does not bypass them: it loads the `github` mapping instead.
     #[test]
-    fn copilot_mapping_bypasses_github_and_has_no_mitm() {
+    fn only_the_copilot_mapping_bypasses_github() {
         assert_eq!(Mapping::Copilot.as_str(), "copilot");
-        assert!(Mapping::Copilot.mitm_hosts().is_empty());
-        let bypass = Mapping::Copilot.mitm_bypass_hosts();
-        assert!(bypass.contains(&"github.com"));
-        assert!(bypass.contains(&"api.github.com"));
-        assert!(Mapping::Anthropic.mitm_bypass_hosts().is_empty());
+        assert_eq!(Mapping::Copilot.mitm_bypass_hosts(), GITHUB_BYPASS_HOSTS);
+        assert_eq!(Mapping::Vscode.mitm_bypass_hosts(), [] as [&str; 0]);
+        assert_eq!(Mapping::Anthropic.mitm_bypass_hosts(), [] as [&str; 0]);
         assert!(
             Mapping::Copilot
                 .static_content()

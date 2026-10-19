@@ -1,3 +1,0 @@
-[build.env]
-passthrough = ["PROTOC", "PROTOC_INCLUDE"]
-volumes = ["PROTOC", "PROTOC_INCLUDE"]

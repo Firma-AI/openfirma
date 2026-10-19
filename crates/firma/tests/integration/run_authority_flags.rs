@@ -14,9 +14,7 @@
 
 use std::process::Command;
 
-fn firma_bin() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
-}
+use super::firma_bin;
 
 #[test]
 fn authority_flag_listed_in_help() {
