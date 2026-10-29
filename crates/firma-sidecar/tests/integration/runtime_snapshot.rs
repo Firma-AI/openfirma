@@ -12,6 +12,7 @@ use firma_sidecar::audit::{AuditPayload, ExecutionEvent};
 use firma_sidecar::authority_client::swappable_policy::{
     RuntimeSnapshot, SwappablePolicyEvaluation,
 };
+use firma_sidecar::authority_tls::AuthorityTls;
 use firma_sidecar::composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::credential::{
@@ -213,7 +214,13 @@ async fn emitted(payloads: Vec<AuditPayload>) -> anyhow::Result<Vec<ExecutionEve
     let count = payloads.len();
     let (sender, receiver) = tokio::sync::mpsc::channel(payloads.len().max(1));
     let exit = CancellationToken::new();
-    let task = spawn_audit_sink(&config, receiver, builder, exit.clone())?;
+    let task = spawn_audit_sink(
+        &config,
+        &AuthorityTls::read(&config.authority)?,
+        receiver,
+        builder,
+        exit.clone(),
+    )?;
     for payload in payloads {
         sender.send(payload).await?;
     }

@@ -95,6 +95,8 @@ fn local_authority_publishes_effective_component_handle_and_metadata() {
     let authority = ResolvedAuthority {
         url: "http://[::1]:0".into(),
         ca_cert_path: None,
+        trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+        connect_addr: None,
         pub_key_path: None,
         credentials: None,
         credentials_config: None,
@@ -103,6 +105,7 @@ fn local_authority_publishes_effective_component_handle_and_metadata() {
             firma_exe: launcher,
             user_config_path: None,
         }),
+        capability_public_key: None,
     };
     let flags = AutostartFlags {
         startup_timeout: Duration::from_secs(5),
@@ -113,7 +116,6 @@ fn local_authority_publishes_effective_component_handle_and_metadata() {
         public_key_path: None,
         refresh_ratio: 0.6,
         grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     };
 
     let runtime_layout =
@@ -301,6 +303,8 @@ fn prepare_with_persisted_config(
     let authority = ResolvedAuthority {
         url: "http://[::1]:0".into(),
         ca_cert_path: None,
+        trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+        connect_addr: None,
         pub_key_path: None,
         credentials: None,
         credentials_config: None,
@@ -309,6 +313,7 @@ fn prepare_with_persisted_config(
             firma_exe: launcher,
             user_config_path: Some(user_config),
         }),
+        capability_public_key: None,
     };
     let flags = AutostartFlags {
         startup_timeout: Duration::from_secs(5),
@@ -319,7 +324,6 @@ fn prepare_with_persisted_config(
         public_key_path: None,
         refresh_ratio: 0.6,
         grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     };
 
     let runtime = prepare_network_runtime(
@@ -509,6 +513,8 @@ fn prepare_failing_runtime(config: &FailingRuntime) -> (Result<NetworkRuntime, R
     let authority = ResolvedAuthority {
         url: "http://[::1]:0".into(),
         ca_cert_path: None,
+        trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+        connect_addr: None,
         pub_key_path: None,
         credentials: None,
         credentials_config: None,
@@ -517,6 +523,7 @@ fn prepare_failing_runtime(config: &FailingRuntime) -> (Result<NetworkRuntime, R
             firma_exe: launcher,
             user_config_path: None,
         }),
+        capability_public_key: None,
     };
     let flags = AutostartFlags {
         startup_timeout: Duration::from_secs(5),
@@ -527,7 +534,6 @@ fn prepare_failing_runtime(config: &FailingRuntime) -> (Result<NetworkRuntime, R
         public_key_path: None,
         refresh_ratio: 0.6,
         grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     };
     let runtime_layout =
         firma_runtime_state::RuntimeLayout::resolve(None).expect("resolve runtime layout");

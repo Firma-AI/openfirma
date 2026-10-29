@@ -42,9 +42,11 @@ OpenFirma can be installed with a one-line script or built from source. The scri
 
 </Steps>
 
-The tarball installer drops `firma` in `~/.local/bin` by default and adds that directory to your shell's `PATH`. It keeps backend support binaries in a private `libexec/openfirma` directory beside `firma`. The Homebrew path stores its private guest shim under `$(brew --prefix)/var/openfirma/secret-shims/<version>/<target>/` instead. These support binaries are not commands and must not be added to `PATH`.
+The installer drops `firma` in `~/.local/bin` by default and adds that directory to your shell's `PATH`. It keeps backend support binaries in a private `libexec/openfirma` directory beside `firma`. These support binaries are not commands and must not be added to `PATH`.
 
-On macOS, a failed Homebrew inspection, resource preparation, or install falls back to the verified release tarball. Linux and macOS installs are serialized per destination and restore the previous private runtime shim after ordinary failures or caught `INT`, `HUP`, and `TERM` signals. Because the CLI and its private shim live at separate paths, `SIGKILL` or power loss during the final replacement can still leave a mixed installation; rerun the installer to repair it.
+The installer downloads checksum-verified release archives and does not use Homebrew. On Apple silicon it installs the native arm64 build even when the shell runs under Rosetta. It replaces only a `firma` in its own install directory. If another `firma`, such as one from `cargo install`, comes earlier on `PATH`, the installer warns that it shadows the new one; remove it or reorder `PATH`.
+
+Linux and macOS installs are serialized per destination and restore the previous private runtime shim after ordinary failures or caught `INT`, `HUP`, and `TERM` signals. Because the CLI and its private shim live at separate paths, `SIGKILL` or power loss during the final replacement can still leave a mixed installation; rerun the installer to repair it.
 
 The Windows installer installs only `firma.exe`. It does not install the optional secret shim from release archives: CLI secret-provider mediation is not supported by the current Windows/WSL2 compatibility backend, and the installer does not attempt WSL mediation.
 

@@ -13,22 +13,26 @@
     reason = "test code"
 )]
 
+use std::assert_matches;
 use std::path::{Path, PathBuf};
 
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
 use firma_run::capability::issue::{IssueParams, mint_and_write};
+use firma_run::error::RunError;
+use firma_sidecar::authority_tls::AuthorityTlsError;
+use firma_sidecar::config::AuthorityTrust;
 
 fn params(authority_url: &str, pub_key_path: PathBuf) -> IssueParams {
     IssueParams {
         authority_url: authority_url.to_string(),
         authority_pub_key_path: pub_key_path,
-        authority_ca_cert_path: None,
+        trust: AuthorityTrust::PlatformStore,
+        connect_addr: None,
         credentials: None,
         agent_id: *super::helper::agent_id(),
         session_id: "sess_issue".to_string(),
-        requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
     }
@@ -105,5 +109,35 @@ fn mint_fails_when_authority_unreachable() {
     mint_and_write(&params("http://127.0.0.1:1", pub_key), &seed_path)
         .expect_err("unreachable authority must fail");
 
+    assert!(!seed_path.exists(), "no seed should be written on failure");
+}
+
+/// A named CA file that holds no certificate stops the mint before the
+/// Authority is contacted: the listener standing in for it sees no
+/// connection, and no seed is written.
+#[test]
+fn mint_stops_on_a_ca_file_without_a_certificate_before_any_connection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pub_key = write_valid_public_key(dir.path());
+    let seed_path = dir.path().join("seed.toml");
+    let placeholder = dir.path().join("next-ca.pem");
+    std::fs::write(&placeholder, "").expect("write placeholder");
+    let listener = super::helper::unreached_authority();
+    let address = listener.local_addr().expect("local address");
+
+    let error = mint_and_write(
+        &IssueParams {
+            trust: AuthorityTrust::CustomCas(vec![placeholder.clone()]),
+            ..params(&format!("https://{address}"), pub_key)
+        },
+        &seed_path,
+    )
+    .expect_err("a certificate-less CA file must stop the mint");
+
+    assert_matches!(
+        &error,
+        RunError::AuthorityTls(AuthorityTlsError::EmptyCaCert { path }) if *path == placeholder
+    );
+    super::helper::assert_never_contacted(&listener);
     assert!(!seed_path.exists(), "no seed should be written on failure");
 }

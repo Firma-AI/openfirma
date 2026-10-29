@@ -976,7 +976,7 @@ async fn relay_connect_mitm(
         .map_err(|_| {
             format!("HTTPS MITM relay exceeded {session_max:?} session cap for {target_host}")
         })?
-        .map_err(|e| format!("HTTPS MITM connection failed: {e}"))?;
+        .map_err(|e| format!("HTTPS MITM connection failed: {:#}", anyhow::Error::new(e)))?;
     Ok(())
 }
 
@@ -2034,7 +2034,6 @@ fn extract_path(raw_path: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -2042,6 +2041,7 @@ mod tests {
     use firma_core::*;
     use firma_identifiers::{AgentId, TokenId};
     use rcgen::{CertifiedKey, generate_simple_self_signed};
+    use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2663,9 +2663,8 @@ mod tests {
     ) -> tokio_rustls::client::TlsStream<TcpStream> {
         let pem = std::fs::read(ca_cert_path)
             .unwrap_or_else(|e| panic!("failed to read CA cert {}: {e}", ca_cert_path.display()));
-        let mut reader = std::io::BufReader::new(Cursor::new(pem));
         let mut roots = RootCertStore::empty();
-        for cert in rustls_pemfile::certs(&mut reader) {
+        for cert in CertificateDer::pem_slice_iter(&pem) {
             let cert = cert.unwrap_or_else(|e| panic!("failed to parse CA cert PEM: {e}"));
             roots
                 .add(cert)
@@ -2704,9 +2703,11 @@ mod tests {
     async fn websocket_handshake_through_mitm_proxy() -> anyhow::Result<Vec<u8>> {
         let _lock = TEST_WEBSOCKET_UPSTREAM_LOCK.lock().await;
         let host = "websocket-regression.test";
-        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![host.to_string()])?;
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec![host.to_string()])?;
         let certificate = CertificateDer::from(cert.der().to_vec());
-        let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let private_key =
+            PrivateKeyDer::from(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
         let _ = rustls::crypto::ring::default_provider().install_default();
         let tls_config = ServerConfig::builder()
             .with_no_client_auth()
@@ -2759,8 +2760,8 @@ mod tests {
                 enabled: true,
                 intercept_hosts: vec![host.to_string()],
                 strict_hosts: vec![host.to_string()],
-                cert_ttl: Duration::from_mins(5),
-                cert_cache_capacity: 16,
+                cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+                cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
                 ..HttpsMitmConfig::default()
             },
             ca_dir.path().to_path_buf(),
@@ -3307,8 +3308,8 @@ mod tests {
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec!["localhost".to_string()],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3381,8 +3382,8 @@ Content-Length: 2\r\n\
             intercept_hosts: vec!["localhost".to_string()],
             // Non-strict host should fail open to blind tunnel when payload is non-TLS.
             strict_hosts: vec![],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3435,8 +3436,8 @@ Content-Length: 2\r\n\
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec!["localhost".to_string()],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3515,8 +3516,8 @@ Content-Length: 2\r\n\
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec![],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3552,8 +3553,8 @@ Content-Length: 2\r\n\
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec!["localhost".to_string()],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3629,8 +3630,8 @@ Content-Length: 10\r\n\
             enabled: true,
             intercept_hosts: vec![invalid_dns_host.clone()],
             strict_hosts: vec![invalid_dns_host.clone()],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3682,8 +3683,8 @@ Content-Length: 10\r\n\
             enabled: true,
             intercept_hosts: vec!["localhost".to_string()],
             strict_hosts: vec!["localhost".to_string()],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3771,8 +3772,8 @@ Content-Length: 10\r\n\
             enabled: true,
             intercept_hosts: vec![invalid_dns_host.clone()],
             strict_hosts: vec![invalid_dns_host.clone()],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -3824,8 +3825,8 @@ Content-Length: 10\r\n\
             enabled: true,
             intercept_hosts: vec![invalid_dns_host.clone()],
             strict_hosts: vec![],
-            cert_ttl: Duration::from_mins(5),
-            cert_cache_capacity: 16,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+            cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
             ..HttpsMitmConfig::default()
         };
 

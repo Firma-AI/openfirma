@@ -11,8 +11,12 @@ description = "Reusable value types for Firma configuration"
 workspace = true
 
 [dependencies]
+bytesize.workspace = true
 jiff = { workspace = true, features = ["serde"] }
 serde.workspace = true
+thiserror.workspace = true
+url.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 serde_json.workspace = true

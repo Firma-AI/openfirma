@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use xxhash_rust::xxh3::xxh3_128;
 
+use super::FalsePositiveRate;
+
 #[derive(Debug)]
 pub(super) struct AtomicBloom {
     bits: Vec<AtomicU64>,
@@ -19,12 +21,8 @@ impl AtomicBloom {
         clippy::cast_sign_loss,
         reason = "Bloom filter sizing uses the standard floating-point formula, then clamps to sane minimums."
     )]
-    pub(super) fn new(capacity: NonZeroUsize, fpr: f64) -> Self {
-        let fpr = if fpr.is_finite() && (0.0..1.0).contains(&fpr) {
-            fpr
-        } else {
-            0.0001
-        };
+    pub(super) fn new(capacity: NonZeroUsize, fpr: FalsePositiveRate) -> Self {
+        let fpr = fpr.get();
         let n = capacity.get() as f64;
         let ln2 = std::f64::consts::LN_2;
         let bit_count_float = -(n * fpr.ln()) / (ln2 * ln2);
@@ -79,7 +77,10 @@ mod tests {
 
     #[test]
     fn insert_then_contains_returns_true() {
-        let bloom = AtomicBloom::new(NonZeroUsize::new(1_000).unwrap(), 0.01);
+        let bloom = AtomicBloom::new(
+            NonZeroUsize::new(1_000).unwrap(),
+            FalsePositiveRate::new(0.01).unwrap(),
+        );
         bloom.insert("abc");
         assert!(bloom.contains("abc"));
     }
@@ -90,7 +91,10 @@ mod tests {
         reason = "Empirical false-positive rate calculation is test-only."
     )]
     fn unknown_returns_false_most_of_the_time() {
-        let bloom = AtomicBloom::new(NonZeroUsize::new(10_000).unwrap(), 0.01);
+        let bloom = AtomicBloom::new(
+            NonZeroUsize::new(10_000).unwrap(),
+            FalsePositiveRate::new(0.01).unwrap(),
+        );
         for i in 0..10_000 {
             bloom.insert(&format!("member-{i}"));
         }
@@ -110,7 +114,10 @@ mod tests {
 
     #[test]
     fn idempotent_insert() {
-        let bloom = AtomicBloom::new(NonZeroUsize::new(100).unwrap(), 0.01);
+        let bloom = AtomicBloom::new(
+            NonZeroUsize::new(100).unwrap(),
+            FalsePositiveRate::new(0.01).unwrap(),
+        );
         bloom.insert("x");
         bloom.insert("x");
         assert!(bloom.contains("x"));
@@ -118,7 +125,10 @@ mod tests {
 
     #[test]
     fn concurrent_insert_and_check_no_panic() {
-        let bloom = Arc::new(AtomicBloom::new(NonZeroUsize::new(10_000).unwrap(), 0.001));
+        let bloom = Arc::new(AtomicBloom::new(
+            NonZeroUsize::new(10_000).unwrap(),
+            FalsePositiveRate::new(0.001).unwrap(),
+        ));
         let writer = {
             let bloom = Arc::clone(&bloom);
             thread::spawn(move || {

@@ -3,11 +3,14 @@
 #![cfg(unix)]
 #![allow(clippy::expect_used, reason = "test code")]
 
-use std::ffi::OsStr;
+use std::assert_matches;
+use std::ffi::{OsStr, OsString};
 
 use firma_identifiers::SandboxId;
 use firma_run::config::SidecarEndpoint;
-use firma_run::sidecar::prepare::{PrepareRequest, prepare, publish_metadata};
+use firma_run::sidecar::prepare::{
+    PrepareRequest, PreparedSidecarLaunch, prepare, publish_metadata,
+};
 
 fn request(
     sandbox_id: &SandboxId,
@@ -34,6 +37,7 @@ fn request(
         audit_signing_key_path: None,
         secret_gateway_addr: None,
         http_secret_providers: &[],
+        credential: None,
     }
 }
 
@@ -159,4 +163,65 @@ fn publication_writes_effective_endpoint_and_complete_marker_schema() {
     assert_eq!(metadata.pid, pid);
     assert_eq!(metadata.listen, "127.0.0.1:43127");
     chrono::DateTime::parse_from_rfc3339(&metadata.started_at).expect("RFC 3339 started_at");
+}
+
+/// The value of `key` in the Sidecar's environment.
+fn env(prepared: &PreparedSidecarLaunch, key: &str) -> Option<OsString> {
+    prepared
+        .command()
+        .expect("command is available")
+        .get_envs()
+        .find(|(name, _)| *name == OsStr::new(key))
+        .and_then(|(_, value)| value.map(OsStr::to_owned))
+}
+
+#[test]
+fn a_runtime_credential_reaches_the_sidecar_process_alone() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let sandbox_id = SandboxId::generate();
+    let credentials = super::helper::runtime_credentials();
+    let credential = credentials
+        .runtime_credential("bearer-value")
+        .expect("a bearer a header can carry");
+
+    let prepared = prepare(PrepareRequest {
+        authority_credentials: Some(credentials),
+        credential: Some(&credential),
+        ..request(&sandbox_id, temp.path().join("marker"), false)
+    })
+    .expect("prepare Sidecar");
+
+    assert_eq!(
+        env(&prepared, "FIRMA_RUNTIME_CREDENTIAL").as_deref(),
+        Some(OsStr::new("bearer-value"))
+    );
+    assert_eq!(
+        env(&prepared, "FIRMA_RUN_PID").as_deref(),
+        Some(OsStr::new(&std::process::id().to_string()))
+    );
+    let config = std::fs::read_to_string(&prepared.config_path).expect("read config");
+    assert!(
+        !config.contains("bearer-value"),
+        "the credential never touches the disk: {config}"
+    );
+}
+
+#[test]
+fn a_runtime_source_without_its_credential_is_refused() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let sandbox_id = SandboxId::generate();
+
+    let Err(error) = prepare(PrepareRequest {
+        authority_credentials: Some(super::helper::runtime_credentials()),
+        credential: None,
+        ..request(&sandbox_id, temp.path().join("marker"), false)
+    }) else {
+        panic!("a Sidecar must not start without its credential");
+    };
+
+    assert_matches!(error, firma_run::error::RunError::Internal(_));
+    insta::assert_snapshot!(
+        error.to_string(),
+        @"internal runtime error: FIRMA_RUNTIME_CREDENTIAL is configured but no runtime credential was resolved"
+    );
 }

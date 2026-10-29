@@ -5,7 +5,7 @@
 [sidecar.authority]
 agent_id = "agt_01j0000000e008000000000001"
 url = "https://authority.example.com:9443"
-ca_cert_path = "authority-ca.crt"
+ca_cert_paths = ["authority-ca.crt"]
 public_key_path = "workspace.pub"
 
 [sidecar.authority.credentials]

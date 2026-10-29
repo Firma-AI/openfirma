@@ -2,11 +2,12 @@
 
 use firma_config_utils::NonZeroDuration;
 use firma_protobuf::v1::audit_service_client::AuditServiceClient;
-use tonic::{Code, Status, transport::Channel};
+use tonic::transport::{Channel, Endpoint};
+use tonic::{Code, Status};
 
 use super::{execution_event_to_proto, metadata::stream_events_request};
 use crate::audit::{AuditSinkError, ExecutionEvent};
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
 
 pub(super) enum Submission {
     Persisted,
@@ -15,8 +16,9 @@ pub(super) enum Submission {
 }
 
 pub(super) struct SubmissionClient {
-    endpoint: String,
-    credentials: Option<ResolvedSidecarCredentials>,
+    /// The audit service, over TLS for an `https` URL.
+    dial: Endpoint,
+    credentials: Option<SidecarCredential>,
     /// Bounds the connect, the request, and the whole submission.
     request_timeout: NonZeroDuration,
     client: Option<AuditServiceClient<Channel>>,
@@ -24,12 +26,12 @@ pub(super) struct SubmissionClient {
 
 impl SubmissionClient {
     pub(super) fn new(
-        endpoint: String,
-        credentials: Option<ResolvedSidecarCredentials>,
+        dial: Endpoint,
+        credentials: Option<SidecarCredential>,
         request_timeout: NonZeroDuration,
     ) -> Self {
         Self {
-            endpoint,
+            dial,
             credentials,
             request_timeout,
             client: None,
@@ -37,8 +39,9 @@ impl SubmissionClient {
     }
 
     async fn connect(&mut self) -> Result<(), AuditSinkError> {
-        let channel = tonic::transport::Endpoint::from_shared(self.endpoint.clone())
-            .map_err(|error| AuditSinkError::BindFailed(error.to_string()))?
+        let channel = self
+            .dial
+            .clone()
             .connect_timeout(self.request_timeout.duration())
             .timeout(self.request_timeout.duration())
             .connect()

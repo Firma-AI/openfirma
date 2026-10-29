@@ -41,6 +41,11 @@ Duration settings use compact unit-bearing strings such as `"250ms"`, `"30s"`,
 `"10m"`, and `"1h"`. Byte-size settings use unit-bearing strings such as
 `"4 MiB"` and `"10MB"`. Counts, capacities, and rates remain numeric.
 
+The Sidecar interceptor body limits (`max_request_body_size`,
+`max_decompressed_body_size`, and `total_body_budget`) and audit
+`buffer_max_size` and `wal_max_size` must be strictly greater than zero; a zero
+such as `"0 B"` fails while the config is being deserialized.
+
 Authority `max_ttl` and `bundle_ttl` must be strictly greater than zero. A zero
 maximum would create immediately expired capabilities, while a zero bundle
 lifetime would create immediately stale policy.
@@ -64,13 +69,15 @@ applies to:
   its wire representation uses whole milliseconds).
 
 TTL, retention, and grace durations have field-specific semantics instead of
-inheriting this general non-zero duration rule. Authority
-`max_ttl` and `bundle_ttl` are also strictly non-zero, because zero would make
-their outputs immediately expired or stale. Run profile `capability.grace`,
-`sidecar.authority.revocation_readiness_grace`,
-`sidecar.interceptor.https_mitm.cert_ttl`, and `sidecar.local_exec.token_ttl`
-each have their own validation. For example, a zero revocation readiness grace
-means immediate readiness.
+inheriting this general non-zero duration rule. Authority `max_ttl` and
+`bundle_ttl` and `sidecar.local_exec.token_ttl` are also strictly non-zero,
+because zero would make their outputs immediately expired or stale; a zero
+`token_ttl` fails while the config is being deserialized. Run profile
+`capability.grace`, `sidecar.authority.revocation_readiness_grace`, and
+`sidecar.interceptor.https_mitm.cert_ttl` each have their own validation. For
+example, a zero revocation readiness grace is valid and only means the Sidecar
+warns at once when a connection has not yet delivered a revocation set;
+readiness still waits for an applied set.
 
 Unknown keys are rejected recursively rather than ignored. The only top-level
 keys are `authority`, `sidecar`, and `run`; nested objects and tagged variants
@@ -173,16 +180,16 @@ when you scaffold somewhere other than the default.
 
 ### State-directory defaults
 
-| Key                                        | Unset resolves to                                                              |
-| ------------------------------------------ | ------------------------------------------------------------------------------ |
-| `authority.key_file`                       | `<state_dir>/authority.key`                                                    |
-| `authority.revocation_file`                | `<state_dir>/revocations.txt`                                                  |
-| `authority.tls_cert_path` / `tls_key_path` | `<state_dir>/tls/authority.{crt,key}` — TLS stays off when neither file exists |
-| `sidecar.ca.dir`                           | `<state_dir>/generated-firma-ca`                                               |
-| `sidecar.audit.file_path`                  | `<state_dir>/audit.jsonl`, with the `file` sink                                |
-| `sidecar.audit.signing_key_path`           | `<state_dir>/audit.key`, unless `signing_key_env` is set                       |
-| `sidecar.authority.public_key_path`        | `<state_dir>/authority.pub`, when that file exists                             |
-| `sidecar.authority.ca_cert_path`           | `<state_dir>/tls/authority-ca.crt`, when that file exists                      |
+| Key                                        | Unset resolves to                                                                             |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `authority.key_file`                       | `<state_dir>/authority.key`                                                                   |
+| `authority.revocation_file`                | `<state_dir>/revocations.txt`                                                                 |
+| `authority.tls_cert_path` / `tls_key_path` | `<state_dir>/tls/authority.{crt,key}` — TLS stays off when neither file exists                |
+| `sidecar.ca.dir`                           | `<state_dir>/generated-firma-ca`                                                              |
+| `sidecar.audit.file_path`                  | `<state_dir>/audit.jsonl`, with the `file` sink                                               |
+| `sidecar.audit.signing_key_path`           | `<state_dir>/audit.key`, unless `signing_key_env` is set                                      |
+| `sidecar.authority.public_key_path`        | `<state_dir>/authority.pub`, when that file exists                                            |
+| `sidecar.authority.ca_cert_paths`          | `[<state_dir>/tls/authority-ca.crt]`, when that file exists and the Authority is on this host |
 
 The Authority trust anchors and the Authority's own TLS pair are adopted only when
 the material is actually present, so a deployment that never generated them
@@ -191,10 +198,28 @@ instead of failing on a file nobody wrote. A half-generated Authority TLS pair
 is rejected rather than silently downgraded to plaintext, and an Authority that
 finds no TLS material logs a warning before serving plaintext.
 
-Because of that, **the state directory is a trust root** for two files:
-`authority.pub` (which capability tokens are verified against) and
-`tls/authority-ca.crt` (which the Authority's TLS identity is verified against).
-Both are adopted from there when the config names none. Keep the state
+The state directory's Authority CA belongs to the Authority that `firma config`
+set up on this host, so it is adopted only when `sidecar.authority.url` names
+this host — `localhost` or a loopback IP, with `connect_addr`, if set, on
+loopback too. An `https://` Authority on this host with no CA there, in
+`ca_cert_paths` is rejected at startup, since no public CA certifies a
+loopback name. An `https://` Authority elsewhere with no CA named is verified
+against the platform's trusted roots, which `SSL_CERT_FILE` and
+`SSL_CERT_DIR` override; `disable_platform_roots = true` refuses that
+fallback and is rejected at startup unless a CA is named. `firma config`
+writes `ca_cert_paths` with the single CA it is given, warning when that
+replaces a longer hand-written list, and removes it, with
+`disable_platform_roots`, when none is.
+Earlier releases
+adopted `tls/authority-ca.crt` for any Authority: a deployment whose Authority
+on another host presents a certificate issued from that CA
+(`firma authority bootstrap-tls --hosts <name>`) now logs a warning that the
+file is skipped, and needs `ca_cert_paths` to list it.
+
+**The state directory is therefore a trust root** for two files:
+`authority.pub` (which capability tokens are verified against), adopted when
+the config names none, and `tls/authority-ca.crt` (which the Authority's TLS
+identity is verified against), adopted as above. Keep the state
 directory private — `firma config` creates it mode 0700 — and pin the paths
 explicitly if it is shared.
 
@@ -267,8 +292,10 @@ Security-relevant sharp edges:
 
 - Clearing `env_set` removes all built-in hardening and proxy-bypass values,
   including `NO_PROXY` / `no_proxy`.
-- An explicit empty capability `requested_actions` list reaches automatic
-  issuance and fails closed with Authority reason `NO_ACTIONS` before launch.
+- A policy set that authorizes none of the action classes a run requests fails
+  closed with Authority reason `NO_AUTHORIZED_ACTIONS` before launch. Which
+  capabilities a session holds is not configurable here: every mint requests all
+  action classes and the policy set applied to the agent decides the grant.
 - A resolved `seccomp_policy` requires both `source_policy_path` and
   `artifact_dir`.
 - `enforce_known_executables = true` requires a non-empty
@@ -330,18 +357,18 @@ Authority mapping files; Authority client mTLS files and credential secret files
 and Run file-provided mount sources, seccomp policies, capability files, and
 capability keys in both defaults and every profile.
 
-| Field                                                                  | Relative value resolves under |
-| ---------------------------------------------------------------------- | ----------------------------- |
-| `sidecar.policy.dir`                                                   | `<config_dir>/<value>`        |
-| `authority.mapping_rules_paths[]`                                      | `<config_dir>/<value>`        |
-| `sidecar.authority.public_key_path`, mTLS, and credential secret files | `<config_dir>/<value>`        |
-| `sidecar.audit.file_path`                                              | `<config_dir>/<value>`        |
-| `sidecar.audit.signing_key_path`                                       | `<config_dir>/<value>`        |
-| `authority.policy_dir`                                                 | `<config_dir>/<value>`        |
-| `authority.issuance_policy_dir`                                        | `<config_dir>/<value>`        |
-| `authority.schema_path`                                                | `<config_dir>/<value>`        |
-| `authority.key_file`                                                   | `<config_dir>/<value>`        |
-| Run mount sources, seccomp paths, capability files/keys                | `<config_dir>/<value>`        |
+| Field                                                                                     | Relative value resolves under |
+| ----------------------------------------------------------------------------------------- | ----------------------------- |
+| `sidecar.policy.dir`                                                                      | `<config_dir>/<value>`        |
+| `authority.mapping_rules_paths[]`                                                         | `<config_dir>/<value>`        |
+| `sidecar.authority.public_key_path`, `ca_cert_paths[]`, mTLS, and credential secret files | `<config_dir>/<value>`        |
+| `sidecar.audit.file_path`                                                                 | `<config_dir>/<value>`        |
+| `sidecar.audit.signing_key_path`                                                          | `<config_dir>/<value>`        |
+| `authority.policy_dir`                                                                    | `<config_dir>/<value>`        |
+| `authority.issuance_policy_dir`                                                           | `<config_dir>/<value>`        |
+| `authority.schema_path`                                                                   | `<config_dir>/<value>`        |
+| `authority.key_file`                                                                      | `<config_dir>/<value>`        |
+| Run mount sources, seccomp paths, capability files/keys                                   | `<config_dir>/<value>`        |
 
 Runtime/state paths, endpoints, sandbox mount targets, and WAL, session,
 revocation, and `sidecar.ca.dir` paths are not re-based. Mask-home values are
@@ -875,16 +902,18 @@ Authority endpoint and tuning for the background Authority stream clients
 (`WatchPolicyBundle`, `WatchRevocations`). Every Sidecar requires `url`: the
 Authority publishes the policy and mapping snapshot the Sidecar enforces.
 
-| Field                                  | Type     | Default                                             | Description                                                                                                         |
-| -------------------------------------- | -------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `connect_addr`                         | address  | none                                                | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                    |
-| `connect_timeout`                      | duration | `"10s"`                                             | Connection timeout for the tonic channel                                                                            |
-| `reconnect_min_backoff`                | duration | `"250ms"`                                           | Minimum reconnect backoff                                                                                           |
-| `reconnect_max_backoff`                | duration | `"30s"`                                             | Maximum reconnect backoff                                                                                           |
-| `revocation_readiness_grace`           | duration | `"500ms"`                                           | Grace period after revocation stream opens before readiness                                                         |
-| `revocation_fail_closed_on_disconnect` | bool     | `false`                                             | Flip revocation readiness back to false when the stream drops                                                       |
-| `public_key_path`                      | path     | `<state_dir>/authority.pub` when present, else none | Authority Ed25519 public key used to verify capabilities. Unset with no file present keeps the reject-all verifier. |
-| `credentials`                          | section  | none                                                | Optional Sidecar PSK credentials sent on every Authority RPC.                                                       |
+| Field                                  | Type     | Default                                                                                        | Description                                                                                                                                                           |
+| -------------------------------------- | -------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connect_addr`                         | address  | none                                                                                           | Advanced physical TCP destination; `url` remains the logical HTTP and TLS origin                                                                                      |
+| `connect_timeout`                      | duration | `"10s"`                                                                                        | Connection timeout for the tonic channel                                                                                                                              |
+| `reconnect_min_backoff`                | duration | `"250ms"`                                                                                      | Minimum reconnect backoff                                                                                                                                             |
+| `reconnect_max_backoff`                | duration | `"30s"`                                                                                        | Maximum reconnect backoff                                                                                                                                             |
+| `revocation_readiness_grace`           | duration | `"500ms"`                                                                                      | How long a connection may deliver no set before the sidecar warns; readiness still waits for an applied set                                                           |
+| `revocation_fail_closed_on_disconnect` | bool     | `false`                                                                                        | Flip revocation readiness back to false when the stream drops                                                                                                         |
+| `public_key_path`                      | path     | `<state_dir>/authority.pub` when present, else none                                            | Authority Ed25519 public key used to verify capabilities. Unset with no file present keeps the reject-all verifier.                                                   |
+| `ca_cert_paths`                        | [path]   | `[<state_dir>/tls/authority-ca.crt]` when present and the Authority is on this host, else `[]` | PEM CA certificates. When any CA is named, the Authority's certificate must be signed by one of them and the platform's roots are ignored                             |
+| `disable_platform_roots`               | bool     | `false`                                                                                        | Never verify the Authority against the platform's trusted roots. Already the behavior whenever `ca_cert_paths` names a CA; its only effect is rejecting an empty list |
+| `credentials`                          | section  | none                                                                                           | Optional Sidecar PSK credentials sent on every Authority RPC.                                                                                                         |
 
 Validation:
 
@@ -893,6 +922,11 @@ Validation:
 - `connect_addr` requires `url` and must use a nonzero port. For plaintext
   URLs, the insecure-remote check uses this physical address when present.
 - `reconnect_max_backoff` must be ≥ `reconnect_min_backoff`.
+- Every `ca_cert_paths` entry must be non-empty.
+- `disable_platform_roots = true` requires a `ca_cert_paths` entry: the
+  Sidecar would otherwise trust nothing.
+- An `https://` `url` on this host requires a CA, named or adopted from the
+  state directory.
 - When `credentials` is present, `workspace_id` and `sidecar_id`
   must be non-empty, and exactly one PSK source must be configured.
 
@@ -918,12 +952,45 @@ is not absolute. File values have trailing newlines trimmed. If the section is
 absent, the Sidecar sends no credentials and remains compatible with the local
 Mini Authority path.
 
+A Sidecar that `firma run --agent` starts for one Firma Team run uses
+that run's runtime credential instead of a pre-shared key:
+
+```toml
+[sidecar.authority.credentials]
+workspace_id = "wsp_01j0000000e008000000000001"
+sidecar_id = "sc_01j0000000e008000000000001"
+run_id = "run_01j0000000e008000000000001"
+runtime_credential_env = "FIRMA_RUNTIME_CREDENTIAL"
+```
+
+`runtime_credential_env` names the variable the Sidecar reads its runtime
+credential from at startup; never list it in `env_passthrough`. The Sidecar
+sends the value as the bearer of every Authority and Audit call together with
+`firma-agent-flow-version: 1`, never sends the `credentials` body field, and
+shuts down when the `firma run` that started it, declared in `FIRMA_RUN_PID`,
+is gone. `run_id` is required with it, and it is exclusive with the
+pre-shared key sources. It must be a canonical `run_` RunId; malformed
+identifiers and legacy `ses_` managed identifiers are rejected during
+configuration validation. Managed requests keep their session equal to this
+run identifier; standalone session generation is unchanged.
+
+Runtime credentials cannot use the legacy `grpc` audit sink: use `wal` for
+durable delivery. For runtime credentials, the resolved WAL filename appends
+`.<run_id>` to `wal_path` (for example, `audit.jsonl.run_...`), with its
+lock and scope files beside it. Each run owns its journal. Earlier
+runs' journals are retained, never automatically deleted or replayed
+under a new run's bearer. Existing unqualified runtime journals are
+left untouched. PSK configurations keep their configured paths and scope
+format unchanged.
+
 Behavior notes:
 
 - Requests are denied with `POLICY_BUNDLE_NOT_READY` until the first
   bundle has been applied and `REVOCATION_CACHE_NOT_READY` until the
-  revocation stream has either received its first event or the grace
-  period has elapsed — whichever happens first.
+  first revocation set has been applied. `revocation_readiness_grace`
+  never grants readiness: a Sidecar whose stream never delivers a set
+  stays not-ready, however long it waits, and only warns once the grace
+  elapses.
 - The policy bundle TTL carried in each `PolicyBundleUpdate` is authoritative.
   When the deadline elapses without a refresh, Stage 2 denies with
   `PolicyBundleStale`.
@@ -1022,6 +1089,18 @@ Validation:
 - `wal_max_size` must be greater than zero.
 - `signing_key_path` and `signing_key_env` are mutually exclusive. With
   neither set, the key is read from `audit.key` in the state directory.
+
+Both network sinks verify an `https://` `grpc_url` over TLS. When it names the
+same origin as `[sidecar.authority].url` (scheme; host compared
+case-insensitively, IP literals in canonical form; port), the audit service is trusted as the Authority is: its configured CAs
+alone when any, otherwise the platform's trusted roots, with the Authority's
+mTLS client identity. Any other host is verified against the platform's trusted
+roots and gets no client identity; there is no separate audit CA setting, so a
+collector with a private CA needs that CA in the bundle `SSL_CERT_FILE` names.
+The configured Authority credentials go only to the Authority's origin as well,
+over `http://` too: another host never receives what would let it call the
+Authority as this Sidecar, and startup logs that the audit service is not the
+Authority's. A host with no usable trusted roots stops startup.
 
 The `wal` sink is separate from the buffered `grpc` sink. It syncs each event
 before sending and reclaims it only after a matching durable per-event receipt.

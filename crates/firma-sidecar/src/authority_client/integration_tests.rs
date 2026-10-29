@@ -9,6 +9,7 @@
 #![cfg(test)]
 
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,8 +19,8 @@ use firma_identifiers::{AgentId, TokenId};
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
     GetApprovalOutcomeRequest, GetApprovalOutcomeResponse, IssueCapabilityRequest,
-    IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate, RevocationEvent, SidecarCredentials,
-    WatchPolicyBundleRequest, WatchRevocationsRequest,
+    IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate, RevocationEvent, RevocationSet,
+    SidecarCredentials, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
@@ -35,11 +36,14 @@ use super::readiness::{ReadinessFlag, ReadinessState, ReadinessView};
 use super::swappable_policy::{RuntimeSnapshot, SwappablePolicyEvaluation};
 use super::{AuthorityClientHandle, AuthorityDeps, spawn_authority_client};
 use crate::authority_credentials::{
-    RedactedPreSharedKey, ResolvedSidecarCredentials, SidecarCredentialSource,
+    RedactedPreSharedKey, ResolvedSidecarCredentials, SidecarCredential, SidecarCredentialSource,
 };
+use crate::authority_tls::TlsTrust;
 use crate::config::{AuthorityConfig, AuthorityEndpoint};
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
-use crate::enforcement::revocation::{BloomLruRevocationStore, RevocationConfig};
+use crate::enforcement::revocation::{
+    BloomLruRevocationStore, FalsePositiveRate, RevocationConfig,
+};
 
 // -----------------------------------------------------------------------------
 // Mock AuthorityService
@@ -47,8 +51,11 @@ use crate::enforcement::revocation::{BloomLruRevocationStore, RevocationConfig};
 
 struct MockAuthorityState {
     bundle_tx: broadcast::Sender<PolicyBundleUpdate>,
-    revoc_tx: broadcast::Sender<RevocationEvent>,
+    revoc_tx: broadcast::Sender<RevocationSet>,
     revoc_disconnect_tx: broadcast::Sender<()>,
+    /// Accept `WatchRevocations` but send no set, as an Authority whose sets
+    /// this Sidecar cannot decode looks from the client side.
+    withhold_revocation_sets: AtomicBool,
     initial_bundle: Mutex<Option<PolicyBundleUpdate>>,
     policy_credentials: Mutex<Option<SidecarCredentials>>,
     revocation_credentials: Mutex<Option<SidecarCredentials>>,
@@ -72,8 +79,16 @@ impl MockAuthorityHandle {
         let _ = self.state.bundle_tx.send(update);
     }
 
-    fn push_revocation(&self, event: RevocationEvent) {
-        let _ = self.state.revoc_tx.send(event);
+    /// Sends a complete revocation set, the only shape the stream carries.
+    fn push_revocation_set(&self, set: RevocationSet) {
+        let _ = self.state.revoc_tx.send(set);
+    }
+
+    /// Stops the mock from sending the opening set on later connections.
+    fn withhold_revocation_sets(&self) {
+        self.state
+            .withhold_revocation_sets
+            .store(true, Ordering::SeqCst);
     }
 
     fn disconnect_revocation_streams(&self) {
@@ -151,7 +166,7 @@ impl AuthorityService for MockAuthority {
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    type WatchRevocationsStream = ReceiverStream<Result<RevocationEvent, Status>>;
+    type WatchRevocationsStream = ReceiverStream<Result<RevocationSet, Status>>;
 
     async fn watch_revocations(
         &self,
@@ -160,17 +175,23 @@ impl AuthorityService for MockAuthority {
         if let Ok(mut guard) = self.state.revocation_credentials.lock() {
             *guard = request.into_inner().credentials;
         }
-        let (tx, rx) = mpsc::channel::<Result<RevocationEvent, Status>>(16);
+        let (tx, rx) = mpsc::channel::<Result<RevocationSet, Status>>(16);
         let mut broadcast_rx = self.state.revoc_tx.subscribe();
         let mut disconnect_rx = self.state.revoc_disconnect_tx.subscribe();
+        let withhold = self.state.withhold_revocation_sets.load(Ordering::SeqCst);
         tokio::spawn(async move {
+            // Every connection opens with the complete set, as the contract
+            // requires; here the workspace starts with none.
+            if !withhold && tx.send(Ok(RevocationSet::default())).await.is_err() {
+                return;
+            }
             loop {
                 tokio::select! {
-                    event = broadcast_rx.recv() => {
-                        let Ok(event) = event else {
+                    set = broadcast_rx.recv() => {
+                        let Ok(set) = set else {
                             break;
                         };
-                        if tx.send(Ok(event)).await.is_err() {
+                        if tx.send(Ok(set)).await.is_err() {
                             break;
                         }
                     }
@@ -220,6 +241,7 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
         initial_bundle: Mutex::new(None),
         policy_credentials: Mutex::new(None),
         revocation_credentials: Mutex::new(None),
+        withhold_revocation_sets: AtomicBool::new(false),
     });
     let service = MockAuthority {
         state: Arc::clone(&state),
@@ -272,6 +294,7 @@ async fn spawn_mock_authority_tls(
         initial_bundle: Mutex::new(None),
         policy_credentials: Mutex::new(None),
         revocation_credentials: Mutex::new(None),
+        withhold_revocation_sets: AtomicBool::new(false),
     });
     let service = MockAuthority {
         state: Arc::clone(&state),
@@ -315,7 +338,9 @@ struct TlsCerts {
 }
 
 fn generate_test_tls_certs() -> anyhow::Result<TlsCerts> {
-    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+    use rcgen::{
+        BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+    };
 
     // Self-signed CA
     let ca_key = KeyPair::generate()?;
@@ -329,7 +354,8 @@ fn generate_test_tls_certs() -> anyhow::Result<TlsCerts> {
     // Server cert with DNS SAN "localhost", signed by the test CA
     let server_key = KeyPair::generate()?;
     let server_params = CertificateParams::new(vec!["localhost".to_string()])?;
-    let server_cert = server_params.signed_by(&server_key, &ca_cert, &ca_key)?;
+    let server_cert =
+        server_params.signed_by(&server_key, &Issuer::from_params(&ca_params, &ca_key))?;
 
     Ok(TlsCerts {
         ca_cert: ca_cert.pem().into_bytes(),
@@ -380,19 +406,20 @@ fn spawn_sidecar_with_credentials(
     ca_cert_pem: Option<&[u8]>,
     client_cert_pem: Option<&[u8]>,
     client_key_pem: Option<&[u8]>,
-    credentials: Option<ResolvedSidecarCredentials>,
+    credentials: Option<SidecarCredential>,
 ) -> anyhow::Result<SidecarHarness> {
     let endpoint = AuthorityEndpoint::new(url, config.connect_addr)?;
+    let ca_certs: Vec<Vec<u8>> = ca_cert_pem.map(<[u8]>::to_vec).into_iter().collect();
+    let trust = TlsTrust::from_pems(&ca_certs);
     let channel = build_channel(
         &endpoint,
         config.connect_timeout,
-        ca_cert_pem,
-        client_cert_pem,
-        client_key_pem,
+        trust,
+        client_cert_pem.zip(client_key_pem),
     )?;
     let revocation_store = Arc::new(BloomLruRevocationStore::new(RevocationConfig {
         capacity: NonZeroUsize::new(1_024).unwrap(),
-        fpr: 0.001,
+        fpr: FalsePositiveRate::new(0.001).unwrap(),
         lru_capacity: NonZeroUsize::new(128).unwrap(),
     }));
     let initial_policy: Box<dyn PolicyEvaluation + Send + Sync> = Box::new(DenyAllEvaluation);
@@ -490,11 +517,13 @@ fn valid_bundle_update(version: &str, ttl_seconds: u32) -> PolicyBundleUpdate {
     bundle_update(version, ttl_seconds, VALID_CEDAR_POLICY.as_bytes())
 }
 
-fn revocation(token_id: &str, reason: &str) -> RevocationEvent {
-    RevocationEvent {
-        token_id: token_id.to_string(),
-        reason: reason.to_string(),
-        timestamp: None,
+fn revocation_set(token_id: &str, reason: &str) -> RevocationSet {
+    RevocationSet {
+        revocations: vec![RevocationEvent {
+            token_id: token_id.to_string(),
+            reason: reason.to_string(),
+            timestamp: None,
+        }],
     }
 }
 
@@ -509,7 +538,7 @@ fn test_config() -> AuthorityConfig {
         revocation_readiness_grace: Duration::from_millis(100),
         revocation_fail_closed_on_disconnect: false,
         public_key_path: None,
-        ca_cert_path: None,
+        trust: crate::config::AuthorityTrust::PlatformStore,
         allow_insecure_remote_authority: false,
         tls_client_cert_path: None,
         tls_client_key_path: None,
@@ -548,7 +577,7 @@ fn is_revoked(store: &BloomLruRevocationStore, token_id: &TokenId) -> bool {
 // -----------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::Result<()> {
+async fn readiness_flips_after_initial_bundle_and_revocation_set() -> anyhow::Result<()> {
     let server = spawn_mock_authority().await?;
     server
         .handle
@@ -596,7 +625,7 @@ async fn stream_requests_include_configured_credentials() -> anyhow::Result<()> 
         None,
         None,
         None,
-        Some(credentials),
+        Some(SidecarCredential::PreSharedKey(credentials)),
     )?;
 
     let policy_seen = wait_for(Duration::from_secs(2), || {
@@ -655,7 +684,7 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
         .expect("literal uuid");
     server
         .handle
-        .push_revocation(revocation(&propagate_id.to_string(), "test"));
+        .push_revocation_set(revocation_set(&propagate_id.to_string(), "test"));
 
     let propagated = wait_for(Duration::from_secs(1), || {
         is_revoked(&harness.revocation_store, &propagate_id)
@@ -665,6 +694,75 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
         propagated,
         "revocation did not propagate within 1 s (elapsed {:?})",
         pushed_at.elapsed()
+    );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+/// Readiness means the Sidecar holds the Authority's set. A connection that
+/// opens but never delivers one — an Authority whose sets this Sidecar cannot
+/// decode, which repeats on every reconnect — must not be reported ready: it
+/// would enforce against an empty revocation store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revocation_readiness_waits_for_a_set_not_for_the_grace() -> anyhow::Result<()> {
+    let server = spawn_mock_authority().await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v1", 60));
+    server.handle.withhold_revocation_sets();
+    let mut config = test_config();
+    config.revocation_readiness_grace = Duration::from_millis(50);
+    let harness = spawn_sidecar(&server.url, config, None, None, None)?;
+
+    let policy_ready = wait_for(Duration::from_secs(2), || {
+        harness.readiness_view.snapshot().policy_bundle_ready
+    })
+    .await;
+    assert!(policy_ready, "policy bundle readiness never flipped");
+
+    // Well past the grace: the only thing that could flip revocation
+    // readiness here is the timer, which must not.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !harness.readiness_view.snapshot().revocation_ready,
+        "revocation readiness flipped without a delivered set"
+    );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+/// Once a set has been applied, a later connection that is slow to deliver one
+/// is a disconnect question, answered by `fail_closed_on_disconnect`. With it
+/// off, the Sidecar keeps serving the set it holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revocation_readiness_survives_a_silent_reconnect_when_fail_open() -> anyhow::Result<()> {
+    let server = spawn_mock_authority().await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v1", 60));
+    let mut config = test_config();
+    config.revocation_fail_closed_on_disconnect = false;
+    config.revocation_readiness_grace = Duration::from_millis(50);
+    config.reconnect_min_backoff = NonZeroDuration::from_static(Duration::from_millis(10));
+    let harness = spawn_sidecar(&server.url, config, None, None, None)?;
+
+    let became_ready = wait_for(Duration::from_secs(2), || {
+        harness.readiness_view.snapshot().revocation_ready
+    })
+    .await;
+    assert!(became_ready, "revocation readiness never flipped true");
+
+    server.handle.withhold_revocation_sets();
+    server.handle.disconnect_revocation_streams();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        harness.readiness_view.snapshot().revocation_ready,
+        "a Sidecar holding a set must keep serving it across a silent reconnect"
     );
 
     harness.shutdown().await;

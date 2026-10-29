@@ -263,6 +263,11 @@ pub struct NetworkPolicy {
 }
 
 /// Capability lease refresh settings.
+///
+/// Which action classes a session may hold is not part of this: every mint
+/// requests all of them and the policy set applied to the agent decides the
+/// grant. What remains here is local — the static seed source, the key that
+/// verifies issued tokens, and refresh timing.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CapabilityLeaseConfig {
     pub source: CapabilitySource,
@@ -271,28 +276,12 @@ pub struct CapabilityLeaseConfig {
     pub refresh_ratio: f64,
     #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
     pub grace: Duration,
-    /// Action classes the auto-minted per-session token requests. Defaults to
-    /// every action class (`DEFAULT_REQUESTED_ACTIONS`); the Authority narrows
-    /// the grant to `requested ∩ Cedar-permitted`, so over-requesting is safe
-    /// and the issuance policy stays the source of truth for what is grantable.
-    /// Setting this narrows the request further — an opt-in extra-restriction
-    /// knob for running with fewer permissions than the policy would allow.
-    pub requested_actions: Vec<String>,
 }
 
 impl CapabilityLeaseConfig {
     #[must_use]
     pub(crate) const fn grace(&self) -> Duration {
         self.grace
-    }
-
-    /// Fallback action set when a profile does not set `requested_actions`.
-    #[must_use]
-    pub fn default_requested_actions() -> Vec<String> {
-        crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
-            .iter()
-            .map(|class| class.as_str().to_string())
-            .collect()
     }
 }
 
@@ -425,7 +414,6 @@ impl Merge for CapabilityLeasePatch {
             public_key_path: higher.public_key_path.or(self.public_key_path),
             refresh_ratio: higher.refresh_ratio.or(self.refresh_ratio),
             grace: higher.grace.or(self.grace),
-            requested_actions: higher.requested_actions.or(self.requested_actions),
         }
     }
 }
@@ -790,7 +778,6 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 public_key_path: None,
                 refresh_ratio: None,
                 grace: None,
-                requested_actions: None,
             }),
         sidecar_local_exec: None,
         executable_policies: None,
@@ -870,9 +857,6 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         public_key_path: patch.public_key_path,
         refresh_ratio: patch.refresh_ratio.unwrap_or(0.60),
         grace: patch.grace.unwrap_or(Duration::from_secs(30)),
-        requested_actions: patch
-            .requested_actions
-            .unwrap_or_else(CapabilityLeaseConfig::default_requested_actions),
     }
 }
 
@@ -882,7 +866,6 @@ fn default_capability_config() -> CapabilityLeaseConfig {
         public_key_path: None,
         refresh_ratio: 0.60,
         grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
 
@@ -1346,34 +1329,16 @@ mod tests {
     use crate::runtime::RunInput;
 
     use super::{
-        BackendKind, CapabilityLeaseConfig, CapabilityLeasePatch, CapabilitySource,
-        CapabilitySourcePatch, CommandMediatorHitlMode, CommandMediatorPatch,
-        ExecutableLaunchPolicyPatch, FileConfig, Merge, MountPatch, NetworkPolicyPatch,
-        ProfilePatch, SandboxIdentityMode, SeccompPolicyPatch, SeccompRuntimeMode,
-        capability_from_patch, cli_profile_patch, rebase_file_paths, resolve_profile,
-        workspace_root,
+        BackendKind, CapabilityLeasePatch, CapabilitySource, CapabilitySourcePatch,
+        CommandMediatorHitlMode, CommandMediatorPatch, ExecutableLaunchPolicyPatch, FileConfig,
+        Merge, MountPatch, NetworkPolicyPatch, ProfilePatch, SandboxIdentityMode,
+        SeccompPolicyPatch, SeccompRuntimeMode, cli_profile_patch, rebase_file_paths,
+        resolve_profile, workspace_root,
     };
 
     #[cfg(target_os = "linux")]
     use crate::backend::platform::WslKind;
     use crate::error::RunError;
-
-    fn lease_patch(requested_actions: Option<Vec<String>>) -> CapabilityLeasePatch {
-        CapabilityLeasePatch {
-            source: Some(super::CapabilitySourcePatch::Disabled),
-            public_key_path: None,
-            refresh_ratio: None,
-            grace: None,
-            requested_actions,
-        }
-    }
-
-    #[test]
-    fn capability_patch_requested_actions_override_wins() {
-        let custom = vec!["communication.internal.send".to_string()];
-        let resolved = capability_from_patch(lease_patch(Some(custom.clone())));
-        assert_eq!(resolved.requested_actions, custom);
-    }
 
     #[test]
     fn file_paths_rebase_for_defaults_and_every_profile_only_where_config_relative() {
@@ -1613,44 +1578,6 @@ mod tests {
                 .to_string()
                 .contains("could not be canonicalized")
         );
-    }
-
-    #[test]
-    fn capability_patch_absent_actions_fall_back_to_default() {
-        let resolved = capability_from_patch(lease_patch(None));
-        assert_eq!(
-            resolved.requested_actions,
-            CapabilityLeaseConfig::default_requested_actions()
-        );
-    }
-
-    #[test]
-    fn capability_patch_empty_actions_remain_explicitly_empty() {
-        let resolved = capability_from_patch(lease_patch(Some(Vec::new())));
-        assert_eq!(resolved.requested_actions, [] as [String; 0]);
-    }
-
-    #[test]
-    fn capability_empty_actions_replace_lower_actions_and_survive_file_resolution() {
-        let merged = lease_patch(Some(vec!["filesystem.read".to_string()]))
-            .merge(lease_patch(Some(Vec::new())));
-        assert_eq!(merged.requested_actions, Some(Vec::new()));
-
-        let tmpdir = tempfile::tempdir().unwrap();
-        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
-        fs::write(
-            &config_path,
-            r"
-            [run.profiles.generic.capability]
-            requested_actions = []
-            ",
-        )
-        .unwrap();
-        let mut run_args = args("generic");
-        run_args.config = Some(config_path);
-
-        let resolved = resolve_profile(&run_args).unwrap();
-        assert_eq!(resolved.capability.requested_actions, [] as [String; 0]);
     }
 
     fn args(profile: &str) -> RunInput {
@@ -2114,7 +2041,6 @@ approval_policy = "never"
             public_key_path = "/defaults/authority.pub"
             refresh_ratio = 0.7
             grace = "45s"
-            requested_actions = ["filesystem.read"]
 
             [defaults.capability.source]
             kind = "file"
@@ -2149,7 +2075,7 @@ approval_policy = "never"
             env_set = { SELECTED_ONLY = "present", SHARED = "selected" }
             seccomp_policy = { runtime_mode = "precompiled_only" }
             network = { fail_closed = false }
-            capability = { source = { kind = "disabled" }, requested_actions = [] }
+            capability = { source = { kind = "disabled" } }
             sidecar_local_exec = { hitl_mode = "async_token", enforce_known_executables = false, allowed_executables = [] }
             executable_policies = { codex = { enforce_wrapper_defaults = false, approval_policy = "selected-approval", config_overrides = { selected = "present", shared = "selected" } } }
             "#,
@@ -2293,7 +2219,6 @@ approval_policy = "never"
         );
         assert_eq!(capability.refresh_ratio, Some(0.7));
         assert_eq!(capability.grace, Some(Duration::from_secs(45)));
-        assert_eq!(capability.requested_actions, Some(Vec::new()));
 
         let mediator = after_cli.sidecar_local_exec.as_ref().unwrap();
         assert_eq!(
@@ -2391,16 +2316,9 @@ approval_policy = "never"
             public_key_path,
             refresh_ratio,
             grace,
-            requested_actions,
         }) = capability
         {
-            let _ = (
-                source,
-                public_key_path,
-                refresh_ratio,
-                grace,
-                requested_actions,
-            );
+            let _ = (source, public_key_path, refresh_ratio, grace);
         }
         if let Some(CommandMediatorPatch {
             endpoint,

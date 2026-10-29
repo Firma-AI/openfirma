@@ -8,15 +8,12 @@
 
 # shellcheck disable=SC2034
 # Globals declared here are consumed by later install stages
-# (tool gate, version resolve, brew branch, PATH editing, post-install).
+# (tool gate, version resolve, PATH editing, post-install).
 
 set -eu
 
 VERSION=""
-GITHUB_VERSION=""
-VERSION_EXPLICIT=0
 INSTALL_DIR=""
-NO_BREW=0
 NO_MODIFY_PATH=0
 NO_INIT=0
 FORCE=0
@@ -32,12 +29,9 @@ TMP_DIR=""
 INSTALLED_FIRMA_BIN=""
 CLI_ONLY_INSTALL=0
 PREPARED_PRIVATE_SHIM=""
-BREW_PREFIX=""
-BREW_ATTEMPT_PID=""
 INSTALL_TRANSACTION_ACTIVE=0
 INSTALL_TRANSACTION_COMMITTED=0
 INSTALL_LOCK_DIR=""
-INSTALL_LOCK_OWNER_PID=""
 TRANSACTION_FIRMA_BIN=""
 TRANSACTION_INSTALLED_SHIM=""
 TRANSACTION_STAGED_CLI=""
@@ -56,7 +50,6 @@ TRANSACTION_CREATED_TARGET_DIR=0
 
 QUICKSTART_URL="https://firma-ai.github.io/openfirma/quickstart/"
 GITHUB_REPO="Firma-AI/openfirma"
-BREW_FORMULA="Firma-AI/openfirma/firma"
 SENTINEL='# firma-installer: add install dir to PATH'
 
 info() { printf '[firma-installer] %s\n' "$*"; }
@@ -75,13 +68,11 @@ Options:
                          Default: latest release. Env: FIRMA_VERSION.
   --install-dir <path>   Install location. Default: $HOME/.local/bin.
                          Env: FIRMA_INSTALL_DIR.
-  --no-brew              Do not use Homebrew even if available.
-                         Env: FIRMA_NO_BREW=1.
   --no-modify-path       Do not edit shell rc files. Print manual hint.
                          Env: FIRMA_NO_MODIFY_PATH=1.
   --no-init              Do not prompt to run 'firma config'.
                          Env: FIRMA_NO_INIT=1.
-  --force                Overwrite an existing install without prompting.
+  --force                Reinstall even if the same version is installed.
                          Env: FIRMA_FORCE=1.
   --dry-run              Print planned actions only. No I/O on disk.
                          Env: FIRMA_DRY_RUN=1.
@@ -94,11 +85,13 @@ EOF
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            --version)         shift; VERSION="${1:-}"; [ -n "$VERSION" ] || die "--version requires a value"; VERSION_EXPLICIT=1 ;;
-            --version=*)       VERSION="${1#*=}"; [ -n "$VERSION" ] || die "--version requires a value"; VERSION_EXPLICIT=1 ;;
+            --version)         shift; VERSION="${1:-}"; [ -n "$VERSION" ] || die "--version requires a value" ;;
+            --version=*)       VERSION="${1#*=}"; [ -n "$VERSION" ] || die "--version requires a value" ;;
             --install-dir)     shift; INSTALL_DIR="${1:-}"; [ -n "$INSTALL_DIR" ] || die "--install-dir requires a value" ;;
             --install-dir=*)   INSTALL_DIR="${1#*=}"; [ -n "$INSTALL_DIR" ] || die "--install-dir requires a value" ;;
-            --no-brew)         NO_BREW=1 ;;
+            # The installer no longer uses Homebrew; accept the old opt-out so
+            # existing scripts that pass it keep working.
+            --no-brew)         : ;;
             --no-modify-path)  NO_MODIFY_PATH=1 ;;
             --no-init)         NO_INIT=1 ;;
             --force)           FORCE=1 ;;
@@ -111,12 +104,10 @@ parse_args() {
 
     if [ -n "${FIRMA_VERSION:-}" ] && [ -z "$VERSION" ]; then
         VERSION="$FIRMA_VERSION"
-        VERSION_EXPLICIT=1
     fi
     if [ -n "${FIRMA_INSTALL_DIR:-}" ] && [ -z "$INSTALL_DIR" ]; then
         INSTALL_DIR="$FIRMA_INSTALL_DIR"
     fi
-    [ "${FIRMA_NO_BREW:-0}"        = "1" ] && NO_BREW=1
     [ "${FIRMA_NO_MODIFY_PATH:-0}" = "1" ] && NO_MODIFY_PATH=1
     [ "${FIRMA_NO_INIT:-0}"        = "1" ] && NO_INIT=1
     [ "${FIRMA_FORCE:-0}"          = "1" ] && FORCE=1
@@ -223,6 +214,13 @@ detect_target() {
             GUEST_SHIM_TARGET="$TARGET"
             ;;
         Darwin)
+            # A shell running under Rosetta 2 sees `uname -m` as x86_64 on
+            # Apple silicon. sysctl reports the hardware, so install the
+            # native arm64 build there. sysctl lives in /usr/sbin, which a
+            # minimal PATH may omit.
+            if [ "$arch" = x86_64 ] && [ "$(PATH="${PATH}:/usr/sbin" sysctl -n hw.optional.arm64 2>/dev/null || :)" = 1 ]; then
+                arch=arm64
+            fi
             case "$arch" in
                 x86_64)
                     TARGET="x86_64-apple-darwin"
@@ -291,17 +289,22 @@ guard_published_release_tag() {
     fi
 }
 
-# Returns 0 if firma is already installed at the same version (handled);
-# returns 0 after prompting/overwriting otherwise; calls die on refusal.
+# Exits when the install dir already holds a complete install of the target
+# version. Any other firma there is replaced. Copies elsewhere on PATH, such
+# as one from `cargo install`, are not ours to manage; warn_shadowed_firma
+# reports them after the install.
 check_existing() {
-    command -v firma >/dev/null 2>&1 || return 0
-    current=$(firma --version 2>/dev/null | awk '{print $2}')
+    existing="${INSTALL_DIR}/firma"
+    [ -x "$existing" ] || return 0
+    current=$("$existing" --version 2>/dev/null | awk '{print $2}')
     [ -n "$current" ] || current="unknown"
     target_ver=${VERSION#v}
-    if [ "$current" = "$target_ver" ] && [ "$FORCE" != "1" ]; then
-        current_bin=$(command -v firma)
-        current_dir=$(dirname "$current_bin")
-        current_shim="${current_dir}/libexec/openfirma/secret-shims/${GUEST_SHIM_TARGET}/firma-secret-shim"
+    if [ "$FORCE" = "1" ]; then
+        info "reinstalling firma $target_ver over firma $current (--force)"
+        return 0
+    fi
+    if [ "$current" = "$target_ver" ]; then
+        current_shim="${INSTALL_DIR}/libexec/openfirma/secret-shims/${GUEST_SHIM_TARGET}/firma-secret-shim"
         if [ -x "$current_shim" ] || release_predates_secret_shim; then
             info "firma $current already installed. Use --force to reinstall."
             exit 0
@@ -309,20 +312,19 @@ check_existing() {
         info "firma $current installation is incomplete; repairing it"
         return 0
     fi
-    if [ "$FORCE" = "1" ]; then
-        info "replacing firma $current with $target_ver (--force)"
-        return 0
-    fi
-    if [ -t 0 ]; then
-        printf '[firma-installer] replace firma %s with %s? [y/N] ' "$current" "$target_ver"
-        read -r ans
-        case "$ans" in
-            y|Y|yes|YES) return 0 ;;
-            *) die "aborted by user" ;;
-        esac
-    else
-        die "firma $current already on PATH. Re-run with --force to replace, or --version to pin."
-    fi
+    info "replacing firma $current with $target_ver"
+}
+
+# Warns when a different firma comes earlier on PATH than the installed one.
+# Only meaningful when the install dir was already on PATH: otherwise
+# ensure_path prepends it in the rc file, so the new firma wins in new shells.
+warn_shadowed_firma() {
+    [ "$DRY_RUN" = "1" ] && return 0
+    path_contains "$INSTALL_DIR" || return 0
+    first=$(command -v firma 2>/dev/null) || return 0
+    [ "$first" = "${INSTALL_DIR}/firma" ] && return 0
+    warn "$first comes earlier on PATH and shadows ${INSTALL_DIR}/firma."
+    warn "Remove it (for a cargo install: cargo uninstall firma) or put ${INSTALL_DIR} first on PATH."
 }
 
 setup_tmp() {
@@ -341,7 +343,6 @@ release_install_lock() {
     rm -f "${INSTALL_LOCK_DIR}/owner"
     rmdir "$INSTALL_LOCK_DIR" 2>/dev/null || :
     INSTALL_LOCK_DIR=""
-    INSTALL_LOCK_OWNER_PID=""
 }
 
 prune_transaction_directories() {
@@ -421,17 +422,7 @@ installer_exit() {
 installer_signal() {
     signal=$1
     status=$2
-    if [ -n "$BREW_ATTEMPT_PID" ]; then
-        warn "caught $signal; waiting for the Homebrew installation to finish"
-        printf '%s\n' "$signal" > "${TMP_DIR}/brew-signal-name"
-        printf '%s\n' "$status" > "${TMP_DIR}/brew-signal-status"
-        [ -s "${TMP_DIR}/brew-owner-pid" ] \
-            || printf '%s\n' "$BREW_ATTEMPT_PID" > "${TMP_DIR}/brew-owner-pid"
-        wait "$BREW_ATTEMPT_PID" 2>/dev/null || :
-        BREW_ATTEMPT_PID=""
-    else
-        warn "caught $signal; restoring the previous installation"
-    fi
+    warn "caught $signal; restoring the previous installation"
     exit "$status"
 }
 
@@ -644,7 +635,7 @@ acquire_install_lock() {
     attempts=0
     while [ "$attempts" -lt 2 ]; do
         if mkdir "$INSTALL_LOCK_DIR" 2>/dev/null; then
-            if (umask 077 && printf '%s\n' "${INSTALL_LOCK_OWNER_PID:-$$}" > "${INSTALL_LOCK_DIR}/owner"); then
+            if (umask 077 && printf '%s\n' "$$" > "${INSTALL_LOCK_DIR}/owner"); then
                 return 0
             fi
             rmdir "$INSTALL_LOCK_DIR" 2>/dev/null || :
@@ -706,158 +697,6 @@ prepare_private_shim_from_archive() {
     # unpack its other Linux binaries onto the macOS host.
     run "tar -xOzf '$ARCHIVE_PATH' '$shim_member' > '$PREPARED_PRIVATE_SHIM'"
     run "chmod 0755 '$PREPARED_PRIVATE_SHIM'"
-}
-
-prepare_homebrew_resource() {
-    private_root="$1"
-    shim_target="$2"
-    shim_version=${VERSION#v}
-
-    libexec_dir="${private_root}/${shim_version}/${shim_target}"
-    BREW_RESOURCE_PATH="${libexec_dir}/firma-secret-shim"
-    BREW_RESOURCE_STAGE="${libexec_dir}/.firma-secret-shim.new.$$"
-    BREW_RESOURCE_BACKUP="${libexec_dir}/.firma-secret-shim.old.$$"
-    BREW_RESOURCE_PREPARED=0
-    if [ "$DRY_RUN" = "1" ]; then
-        run "mkdir -p '$libexec_dir'"
-        run "mv '$PREPARED_PRIVATE_SHIM' '$BREW_RESOURCE_STAGE'"
-        run "mv '$BREW_RESOURCE_STAGE' '$BREW_RESOURCE_PATH'"
-        return 0
-    fi
-
-    BREW_CREATED_VAR_DIR=0
-    BREW_CREATED_OPENFIRMA_DIR=0
-    BREW_CREATED_SHIMS_DIR=0
-    BREW_CREATED_VERSION_DIR=0
-    BREW_CREATED_TARGET_DIR=0
-    [ -d "${BREW_PREFIX}/var" ] || BREW_CREATED_VAR_DIR=1
-    [ -d "${BREW_PREFIX}/var/openfirma" ] || BREW_CREATED_OPENFIRMA_DIR=1
-    [ -d "${private_root}" ] || BREW_CREATED_SHIMS_DIR=1
-    [ -d "${private_root}/${shim_version}" ] || BREW_CREATED_VERSION_DIR=1
-    [ -d "$libexec_dir" ] || BREW_CREATED_TARGET_DIR=1
-    record_homebrew_resource_journal
-    BREW_RESOURCE_ROLLBACK=1
-    mkdir -p "$libexec_dir" || return 1
-    [ -w "$libexec_dir" ] || return 1
-    rm -f "$BREW_RESOURCE_STAGE" "$BREW_RESOURCE_BACKUP"
-    mv "$PREPARED_PRIVATE_SHIM" "$BREW_RESOURCE_STAGE" || return 1
-    if [ -e "$BREW_RESOURCE_PATH" ] || [ -L "$BREW_RESOURCE_PATH" ]; then
-        cp -p "$BREW_RESOURCE_PATH" "$BREW_RESOURCE_BACKUP" || return 1
-        BREW_RESOURCE_HAD_PREVIOUS=1
-    fi
-    BREW_RESOURCE_PREPARED=1
-    printf '%s\n' "$BREW_RESOURCE_HAD_PREVIOUS" > "${TMP_DIR}/brew-resource-had-previous"
-    printf '%s\n' "$BREW_RESOURCE_PREPARED" > "${TMP_DIR}/brew-resource-prepared"
-    mv "$BREW_RESOURCE_STAGE" "$BREW_RESOURCE_PATH" || return 1
-    PREPARED_PRIVATE_SHIM=""
-    return 0
-}
-
-cleanup_homebrew_resource() {
-    [ "${BREW_RESOURCE_ROLLBACK:-0}" = "1" ] || return 0
-    rm -f "$BREW_RESOURCE_STAGE"
-    if [ "${BREW_RESOURCE_COMMITTED:-0}" = "1" ]; then
-        rm -f "$BREW_RESOURCE_BACKUP"
-    else
-        if [ "${BREW_RESOURCE_PREPARED:-0}" != "1" ]; then
-            rm -f "$BREW_RESOURCE_BACKUP"
-        elif [ "${BREW_RESOURCE_HAD_PREVIOUS:-0}" = "1" ]; then
-            rm -f "$BREW_RESOURCE_PATH"
-            if ! mv "$BREW_RESOURCE_BACKUP" "$BREW_RESOURCE_PATH"; then
-                if cp -p "$BREW_RESOURCE_BACKUP" "$BREW_RESOURCE_PATH"; then
-                    rm -f "$BREW_RESOURCE_BACKUP" \
-                        || err "could not restore the previous Homebrew installation file at $BREW_RESOURCE_PATH"
-                else
-                    err "could not restore the previous Homebrew installation file at $BREW_RESOURCE_PATH"
-                fi
-            fi
-        else
-            rm -f "$BREW_RESOURCE_PATH" "$BREW_RESOURCE_BACKUP"
-        fi
-        if [ "${BREW_RESOURCE_HAD_PREVIOUS:-0}" != "1" ]; then
-            if [ "${BREW_CREATED_TARGET_DIR:-0}" = "1" ]; then
-                rmdir "$(dirname "$BREW_RESOURCE_PATH")" 2>/dev/null || :
-            fi
-            if [ "${BREW_CREATED_VERSION_DIR:-0}" = "1" ]; then
-                rmdir "$(dirname "$(dirname "$BREW_RESOURCE_PATH")")" 2>/dev/null || :
-            fi
-            if [ "${BREW_CREATED_SHIMS_DIR:-0}" = "1" ]; then
-                rmdir "$(dirname "$(dirname "$(dirname "$BREW_RESOURCE_PATH")")")" 2>/dev/null || :
-            fi
-            if [ "${BREW_CREATED_OPENFIRMA_DIR:-0}" = "1" ]; then
-                rmdir "$(dirname "$(dirname "$(dirname "$(dirname "$BREW_RESOURCE_PATH")")")")" 2>/dev/null || :
-            fi
-            if [ "${BREW_CREATED_VAR_DIR:-0}" = "1" ]; then
-                rmdir "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$BREW_RESOURCE_PATH")")")")")" 2>/dev/null || :
-            fi
-        fi
-    fi
-    BREW_RESOURCE_ROLLBACK=0
-}
-
-record_homebrew_resource_journal() {
-    printf '%s\n' "$BREW_RESOURCE_PATH" > "${TMP_DIR}/brew-resource-path"
-    printf '%s\n' "$BREW_RESOURCE_STAGE" > "${TMP_DIR}/brew-resource-stage"
-    printf '%s\n' "$BREW_RESOURCE_BACKUP" > "${TMP_DIR}/brew-resource-backup"
-    printf '%s\n' "$BREW_RESOURCE_HAD_PREVIOUS" > "${TMP_DIR}/brew-resource-had-previous"
-    printf '%s\n' "$BREW_RESOURCE_PREPARED" > "${TMP_DIR}/brew-resource-prepared"
-    printf '%s\n' "$BREW_CREATED_VAR_DIR" > "${TMP_DIR}/brew-created-var"
-    printf '%s\n' "$BREW_CREATED_OPENFIRMA_DIR" > "${TMP_DIR}/brew-created-openfirma"
-    printf '%s\n' "$BREW_CREATED_SHIMS_DIR" > "${TMP_DIR}/brew-created-shims"
-    printf '%s\n' "$BREW_CREATED_VERSION_DIR" > "${TMP_DIR}/brew-created-version"
-    printf '%s\n' "$BREW_CREATED_TARGET_DIR" > "${TMP_DIR}/brew-created-target"
-}
-
-load_homebrew_resource_journal() {
-    [ -f "${TMP_DIR}/brew-resource-path" ] || return 1
-    BREW_RESOURCE_PATH=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-resource-path")
-    BREW_RESOURCE_STAGE=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-resource-stage")
-    BREW_RESOURCE_BACKUP=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-resource-backup")
-    BREW_RESOURCE_HAD_PREVIOUS=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-resource-had-previous")
-    BREW_RESOURCE_PREPARED=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-resource-prepared")
-    BREW_CREATED_VAR_DIR=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-created-var")
-    BREW_CREATED_OPENFIRMA_DIR=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-created-openfirma")
-    BREW_CREATED_SHIMS_DIR=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-created-shims")
-    BREW_CREATED_VERSION_DIR=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-created-version")
-    BREW_CREATED_TARGET_DIR=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-created-target")
-    BREW_RESOURCE_ROLLBACK=1
-}
-
-homebrew_attempt_exit() {
-    status=$1
-    trap - EXIT HUP INT TERM
-    set +e
-    cleanup_homebrew_resource
-    release_install_lock
-    printf '%s\n' "$status" > "${TMP_DIR}/brew-attempt-done"
-    exit "$status"
-}
-
-homebrew_attempt_signal() {
-    signal=$1
-    status=$2
-    if [ "${BREW_INSTALL_PHASE:-preparing}" = "installing" ] || [ "${BREW_INSTALL_PHASE:-preparing}" = "published" ]; then
-        BREW_PENDING_SIGNAL=$signal
-        BREW_PENDING_SIGNAL_STATUS=$status
-        warn "caught $signal during Homebrew installation; deferring cleanup until Homebrew completes"
-        return 0
-    fi
-    if [ "${BREW_INSTALL_PHASE:-preparing}" = "committed" ]; then
-        warn "caught $signal after Homebrew installation completed"
-        exit "$status"
-    fi
-    warn "caught $signal during Homebrew installation; restoring the previous state before tarball fallback"
-    exit "$status"
-}
-
-load_homebrew_signal_request() {
-    [ -s "${TMP_DIR}/brew-signal-status" ] || return 0
-    BREW_PENDING_SIGNAL=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-signal-name")
-    BREW_PENDING_SIGNAL_STATUS=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-signal-status")
-}
-
-wait_for_brew_attempt() {
-    wait "$BREW_ATTEMPT_PID"
 }
 
 # Returns 0 if $1 is already a colon-segment in $PATH.
@@ -1006,85 +845,6 @@ post_install() {
     fi
 }
 
-resolve_brew_version() {
-    formula_json=$(brew info --json=v2 "$BREW_FORMULA") \
-        || die "could not resolve the Homebrew formula version"
-    brew_version=$(printf '%s' "$formula_json" | brew ruby -rjson -e \
-        'puts JSON.parse(STDIN.read).fetch("formulae").first.fetch("versions").fetch("stable")') \
-        || die "could not parse the Homebrew formula version"
-    [ -n "$brew_version" ] || die "Homebrew formula reported an empty version"
-    VERSION="v${brew_version#v}"
-    info "Homebrew formula version: $VERSION"
-}
-
-try_brew() (
-    BREW_RESOURCE_ROLLBACK=0
-    BREW_RESOURCE_COMMITTED=0
-    BREW_RESOURCE_HAD_PREVIOUS=0
-    BREW_RESOURCE_PREPARED=0
-    BREW_RESOURCE_PATH=""
-    BREW_RESOURCE_STAGE=""
-    BREW_RESOURCE_BACKUP=""
-    BREW_INSTALL_PHASE=preparing
-    BREW_PENDING_SIGNAL=""
-    BREW_PENDING_SIGNAL_STATUS=0
-    trap 'homebrew_attempt_exit $?' EXIT
-    trap 'homebrew_attempt_signal HUP 129' HUP
-    trap 'homebrew_attempt_signal INT 130' INT
-    trap 'homebrew_attempt_signal TERM 143' TERM
-
-    resolve_brew_version
-    download_archive "$GUEST_SHIM_TARGET"
-    verify_archive
-    require_archive_secret_shim
-    prepare_private_shim_from_archive "$GUEST_SHIM_TARGET"
-    BREW_PREFIX=$(brew --prefix) || die "could not resolve the Homebrew prefix"
-    [ -n "$BREW_PREFIX" ] || die "Homebrew reported an empty prefix"
-    while [ ! -s "${TMP_DIR}/brew-owner-pid" ]; do
-        sleep 0.05
-    done
-    INSTALL_LOCK_OWNER_PID=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-owner-pid")
-    INSTALL_LOCK_DIR="${BREW_PREFIX}/.openfirma-installer.lock"
-    acquire_install_lock || die "could not lock the Homebrew installation under $BREW_PREFIX"
-    load_homebrew_signal_request
-    [ "$BREW_PENDING_SIGNAL_STATUS" -eq 0 ] || exit "$BREW_PENDING_SIGNAL_STATUS"
-    if [ "$CLI_ONLY_INSTALL" != "1" ]; then
-        brew_private_root="${BREW_PREFIX}/var/openfirma/secret-shims"
-        prepare_homebrew_resource "$brew_private_root" "$GUEST_SHIM_TARGET" \
-            || die "could not prepare the Homebrew installation"
-    fi
-
-    printf '%s\n' "${BREW_PREFIX}/bin/firma" > "${TMP_DIR}/brew-installed-bin"
-    info "Homebrew detected - installing via tap ${BREW_FORMULA%/firma}"
-    BREW_INSTALL_PHASE=installing
-    set +e
-    run "HOMEBREW_NO_AUTO_UPDATE=1 brew install '${BREW_FORMULA}'"
-    brew_status=$?
-    set -e
-    load_homebrew_signal_request
-    if [ "$brew_status" -ne 0 ]; then
-        if [ "$BREW_PENDING_SIGNAL_STATUS" -ne 0 ]; then
-            exit "$BREW_PENDING_SIGNAL_STATUS"
-        fi
-        die "Homebrew install failed"
-    fi
-    BREW_INSTALL_PHASE=published
-    if [ -n "${FIRMA_INSTALLER_TEST_BREW_PUBLISHED_READY:-}" ]; then
-        : > "$FIRMA_INSTALLER_TEST_BREW_PUBLISHED_READY"
-        while [ ! -e "$FIRMA_INSTALLER_TEST_BREW_PUBLISHED_RELEASE" ]; do
-            sleep 0.05
-        done
-    fi
-    load_homebrew_signal_request
-    BREW_RESOURCE_COMMITTED=1
-    BREW_INSTALL_PHASE=committed
-    info "Homebrew installed firma ${VERSION#v}"
-    if [ "$BREW_PENDING_SIGNAL_STATUS" -ne 0 ]; then
-        warn "caught $BREW_PENDING_SIGNAL after Homebrew installation completed"
-        exit "$BREW_PENDING_SIGNAL_STATUS"
-    fi
-)
-
 main() {
     if [ -n "${FIRMA_INSTALLER_RELEASE_TAG_GUARD:-}" ]; then
         guard_published_release_tag "$FIRMA_INSTALLER_RELEASE_TAG_GUARD"
@@ -1103,29 +863,9 @@ main() {
     info "target: $TARGET"
 
     resolve_version
-    GITHUB_VERSION="$VERSION"
     check_existing
 
     setup_tmp
-
-    # Keep all Homebrew state in a subshell. Any introspection, preparation,
-    # verification, resource, or install failure rolls the resource back and
-    # leaves these GitHub-release globals untouched for tarball fallback.
-    if [ "$NO_BREW" != "1" ] && [ "$VERSION_EXPLICIT" != "1" ] && command -v brew >/dev/null 2>&1; then
-        rm -f "${TMP_DIR}/brew-attempt-done" "${TMP_DIR}/brew-owner-pid" \
-            "${TMP_DIR}/brew-signal-name" "${TMP_DIR}/brew-signal-status"
-        try_brew &
-        BREW_ATTEMPT_PID=$!
-        printf '%s\n' "$BREW_ATTEMPT_PID" > "${TMP_DIR}/brew-owner-pid"
-        if wait_for_brew_attempt; then
-            BREW_ATTEMPT_PID=""
-            INSTALLED_FIRMA_BIN=$(awk 'NR == 1 { print; exit }' "${TMP_DIR}/brew-installed-bin")
-            post_install
-            exit 0
-        fi
-        BREW_ATTEMPT_PID=""
-        warn "Homebrew installation was not completed; falling back to verified tarball $GITHUB_VERSION"
-    fi
 
     download_archive "$TARGET"
     verify_archive
@@ -1147,6 +887,7 @@ main() {
 
     install_binary
     ensure_path
+    warn_shadowed_firma
     post_install
 }
 

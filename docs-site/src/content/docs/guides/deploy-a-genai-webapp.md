@@ -170,7 +170,7 @@ dir           = "/etc/firma/cache/policies"   # populated by Authority stream
 [sidecar.authority]
 url             = "https://firma-authority.internal:50051"
 public_key_path = "/etc/firma/firma-authority.pub"
-ca_cert_path    = "/etc/firma/authority-ca.crt"
+ca_cert_paths   = ["/etc/firma/authority-ca.crt"]
 
 [sidecar.connector]
 default_timeout = "30s"
@@ -214,9 +214,9 @@ A few things worth highlighting:
 - **Authority-owned mappings** — configure `[authority].mapping_rules_paths` on
   the Authority service, including `/etc/firma/mapping-rules.toml`. Its snapshots
   always deny unmatched requests; the Sidecar has no mapping-file settings.
-- **`[sidecar.authority].url` uses `https://` + `[sidecar.authority].ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
+- **`[sidecar.authority].url` uses `https://`** — sidecar verifies Authority identity before trusting streamed bundles/revocations, against the platform's trusted roots or, with `[sidecar.authority].ca_cert_paths` (several during a rotation), only against your private CAs.
 - **`reconnect_min_backoff` / `reconnect_max_backoff`** — Sidecars retry Authority streams with bounded exponential backoff. The defaults are `"250ms"` and `"30s"`.
-- **`grpc` audit sink** — events go to a centralized collector; multiple Sidecars feed one collector. `buffer_path` is required: while the collector is unreachable the Sidecar buffers events there and replays them on reconnect, so give it a writable path on a volume that survives restarts. Past `buffer_max_size` the oldest events are evicted rather than blocking the agent.
+- **`grpc` audit sink** — events go to a centralized collector; multiple Sidecars feed one collector. `buffer_path` is required: while the collector is unreachable the Sidecar buffers events there and replays them on reconnect, so give it a writable path on a volume that survives restarts. Past `buffer_max_size` the oldest events are evicted rather than blocking the agent. Unless the collector shares the Authority's origin, its certificate is verified against the platform's trusted roots, not `ca_cert_paths`: if an internal CA issued it, add that CA to the bundle `SSL_CERT_FILE` names.
 - **Vault Agent for credentials** — no API keys in the app. Vault Agent renders short-lived files and the Sidecar reads them per call.
 - **`strict_hosts` on the vendor** — if MITM fails (e.g. cert mismatch), the call denies rather than falling back to weaker CONNECT-only policy.
 
@@ -231,8 +231,9 @@ retrying with exponential backoff and stays fail-closed.
 The request path is blocked until both Authority-backed stores are ready:
 
 - The policy bundle stream has delivered and applied its first bundle.
-- The revocation stream has either delivered its first event or the
-  `revocation_readiness_grace` window has elapsed.
+- The revocation stream has delivered and applied its first revocation set.
+  Waiting out `revocation_readiness_grace` does not satisfy this gate; it only
+  controls when the Sidecar warns that no set has arrived.
 
 Only after both gates pass does the Sidecar emit `sidecar ready`. Before
 that point, protected traffic denies locally with readiness errors such as
@@ -246,7 +247,7 @@ needs different timing:
 [sidecar.authority]
 url                           = "https://firma-authority.internal:50051"
 public_key_path               = "/etc/firma/firma-authority.pub"
-ca_cert_path                  = "/etc/firma/authority-ca.crt"
+ca_cert_paths                 = ["/etc/firma/authority-ca.crt"]
 reconnect_min_backoff = "250ms"
 reconnect_max_backoff = "30s"
 revocation_readiness_grace = "500ms"

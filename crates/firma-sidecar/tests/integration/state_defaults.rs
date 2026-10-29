@@ -5,24 +5,78 @@
 
 #![allow(clippy::expect_used, reason = "test code")]
 
+use std::assert_matches;
 use std::time::Duration;
 
 use firma_config_schema::sidecar::audit::{AuditConfig as SchemaAuditConfig, AuditSink};
 use firma_runtime_state::RuntimeLayout;
-use firma_sidecar::config::{SidecarConfig, SidecarConfigError};
+use firma_sidecar::authority_tls::AuthorityTls;
+use firma_sidecar::config::{
+    AuthorityConfigError, AuthorityTrust, AuthorityTrustError, SidecarConfig, SidecarConfigError,
+    default_authority_ca,
+};
 use firma_sidecar::startup::audit::{load_audit_event_builder, spawn_audit_sink};
 
 /// Generate a fresh P-256 signing key as PKCS#8 PEM at test time, so no real
 /// PEM block lives in the source tree.
 fn audit_key_pem() -> String {
     use p256::ecdsa::SigningKey;
-    use p256::elliptic_curve::rand_core::OsRng;
+    use p256::elliptic_curve::Generate as _;
     use p256::pkcs8::{EncodePrivateKey as _, LineEnding};
 
-    SigningKey::random(&mut OsRng)
+    SigningKey::generate()
         .to_pkcs8_pem(LineEnding::LF)
         .expect("encode signing key as pkcs8 pem")
         .to_string()
+}
+
+#[test]
+fn runtime_run_identifiers_are_validated_before_credential_resolution() {
+    use firma_config_schema::sidecar::authority::SidecarCredentials;
+    use firma_sidecar::authority_credentials::{
+        CredentialSource, SidecarCredentialsConfig, SidecarCredentialsConfigError,
+    };
+
+    let mut schema = SidecarCredentials {
+        workspace_id: "workspace".into(),
+        sidecar_id: "sidecar".into(),
+        pre_shared_key_env: None,
+        pre_shared_key_path: None,
+        runtime_credential_env: Some("CARGO_PKG_NAME".into()),
+        run_id: None,
+    };
+    for invalid in ["not-a-run", "ses_01j0000000e008000000000001"] {
+        schema.run_id = Some(invalid.into());
+        let error = SidecarCredentialsConfig::try_from(schema.clone()).expect_err("invalid run");
+        assert_eq!(error, SidecarCredentialsConfigError::InvalidRunId);
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(error.to_string(), @"run_id must be a valid RunId");
+        }
+    }
+
+    let run = "run_01j0000000e008000000000001";
+    schema.run_id = Some(run.into());
+    let config = SidecarCredentialsConfig::try_from(schema).expect("canonical run");
+    assert_eq!(
+        config.source,
+        CredentialSource::Runtime {
+            run_id: run.parse().expect("canonical run"),
+            env: "CARGO_PKG_NAME".into(),
+        }
+    );
+    let credential = config
+        .resolve()
+        .expect("cargo supplies the credential variable");
+    let request = firma_sidecar::authority_credentials::SidecarCredential::authenticated(
+        Some(&credential),
+        (),
+    );
+    assert_eq!(
+        request.metadata().get("authorization").expect("bearer"),
+        concat!("Bearer ", env!("CARGO_PKG_NAME"))
+    );
+    assert!(credential.body_credentials().is_none());
+    assert!(!format!("{credential:?}").contains(concat!("Bearer ", env!("CARGO_PKG_NAME"))));
 }
 
 /// Resolve a schema against `state`, with `mutate` standing in for the parts
@@ -78,8 +132,14 @@ async fn a_defaulted_audit_log_is_opened_before_the_state_dir_exists() {
 
     let (_payload_tx, payload_rx) = tokio::sync::mpsc::channel(1);
     let exit = tokio_util::sync::CancellationToken::new();
-    let handle =
-        spawn_audit_sink(&config, payload_rx, builder, exit.clone()).expect("spawn the audit sink");
+    let handle = spawn_audit_sink(
+        &config,
+        &AuthorityTls::read(&config.authority).expect("authority TLS"),
+        payload_rx,
+        builder,
+        exit.clone(),
+    )
+    .expect("spawn the audit sink");
 
     // No polling: the log is opened before the sink is spawned, so it is there
     // the moment the call returns.
@@ -119,6 +179,7 @@ async fn an_unopenable_audit_log_fails_the_spawn() {
 
     let error = spawn_audit_sink(
         &config,
+        &AuthorityTls::read(&config.authority).expect("authority TLS"),
         payload_rx,
         builder,
         tokio_util::sync::CancellationToken::new(),
@@ -216,7 +277,7 @@ fn authority_trust_anchors_are_adopted_only_when_the_material_exists() {
 
     let absent = resolve(&state, |_| {}).expect("config without anchors is valid");
     assert_eq!(absent.authority_public_key_path(), None);
-    assert_eq!(absent.authority_ca_cert_path(), None);
+    assert_eq!(absent.authority_trust(), &AuthorityTrust::PlatformStore);
 
     std::fs::create_dir_all(state.tls_dir()).expect("create tls dir");
     std::fs::write(state.authority_public_key(), "pub").expect("write public key");
@@ -228,14 +289,100 @@ fn authority_trust_anchors_are_adopted_only_when_the_material_exists() {
         Some(state.authority_public_key().as_path())
     );
     assert_eq!(
-        present.authority_ca_cert_path(),
-        Some(state.authority_tls_ca_certificate().as_path())
+        present.authority_trust(),
+        &AuthorityTrust::CustomCas(vec![state.authority_tls_ca_certificate()])
     );
 }
 
-/// An `https://` Authority is still rejected without a CA certificate, but the
+/// Named CAs are the whole trust, in order, and keep the state-dir CA from
+/// being adopted even for an Authority on this host.
+#[test]
+fn named_cas_are_trusted_in_order_and_block_the_state_dir_adoption() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let state = RuntimeLayout::from_root(temp.path());
+    std::fs::create_dir_all(state.tls_dir()).expect("create tls dir");
+    std::fs::write(state.authority_tls_ca_certificate(), "ca").expect("write ca cert");
+
+    let named = resolve(&state, |schema| {
+        schema.authority.url = Some("https://127.0.0.1:9443".to_string());
+        schema.authority.ca_cert_paths = vec!["b.pem".into(), "a.pem".into()];
+    })
+    .expect("a named CA satisfies the loopback rule");
+    assert_eq!(
+        named.authority_trust(),
+        &AuthorityTrust::CustomCas(vec!["b.pem".into(), "a.pem".into()]),
+        "the named CAs must keep the state-dir CA out"
+    );
+}
+
+/// With the platform roots disabled, a named CA is the only trust left:
+/// none at all is rejected, before the loopback rule could name the state-dir
+/// default instead, and for a plaintext URL, where no other rule applies.
+#[test]
+fn disabled_platform_roots_require_a_named_ca() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let state = RuntimeLayout::from_root(temp.path());
+
+    let error = resolve(&state, |schema| {
+        schema.authority.url = Some("https://127.0.0.1:9443".to_string());
+        schema.authority.disable_platform_roots = true;
+    })
+    .expect_err("no trust source at all must be rejected");
+    assert_matches!(
+        error,
+        SidecarConfigError::Authority(AuthorityConfigError::Trust(
+            AuthorityTrustError::NoTrustAnchors
+        ))
+    );
+    insta::assert_snapshot!(error.to_string(), @"authority: authority.disable_platform_roots = true requires authority.ca_cert_paths");
+
+    let plaintext = resolve(&state, |schema| {
+        schema.authority.disable_platform_roots = true;
+    })
+    .expect_err("the switch applies to a plaintext URL too");
+    assert_matches!(
+        plaintext,
+        SidecarConfigError::Authority(AuthorityConfigError::Trust(
+            AuthorityTrustError::NoTrustAnchors
+        ))
+    );
+
+    let pinned = resolve(&state, |schema| {
+        schema.authority.url = Some("https://authority.example:443".to_string());
+        schema.authority.disable_platform_roots = true;
+        schema.authority.ca_cert_paths = vec!["corp.pem".into()];
+    })
+    .expect("a named CA is a complete trust source");
+    assert_eq!(
+        pinned.authority_trust(),
+        &AuthorityTrust::CustomCas(vec!["corp.pem".into()])
+    );
+}
+
+/// A blank list entry would name no file at all, so it is refused.
+#[test]
+fn a_blank_ca_list_entry_is_rejected() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let state = RuntimeLayout::from_root(temp.path());
+
+    let error = resolve(&state, |schema| {
+        schema.authority.ca_cert_paths = vec!["a.pem".into(), String::new().into()];
+    })
+    .expect_err("a blank list entry must be rejected");
+
+    assert_matches!(
+        error,
+        SidecarConfigError::Authority(AuthorityConfigError::Trust(
+            AuthorityTrustError::EmptyCaCertPath
+        ))
+    );
+    insta::assert_snapshot!(error.to_string(), @"authority: authority.ca_cert_paths entries must not be empty");
+}
+
+/// An `https://` Authority on this host is still rejected without a CA
+/// certificate, since no public CA certifies a loopback name; the
 /// diagnostic has to name the path that was looked for: now that the anchor is
-/// adopted from the state directory, "set `authority.ca_cert_path`" alone does
+/// adopted from the state directory, "set `authority.ca_cert_paths`" alone does
 /// not say where the Sidecar expected to find one.
 #[test]
 fn an_https_authority_without_a_ca_names_the_state_dir_default() {
@@ -243,7 +390,7 @@ fn an_https_authority_without_a_ca_names_the_state_dir_default() {
     let state = RuntimeLayout::from_root(temp.path());
 
     let error = resolve(&state, |schema| {
-        schema.authority.url = Some("https://authority.test:9443".to_string());
+        schema.authority.url = Some("https://127.0.0.1:9443".to_string());
     })
     .expect_err("an https Authority without a CA certificate must be rejected");
 
@@ -263,23 +410,103 @@ fn an_https_authority_without_a_ca_names_the_state_dir_default() {
     );
 }
 
-/// The adopted anchor is what makes an `https://` Authority valid, so every
+/// A local Authority's CA is adopted from the state directory, so every
 /// consumer that validates this config — `firma doctor` included — has to
 /// resolve the same state directory.
 #[test]
-fn an_https_authority_is_accepted_when_the_state_dir_holds_the_ca() {
+fn a_local_https_authority_adopts_the_state_dir_ca() {
     let temp = tempfile::tempdir().expect("temporary directory");
     let state = RuntimeLayout::from_root(temp.path());
     std::fs::create_dir_all(state.tls_dir()).expect("create tls dir");
     std::fs::write(state.authority_tls_ca_certificate(), "ca").expect("write ca cert");
 
     let config = resolve(&state, |schema| {
-        schema.authority.url = Some("https://authority.test:9443".to_string());
+        schema.authority.url = Some("https://127.0.0.1:9443".to_string());
     })
-    .expect("the adopted CA certificate satisfies the https requirement");
+    .expect("a local https Authority adopts the CA certificate");
 
     assert_eq!(
-        config.authority_ca_cert_path(),
-        Some(state.authority_tls_ca_certificate().as_path())
+        config.authority_trust(),
+        &AuthorityTrust::CustomCas(vec![state.authority_tls_ca_certificate()])
     );
+}
+
+/// The state directory's CA belongs to the Authority `firma config` set up on
+/// this host. A remote Authority, including one reached through a loopback
+/// tunnel, presents its own certificate, so it is verified against the
+/// platform's roots instead of that CA.
+#[test]
+fn the_state_dir_ca_is_the_default_only_for_an_authority_on_this_host() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let state = RuntimeLayout::from_root(temp.path());
+    std::fs::create_dir_all(state.tls_dir()).expect("create tls dir");
+    std::fs::write(state.authority_tls_ca_certificate(), "ca").expect("write ca cert");
+    let local = Some(state.authority_tls_ca_certificate());
+
+    for (url, connect_addr, expected) in [
+        (None, None, local.clone()),
+        (Some("https://LOCALHOST:9443"), None, local.clone()),
+        (Some("https://[::1]:9443"), None, local.clone()),
+        (
+            Some("https://127.0.0.1:9443"),
+            Some("[::ffff:127.0.0.1]:9443"),
+            local,
+        ),
+        (Some("https://authority.example:443"), None, None),
+        (
+            Some("https://authority.example:443"),
+            Some("127.0.0.1:9443"),
+            None,
+        ),
+        (
+            Some("https://localhost:9443"),
+            Some("192.0.2.10:9443"),
+            None,
+        ),
+        (Some("not a url"), None, None),
+    ] {
+        let connect_addr = connect_addr.map(|address| address.parse().expect("fixture address"));
+        assert_eq!(
+            default_authority_ca(url, connect_addr, &state),
+            expected,
+            "url {url:?} through {connect_addr:?}"
+        );
+    }
+}
+
+/// A remote `https://` Authority needs no CA: with none configured it is
+/// valid, keeps the platform's roots, and never inherits the local CA. That
+/// holds for the routes where only one of the logical host and the physical
+/// address is loopback, which both CA adoption and startup validation judge
+/// from both; without a state-dir CA only the validation is in play.
+#[test]
+fn a_remote_https_authority_is_valid_without_a_ca() {
+    for state_dir_ca in [true, false] {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let state = RuntimeLayout::from_root(temp.path());
+        if state_dir_ca {
+            std::fs::create_dir_all(state.tls_dir()).expect("create tls dir");
+            std::fs::write(state.authority_tls_ca_certificate(), "ca").expect("write ca cert");
+        }
+
+        for (url, connect_addr) in [
+            ("https://authority.example:443", None),
+            ("https://authority.example:443", Some("127.0.0.1:9443")),
+            ("https://localhost:9443", Some("192.0.2.10:9443")),
+        ] {
+            let route = format!("{url} through {connect_addr:?}, state-dir CA {state_dir_ca}");
+            let config = resolve(&state, |schema| {
+                schema.authority.url = Some(url.to_string());
+                schema.authority.connect_addr =
+                    connect_addr.map(|address| address.parse().expect("fixture address"));
+            })
+            .unwrap_or_else(|error| panic!("{route} needs no CA: {error}"));
+
+            assert_eq!(
+                config.authority_trust(),
+                &AuthorityTrust::PlatformStore,
+                "{route}"
+            );
+        }
+    }
 }

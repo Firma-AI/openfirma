@@ -11,17 +11,21 @@
 //!   the concrete sink, signing [`AuditPayload`](crate::audit::AuditPayload)s into
 //!   [`ExecutionEvent`](crate::audit::ExecutionEvent)s on their way out.
 
+use anyhow::Context as _;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tonic::transport::ClientTlsConfig;
 
-use firma_config_schema::sidecar::AuditSink;
+use crate::authority_tls::{AuthorityTls, TlsTrust, client_tls_config};
+use crate::config::{AuditServiceUrl, AuditSinkConfig};
 
 use crate::audit;
 use crate::audit::AuditSink as _;
 use crate::audit::sink as audit_sink;
 use crate::config;
 
-/// Spawns the audit sink pipeline.
+/// Spawns the audit sink pipeline. A network sink to the Authority's own
+/// audit service uses `authority_tls`, the TLS material read from `config`.
 ///
 /// The pipeline is a signing adapter that receives [`AuditPayload`](audit::AuditPayload)s,
 /// signs them into [`ExecutionEvent`](audit::ExecutionEvent)s, and forwards to the
@@ -33,10 +37,11 @@ use crate::config;
 /// # Errors
 ///
 /// Returns an error when the sink fails to initialize (invalid
-/// config, inability to open the audit log, inability to connect to an
+/// config, inability to open the audit log, unusable TLS settings for an
 /// external sink).
 pub fn spawn_audit_sink(
     config: &config::SidecarConfig,
+    authority_tls: &AuthorityTls,
     payload_rx: mpsc::Receiver<audit::AuditPayload>,
     event_builder: audit::builder::EventBuilder,
     exit: CancellationToken,
@@ -49,61 +54,124 @@ pub fn spawn_audit_sink(
         run_signing_adapter(payload_rx, event_tx, event_builder, adapter_exit).await;
     });
 
-    match audit_config.sink {
-        AuditSink::File => {
-            let path = audit_config.file_path.clone().ok_or_else(|| {
-                anyhow::anyhow!("file sink requires file_path in audit configuration")
-            })?;
+    match &audit_config.sink {
+        AuditSinkConfig::File { path } => {
             // Opened here, not in the task: a log that cannot be written is a
             // startup failure, not a detached task nobody joins.
-            let sink = audit_sink::FileAuditSink::open(path)?;
+            let sink = audit_sink::FileAuditSink::open(path.clone())?;
             Ok(tokio::spawn(async move { sink.run(event_rx, exit).await }))
         }
-        AuditSink::Grpc => {
-            let endpoint = audit_config.grpc_url.clone().ok_or_else(|| {
-                anyhow::anyhow!("gRPC sink requires grpc_url in audit configuration")
-            })?;
-            let buffer_path = audit_config.buffer_path.clone().ok_or_else(|| {
-                anyhow::anyhow!("gRPC sink requires buffer_path in audit configuration")
-            })?;
-            let buffer_max_bytes = audit_config.buffer_max_bytes;
-            let credentials = resolve_audit_credentials(config)?;
-            let sink = audit_sink::GrpcAuditSink::new(endpoint, buffer_path, buffer_max_bytes)
-                .with_replay_ack_timeout(audit_config.replay_ack_timeout)
-                .with_credentials(credentials)?;
+        AuditSinkConfig::Grpc {
+            url,
+            buffer_path,
+            buffer_max_bytes,
+            replay_ack_timeout,
+        } => {
+            let destination = audit_destination(config, url)?;
+            let mut sink =
+                audit_sink::GrpcAuditSink::new(url.clone(), buffer_path.clone(), *buffer_max_bytes)
+                    .with_replay_ack_timeout(*replay_ack_timeout)
+                    .with_credentials(audit_credentials(config, destination)?)?;
+            if let Some(tls) = audit_tls(authority_tls, destination, url) {
+                sink = sink.with_tls(tls).context(INVALID_AUDIT_TLS)?;
+            }
             Ok(tokio::spawn(async move { sink.run(event_rx, exit).await }))
         }
-        AuditSink::Stdout => Ok(tokio::spawn(async move {
+        AuditSinkConfig::Stdout => Ok(tokio::spawn(async move {
             audit_sink::StdoutAuditSink::new().run(event_rx, exit).await
         })),
-        AuditSink::Wal => {
-            let path = audit_config.wal_path.clone().ok_or_else(|| {
-                anyhow::anyhow!("WAL sink requires wal_path in audit configuration")
-            })?;
-            let grpc_url = audit_config.grpc_url.clone().ok_or_else(|| {
-                anyhow::anyhow!("WAL sink requires grpc_url in audit configuration")
-            })?;
-            let wal_max_bytes = audit_config.wal_max_bytes;
-            let request_timeout = audit_config.wal_request_timeout;
-            let credentials = resolve_audit_credentials(config)?;
-            Ok(tokio::spawn(async move {
-                audit_sink::WalAuditSink::new(
-                    grpc_url,
-                    path,
-                    wal_max_bytes,
-                    request_timeout,
-                    credentials,
-                )
-                .run(event_rx, exit)
-                .await
-            }))
+        AuditSinkConfig::Wal {
+            url,
+            path,
+            max_bytes,
+            request_timeout,
+        } => {
+            let destination = audit_destination(config, url)?;
+            let mut sink = audit_sink::WalAuditSink::new(
+                url.clone(),
+                path.clone(),
+                *max_bytes,
+                *request_timeout,
+                audit_credentials(config, destination)?,
+            );
+            if let Some(tls) = audit_tls(authority_tls, destination, url) {
+                sink = sink.with_tls(tls).context(INVALID_AUDIT_TLS)?;
+            }
+            Ok(tokio::spawn(async move { sink.run(event_rx, exit).await }))
         }
     }
 }
 
+/// Context for TLS settings that cannot be applied to the audit endpoint, for
+/// instance because no trusted roots load: startup stops rather than every
+/// delivery failing while events pile up.
+const INVALID_AUDIT_TLS: &str = "invalid audit TLS configuration";
+
+/// Where an audit URL points, which decides what travels with the events.
+///
+/// The Authority's own audit service is trusted as the Authority is and gets
+/// the Sidecar's credentials. Any other host gets the platform's roots and
+/// nothing that identifies this Sidecar to the Authority: neither its CA pin,
+/// its mTLS identity, nor the credentials that would let that host call the
+/// Authority as this Sidecar.
+#[derive(Clone, Copy)]
+enum AuditDestination {
+    /// The audit URL is the Authority's own origin.
+    Authority,
+    /// The audit URL names another host.
+    Other,
+}
+
+/// Classifies `url` against the Authority's origin: scheme, host and port.
+///
+/// # Errors
+///
+/// Returns an error when the Authority URL is invalid.
+fn audit_destination(
+    config: &config::SidecarConfig,
+    url: &AuditServiceUrl,
+) -> anyhow::Result<AuditDestination> {
+    if config.authority.target()?.has_origin_of(url.uri()) {
+        return Ok(AuditDestination::Authority);
+    }
+    tracing::info!(
+        audit_url = %url.uri(),
+        "the audit service is not the Authority's origin: events are sent without the \
+         Authority's credentials, CA or client identity"
+    );
+    Ok(AuditDestination::Other)
+}
+
+/// The Sidecar's credentials for the audit service: the configured ones at
+/// the Authority's origin, none elsewhere.
+fn audit_credentials(
+    config: &config::SidecarConfig,
+    destination: AuditDestination,
+) -> anyhow::Result<Option<crate::authority_credentials::SidecarCredential>> {
+    match destination {
+        AuditDestination::Authority => resolve_audit_credentials(config),
+        AuditDestination::Other => Ok(None),
+    }
+}
+
+/// The TLS settings for an `https` audit URL; none for `http`.
+fn audit_tls(
+    authority_tls: &AuthorityTls,
+    destination: AuditDestination,
+    url: &AuditServiceUrl,
+) -> Option<ClientTlsConfig> {
+    if url.uri().scheme_str() != Some("https") {
+        return None;
+    }
+    Some(match destination {
+        AuditDestination::Authority => authority_tls.client_config(),
+        AuditDestination::Other => client_tls_config(TlsTrust::PlatformStore, None),
+    })
+}
+
 fn resolve_audit_credentials(
     config: &config::SidecarConfig,
-) -> anyhow::Result<Option<crate::authority_credentials::ResolvedSidecarCredentials>> {
+) -> anyhow::Result<Option<crate::authority_credentials::SidecarCredential>> {
     config
         .authority
         .credentials

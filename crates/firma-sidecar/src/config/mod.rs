@@ -21,14 +21,14 @@ mod enforcement;
 mod revocation;
 
 pub use self::audit::{AuditConfig, AuditConfigError, AuditSigningKey};
+pub(crate) use self::audit::{AuditServiceUrl, AuditSinkConfig};
 pub use self::authority::{
     AuthorityConfig, AuthorityConfigError, AuthorityEndpoint, AuthorityEndpointError,
+    AuthorityTrust, AuthorityTrustError, PlatformRoots, default_authority_ca,
 };
 pub use self::capability_seed::{CapabilitySeedConfig, CapabilitySeedConfigError, SeedFile};
 pub use self::connector::{ConnectorConfig, ConnectorConfigError};
-pub use self::enforcement::{
-    EnforcementConfig, EnforcementConfigError, MappingRuleConfig, MappingRulesFile,
-};
+pub use self::enforcement::{EnforcementConfig, MappingRuleConfig, MappingRulesFile};
 pub use self::revocation::{RevocationConfig, RevocationConfigError};
 pub use crate::authority_credentials::SidecarCredentialsConfig;
 
@@ -143,9 +143,6 @@ pub enum SidecarConfigError {
     /// The `[sidecar.authority]` section was invalid.
     #[error("authority: {0}")]
     Authority(#[from] AuthorityConfigError),
-    /// An enforcement section was invalid.
-    #[error("{0}")]
-    Enforcement(#[from] EnforcementConfigError),
     /// The `[sidecar.revocation]` section was invalid.
     #[error("revocation: {0}")]
     Revocation(#[from] RevocationConfigError),
@@ -164,16 +161,15 @@ pub enum SidecarConfigError {
     /// The Authority endpoint (`url` / `connect_addr`) was invalid.
     #[error("authority: {0}")]
     AuthorityEndpoint(#[from] AuthorityEndpointError),
-    /// A validated Authority endpoint unexpectedly had no host.
-    #[error("authority: validated endpoint unexpectedly has no host")]
-    AuthorityEndpointMissingHost,
     /// `sidecar.capability_seed.paths` was non-empty without an Authority public key.
     #[error("authority.public_key_path must be set when capability_seed.paths is non-empty")]
     MissingPublicKeyForSeeds,
-    /// An `https://` Authority URL was configured without a CA certificate,
-    /// and none was found at the state-directory default either.
+    /// An `https://` Authority on this host was configured without a CA
+    /// certificate, and none was found at the state-directory default either.
+    /// No public CA certifies a loopback name, so the platform roots cannot
+    /// verify it.
     #[error(
-        "authority.ca_cert_path must be set when authority.url uses https://; no CA certificate was readable at the state-directory default {}",
+        "authority.ca_cert_paths must be set when authority.url uses https:// on this host; no CA certificate was readable at the state-directory default {}",
         state_default.display()
     )]
     MissingCaCertForHttps {
@@ -204,14 +200,19 @@ impl SidecarConfig {
     /// Path the `file` audit sink appends to; `None` for every other sink.
     #[must_use]
     pub fn audit_file_path(&self) -> Option<&std::path::Path> {
-        self.audit.file_path.as_deref()
+        match &self.audit.sink {
+            AuditSinkConfig::File { path } => Some(path),
+            AuditSinkConfig::Stdout
+            | AuditSinkConfig::Grpc { .. }
+            | AuditSinkConfig::Wal { .. } => None,
+        }
     }
 
-    /// Path of the CA certificate the Authority's TLS identity is verified
-    /// against, when one is configured or was adopted.
+    /// What the Authority's TLS identity is verified against: the configured
+    /// or adopted CA certificates, or the platform's roots.
     #[must_use]
-    pub fn authority_ca_cert_path(&self) -> Option<&std::path::Path> {
-        self.authority.ca_cert_path.as_deref()
+    pub const fn authority_trust(&self) -> &AuthorityTrust {
+        &self.authority.trust
     }
 
     /// Load and validate a sidecar configuration from a TOML file, resolving
@@ -245,33 +246,20 @@ impl SidecarConfig {
         if !self.capability_seed.paths.is_empty() && self.authority.public_key_path.is_none() {
             return Err(SidecarConfigError::MissingPublicKeyForSeeds);
         }
+        let endpoint = self.authority.target()?;
+        if endpoint.is_https()
+            && endpoint.is_on_this_host()
+            && self.authority.trust == AuthorityTrust::PlatformStore
         {
-            let endpoint = self.authority.target()?;
-            let host = endpoint
-                .origin()
-                .host()
-                .ok_or(SidecarConfigError::AuthorityEndpointMissingHost)?;
-            if endpoint.is_https() {
-                if self.authority.ca_cert_path.is_none() {
-                    return Err(SidecarConfigError::MissingCaCertForHttps {
-                        state_default: state.authority_tls_ca_certificate(),
-                    });
-                }
-            } else {
-                let is_loopback = endpoint.connect_addr().map_or_else(
-                    || {
-                        let host_unbracketed = host.trim_start_matches('[').trim_end_matches(']');
-                        host.eq_ignore_ascii_case("localhost")
-                            || host_unbracketed
-                                .parse::<IpAddr>()
-                                .is_ok_and(|ip| ip.is_loopback())
-                    },
-                    |connect_addr| connect_addr.ip().is_loopback(),
-                );
-                if !is_loopback && !self.authority.allow_insecure_remote_authority {
-                    return Err(SidecarConfigError::InsecureNonLoopbackAuthority);
-                }
-            }
+            return Err(SidecarConfigError::MissingCaCertForHttps {
+                state_default: state.authority_tls_ca_certificate(),
+            });
+        }
+        if !endpoint.is_https()
+            && !endpoint.route_is_loopback()
+            && !self.authority.allow_insecure_remote_authority
+        {
+            return Err(SidecarConfigError::InsecureNonLoopbackAuthority);
         }
         Ok(())
     }
@@ -295,7 +283,7 @@ impl SidecarConfig {
         if let Some(p) = self.authority.public_key_path.as_mut() {
             rebase(p);
         }
-        if let Some(p) = self.authority.ca_cert_path.as_mut() {
+        for p in self.authority.trust.ca_cert_paths_mut() {
             rebase(p);
         }
         if let Some(p) = self.authority.tls_client_cert_path.as_mut() {
@@ -317,14 +305,13 @@ impl SidecarConfig {
         if let AuditSigningKey::Path(p) = &mut self.audit.signing_key {
             rebase(p);
         }
-        if let Some(p) = self.audit.file_path.as_mut() {
-            rebase(p);
-        }
-        if let Some(p) = self.audit.buffer_path.as_mut() {
-            rebase(p);
-        }
-        if let Some(p) = self.audit.wal_path.as_mut() {
-            rebase(p);
+        match &mut self.audit.sink {
+            AuditSinkConfig::File { path }
+            | AuditSinkConfig::Grpc {
+                buffer_path: path, ..
+            }
+            | AuditSinkConfig::Wal { path, .. } => rebase(path),
+            AuditSinkConfig::Stdout => {}
         }
         for p in &mut self.capability_seed.paths {
             rebase(p);
@@ -342,8 +329,11 @@ impl SidecarConfig {
 ///
 /// The existence check is what keeps the other direction safe: a deployment that
 /// never generated this material keeps its reject-all token verifier and its
-/// rejection of an `https://` Authority, instead of failing on a file nobody
-/// wrote.
+/// rejection of an `https://` Authority on this host, instead of failing on a
+/// file nobody wrote.
+///
+/// The CA is the local Authority's, so [`default_authority_ca`] adopts it only
+/// for an Authority on this host.
 ///
 /// What counts as present is
 /// [`firma_runtime_state::is_material_present`]: every consumer of a
@@ -359,11 +349,12 @@ fn adopt_authority_trust_anchors(
             schema.authority.public_key_path = Some(candidate);
         }
     }
-    if schema.authority.ca_cert_path.is_none() {
-        let candidate = state.authority_tls_ca_certificate();
-        if firma_runtime_state::is_material_present(&candidate) {
-            schema.authority.ca_cert_path = Some(candidate);
-        }
+    if schema.authority.ca_cert_paths.is_empty() {
+        schema.authority.ca_cert_paths.extend(default_authority_ca(
+            schema.authority.url.as_deref(),
+            schema.authority.connect_addr,
+            state,
+        ));
     }
 }
 
@@ -373,17 +364,17 @@ impl SidecarConfig {
     ///
     /// This is the only way to build a [`SidecarConfig`]. Resolution and
     /// validation are one step because they are not independent: the validator
-    /// rejects an `https://` Authority with no CA certificate, so an anchor
-    /// adopted from the state directory has to be in place before the check
-    /// runs. Splitting them is what let `firma doctor` reject configurations
-    /// the Sidecar accepts.
+    /// rejects an `https://` Authority on this host with no CA certificate, so
+    /// an anchor adopted from the state directory has to be in place before the
+    /// check runs. Splitting them is what let `firma doctor` reject
+    /// configurations the Sidecar accepts.
     ///
     /// What `state` supplies, for each field the config leaves unset:
     ///
     /// | Field | Default |
     /// |-------|---------|
     /// | `authority.public_key_path` | `authority.pub`, if present |
-    /// | `authority.ca_cert_path` | `tls/authority-ca.crt`, if present |
+    /// | `authority.ca_cert_paths` | `[tls/authority-ca.crt]`, if present and the Authority is on this host |
     /// | `ca.dir` | `generated-firma-ca` |
     /// | `audit.file_path` | `audit.jsonl` |
     /// | `audit.signing_key_path` | `audit.key` |
@@ -424,8 +415,8 @@ impl SidecarConfig {
         let enforcement = firma_config_schema::sidecar::EnforcementConfig {
             constraint_enforcement: s.constraint_enforcement,
         }
-        .try_into()?;
-        let config = Self {
+        .into();
+        let mut config = Self {
             interceptor: s.interceptor.try_into()?,
             policy: s.policy.try_into()?,
             ca: CaConfig::resolve(s.ca, state)?,
@@ -440,6 +431,23 @@ impl SidecarConfig {
             http_secret_providers,
             secret_gateway: s.secret_gateway,
         };
+        if let Some(credentials) = &config.authority.credentials
+            && let crate::authority_credentials::CredentialSource::Runtime { run_id, .. } =
+                &credentials.source
+        {
+            match &mut config.audit.sink {
+                AuditSinkConfig::Grpc { .. } => {
+                    return Err(AuditConfigError::RuntimeGrpcUnsupported.into());
+                }
+                AuditSinkConfig::Wal { path, .. } => {
+                    // Preserve earlier runs' evidence in sibling journals.
+                    let mut name = path.file_name().unwrap_or_default().to_os_string();
+                    name.push(format!(".{run_id}"));
+                    path.set_file_name(name);
+                }
+                AuditSinkConfig::Stdout | AuditSinkConfig::File { .. } => {}
+            }
+        }
         config.validate_cross_fields(state)?;
         Ok(config)
     }
@@ -500,21 +508,12 @@ pub struct InterceptorConfig {
 /// Error validating an [`InterceptorConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InterceptorConfigError {
-    /// `max_request_body_size` was zero.
-    #[error("interceptor.max_request_body_size must be > 0")]
-    ZeroMaxRequestBody,
     /// `max_request_body_size` was too large for this platform's `usize`.
     #[error("interceptor.max_request_body_size is too large for this platform")]
     MaxRequestBodyTooLarge,
-    /// `max_decompressed_body_size` was zero.
-    #[error("interceptor.max_decompressed_body_size must be > 0")]
-    ZeroMaxDecompressedBody,
     /// `max_decompressed_body_size` was too large for this platform's `usize`.
     #[error("interceptor.max_decompressed_body_size is too large for this platform")]
     MaxDecompressedBodyTooLarge,
-    /// `total_body_budget` was zero.
-    #[error("interceptor.total_body_budget must be > 0")]
-    ZeroTotalBodyBudget,
     /// `total_body_budget` was too large for this platform's `usize`.
     #[error("interceptor.total_body_budget is too large for this platform")]
     TotalBodyBudgetTooLarge,
@@ -534,25 +533,14 @@ impl TryFrom<schema_ic::InterceptorConfig> for InterceptorConfig {
     type Error = InterceptorConfigError;
 
     fn try_from(s: schema_ic::InterceptorConfig) -> Result<Self, Self::Error> {
-        let max_request_body_bytes = usize::try_from(s.max_request_body_size.as_u64())
+        let max_request_body_bytes = NonZeroUsize::try_from(s.max_request_body_size.bytes())
             .map_err(|_| InterceptorConfigError::MaxRequestBodyTooLarge)?;
-        let total_body_budget_bytes = usize::try_from(s.total_body_budget.as_u64())
+        let total_body_budget_bytes = NonZeroUsize::try_from(s.total_body_budget.bytes())
             .map_err(|_| InterceptorConfigError::TotalBodyBudgetTooLarge)?;
         let https_mitm = HttpsMitmConfig::try_from(s.https_mitm)?;
-        let max_request_body_bytes = NonZeroUsize::new(max_request_body_bytes)
-            .ok_or(InterceptorConfigError::ZeroMaxRequestBody)?;
-        if s.max_decompressed_body_size.as_u64() == 0 {
-            return Err(InterceptorConfigError::ZeroMaxDecompressedBody);
-        }
-        // The decoder reads one byte past the limit to detect overflow, so
-        // `usize::MAX` is rejected along with sizes that do not fit `usize`.
-        let max_decompressed_body_bytes = usize::try_from(s.max_decompressed_body_size.as_u64())
-            .ok()
-            .filter(|&bytes| bytes != usize::MAX)
-            .and_then(NonZeroUsize::new)
-            .ok_or(InterceptorConfigError::MaxDecompressedBodyTooLarge)?;
-        let total_body_budget_bytes = NonZeroUsize::new(total_body_budget_bytes)
-            .ok_or(InterceptorConfigError::ZeroTotalBodyBudget)?;
+        let max_decompressed_body_bytes =
+            NonZeroUsize::try_from(s.max_decompressed_body_size.bytes())
+                .map_err(|_| InterceptorConfigError::MaxDecompressedBodyTooLarge)?;
         let config = Self {
             mode: s.mode,
             listen_addr: s.listen_addr,
@@ -597,19 +585,15 @@ impl Default for InterceptorConfig {
             listen_addr: d.listen_addr,
             socket_path: d.socket_path,
             drain_timeout: d.drain_timeout,
-            max_request_body_bytes: usize::try_from(d.max_request_body_size.as_u64())
-                .ok()
-                .and_then(NonZeroUsize::new)
+            max_request_body_bytes: NonZeroUsize::try_from(d.max_request_body_size.bytes())
                 .unwrap_or(const { NonZeroUsize::new(4 * 1024 * 1024).unwrap() }),
-            max_decompressed_body_bytes: usize::try_from(d.max_decompressed_body_size.as_u64())
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .unwrap_or(const { NonZeroUsize::new(16 * 1024 * 1024).unwrap() }),
+            max_decompressed_body_bytes: NonZeroUsize::try_from(
+                d.max_decompressed_body_size.bytes(),
+            )
+            .unwrap_or(const { NonZeroUsize::new(16 * 1024 * 1024).unwrap() }),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
-            total_body_budget_bytes: usize::try_from(d.total_body_budget.as_u64())
-                .ok()
-                .and_then(NonZeroUsize::new)
+            total_body_budget_bytes: NonZeroUsize::try_from(d.total_body_budget.bytes())
                 .unwrap_or(const { NonZeroUsize::new(64 * 1024 * 1024).unwrap() }),
         }
     }
@@ -660,9 +644,9 @@ pub struct HttpsMitmConfig {
     /// Host patterns that should bypass interception and use CONNECT tunnel.
     pub(crate) bypass_hosts: Vec<String>,
     /// Dynamic leaf certificate TTL.
-    pub(crate) cert_ttl: Duration,
+    pub(crate) cert_ttl: NonZeroDuration,
     /// Maximum number of cached leaf certificates.
-    pub(crate) cert_cache_capacity: usize,
+    pub(crate) cert_cache_capacity: NonZeroUsize,
     /// Host patterns that must be intercepted; failures are hard deny.
     pub(crate) strict_hosts: Vec<String>,
 }
@@ -685,41 +669,55 @@ impl TryFrom<schema_ic::HttpsMitmConfig> for HttpsMitmConfig {
     type Error = HttpsMitmConfigError;
 
     fn try_from(s: schema_ic::HttpsMitmConfig) -> Result<Self, Self::Error> {
-        let config = Self {
-            enabled: s.enabled,
-            intercept_hosts: s.intercept_hosts,
-            bypass_hosts: s.bypass_hosts,
-            cert_ttl: s.cert_ttl,
-            cert_cache_capacity: s.cert_cache_capacity,
-            strict_hosts: s.strict_hosts,
-        };
         validate_host_patterns(
             "interceptor.https_mitm.intercept_hosts",
-            &config.intercept_hosts,
+            &s.intercept_hosts,
             HostSyntax::Dns,
         )?;
         validate_host_patterns(
             "interceptor.https_mitm.bypass_hosts",
-            &config.bypass_hosts,
+            &s.bypass_hosts,
             HostSyntax::DnsOrUnderscore,
         )?;
         validate_host_patterns(
             "interceptor.https_mitm.strict_hosts",
-            &config.strict_hosts,
+            &s.strict_hosts,
             HostSyntax::Dns,
         )?;
-        // Empty intercept_hosts → MITM inactive (see `is_active`); skip the
-        // active-only invariants below instead of rejecting the config.
-        if config.is_active() {
-            if config.cert_ttl.is_zero() {
-                return Err(HttpsMitmConfigError::ZeroCertTtl);
-            }
-            if config.cert_cache_capacity == 0 {
-                return Err(HttpsMitmConfigError::ZeroCertCacheCapacity);
-            }
-        }
-        Ok(config)
+        // Empty intercept_hosts → MITM inactive (see `is_active`). The leaf
+        // certificate settings are never read then, so a zero is accepted and
+        // stands in for the default instead of rejecting the config.
+        let active = mitm_active(s.enabled, &s.intercept_hosts);
+        let defaults = schema_ic::HttpsMitmConfig::default();
+        let cert_ttl = if active || !s.cert_ttl.is_zero() {
+            s.cert_ttl
+        } else {
+            defaults.cert_ttl
+        };
+        let cert_ttl =
+            NonZeroDuration::new(cert_ttl).map_err(|_| HttpsMitmConfigError::ZeroCertTtl)?;
+        let cert_cache_capacity = if active || s.cert_cache_capacity != 0 {
+            s.cert_cache_capacity
+        } else {
+            defaults.cert_cache_capacity
+        };
+        let cert_cache_capacity = NonZeroUsize::new(cert_cache_capacity)
+            .ok_or(HttpsMitmConfigError::ZeroCertCacheCapacity)?;
+        Ok(Self {
+            enabled: s.enabled,
+            intercept_hosts: s.intercept_hosts,
+            bypass_hosts: s.bypass_hosts,
+            cert_ttl,
+            cert_cache_capacity,
+            strict_hosts: s.strict_hosts,
+        })
     }
+}
+
+/// The rule behind [`HttpsMitmConfig::is_active`], shared with validation so
+/// the active-only invariants are checked under exactly the same condition.
+const fn mitm_active(enabled: bool, intercept_hosts: &[String]) -> bool {
+    enabled && !intercept_hosts.is_empty()
 }
 
 impl HttpsMitmConfig {
@@ -744,7 +742,7 @@ impl HttpsMitmConfig {
     /// while the key itself is merged rather than removed.
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.enabled && !self.intercept_hosts.is_empty()
+        mitm_active(self.enabled, &self.intercept_hosts)
     }
 
     /// Sets whether TLS MITM interception is enabled.
@@ -783,8 +781,10 @@ impl Default for HttpsMitmConfig {
             enabled: d.enabled,
             intercept_hosts: d.intercept_hosts,
             bypass_hosts: d.bypass_hosts,
-            cert_ttl: d.cert_ttl,
-            cert_cache_capacity: d.cert_cache_capacity,
+            cert_ttl: NonZeroDuration::new(d.cert_ttl)
+                .unwrap_or(const { NonZeroDuration::from_static(Duration::from_hours(24)) }),
+            cert_cache_capacity: NonZeroUsize::new(d.cert_cache_capacity)
+                .unwrap_or(const { NonZeroUsize::new(1024).unwrap() }),
             strict_hosts: d.strict_hosts,
         }
     }
@@ -1203,9 +1203,6 @@ pub enum LocalExecConfigError {
     /// `socket_path` was not absolute.
     #[error("local_exec.socket_path must be absolute, got: {}", .0.display())]
     SocketPathNotAbsolute(PathBuf),
-    /// `token_ttl` was zero.
-    #[error("local_exec.token_ttl must be > 0")]
-    ZeroTokenTtl,
     /// `retry_after` was positive but shorter than the millisecond wire unit.
     #[error("local_exec.retry_after must be at least 1ms")]
     RetryAfterBelowOneMillisecond,
@@ -1221,8 +1218,6 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         if !s.socket_path.is_absolute() {
             return Err(LocalExecConfigError::SocketPathNotAbsolute(s.socket_path));
         }
-        let token_ttl =
-            NonZeroDuration::new(s.token_ttl).map_err(|_| LocalExecConfigError::ZeroTokenTtl)?;
         let retry_after_ms = u64::try_from(s.retry_after.duration().as_millis())
             .map_err(|_| LocalExecConfigError::RetryAfterTooLarge)?;
         let retry_after_ms = NonZeroU64::new(retry_after_ms)
@@ -1230,7 +1225,7 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
         Ok(Self {
             socket_path: s.socket_path,
             default_action: s.default_action,
-            token_ttl,
+            token_ttl: s.token_ttl,
             retry_after_ms,
         })
     }
@@ -1243,7 +1238,8 @@ impl TryFrom<schema_le::LocalExecConfig> for LocalExecConfig {
 #[cfg(test)]
 mod tests {
     use bytesize::ByteSize;
-    use firma_config_schema::sidecar::{AuditSink, SessionStateBackend};
+    use firma_config_schema::sidecar::SessionStateBackend;
+    use firma_config_utils::NonZeroByteSize;
 
     use super::*;
 
@@ -1295,14 +1291,20 @@ mod tests {
     }
 
     #[test]
-    fn rebase_rewrites_relative_authority_ca_cert_path() {
+    fn rebase_rewrites_relative_authority_ca_cert_paths() {
         use std::path::PathBuf;
         let mut c = resolved_default();
-        c.authority.ca_cert_path = Some(PathBuf::from("authority-ca.crt"));
+        c.authority.trust = AuthorityTrust::CustomCas(vec![
+            PathBuf::from("authority-ca.crt"),
+            PathBuf::from("/abs/other-ca.crt"),
+        ]);
         c.rebase_defaults(&PathBuf::from("/cfg"));
         assert_eq!(
-            c.authority.ca_cert_path,
-            Some(PathBuf::from("/cfg/authority-ca.crt"))
+            c.authority.trust,
+            AuthorityTrust::CustomCas(vec![
+                PathBuf::from("/cfg/authority-ca.crt"),
+                PathBuf::from("/abs/other-ca.crt"),
+            ])
         );
     }
 
@@ -1324,7 +1326,13 @@ mod tests {
             },
         );
         c.interceptor.socket_path = Some(PathBuf::from("runtime/sidecar.sock"));
-        c.audit.buffer_path = Some(PathBuf::from("state/audit-buffer.jsonl"));
+        c.audit.sink = AuditSinkConfig::Grpc {
+            url: "https://audit.example.com".parse().unwrap(),
+            buffer_path: PathBuf::from("state/audit-buffer.jsonl"),
+            buffer_max_bytes: NonZeroU64::MIN,
+            replay_ack_timeout: firma_config_schema::sidecar::audit::AuditConfig::default()
+                .replay_ack_timeout,
+        };
         c.enforcement.constraint_enforcement.path = Some(PathBuf::from("state/sessions"));
         c.ca.dir = PathBuf::from("state/ca");
 
@@ -1346,10 +1354,11 @@ mod tests {
             c.interceptor.socket_path,
             Some(PathBuf::from("runtime/sidecar.sock"))
         );
-        assert_eq!(
-            c.audit.buffer_path,
-            Some(PathBuf::from("/cfg/state/audit-buffer.jsonl"))
-        );
+        assert!(matches!(
+            &c.audit.sink,
+            AuditSinkConfig::Grpc { buffer_path, .. }
+                if buffer_path == std::path::Path::new("/cfg/state/audit-buffer.jsonl")
+        ));
         assert_eq!(
             c.enforcement.constraint_enforcement.path,
             Some(PathBuf::from("state/sessions"))
@@ -1510,46 +1519,10 @@ mod tests {
     }
 
     #[test]
-    fn test_sidecar_config_zero_max_request_body_rejected() {
-        let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_size = ByteSize::b(0);
-        assert!(matches!(
-            SidecarConfig::resolve(schema, &state()),
-            Err(SidecarConfigError::Interceptor(
-                InterceptorConfigError::ZeroMaxRequestBody
-            ))
-        ));
-    }
-
-    #[test]
-    fn test_sidecar_config_zero_max_decompressed_body_rejected() {
-        let mut schema = schema_sidecar();
-        schema.interceptor.max_decompressed_body_size = ByteSize::b(0);
-        assert!(matches!(
-            SidecarConfig::resolve(schema, &state()),
-            Err(SidecarConfigError::Interceptor(
-                InterceptorConfigError::ZeroMaxDecompressedBody
-            ))
-        ));
-    }
-
-    #[test]
-    fn test_sidecar_config_zero_total_body_budget_rejected() {
-        let mut schema = schema_sidecar();
-        schema.interceptor.total_body_budget = ByteSize::b(0);
-        assert!(matches!(
-            SidecarConfig::resolve(schema, &state()),
-            Err(SidecarConfigError::Interceptor(
-                InterceptorConfigError::ZeroTotalBodyBudget
-            ))
-        ));
-    }
-
-    #[test]
     fn test_sidecar_config_budget_smaller_than_max_body_rejected() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_size = ByteSize::mib(8);
-        schema.interceptor.total_body_budget = ByteSize::mib(4);
+        schema.interceptor.max_request_body_size = NonZeroByteSize::from_static(ByteSize::mib(8));
+        schema.interceptor.total_body_budget = NonZeroByteSize::from_static(ByteSize::mib(4));
         assert!(matches!(
             SidecarConfig::resolve(schema, &state()),
             Err(SidecarConfigError::Interceptor(
@@ -1561,8 +1534,8 @@ mod tests {
     #[test]
     fn test_sidecar_config_budget_equals_max_body_valid() {
         let mut schema = schema_sidecar();
-        schema.interceptor.max_request_body_size = ByteSize::mib(4);
-        schema.interceptor.total_body_budget = ByteSize::mib(4);
+        schema.interceptor.max_request_body_size = NonZeroByteSize::from_static(ByteSize::mib(4));
+        schema.interceptor.total_body_budget = NonZeroByteSize::from_static(ByteSize::mib(4));
         assert!(SidecarConfig::resolve(schema, &state()).is_ok());
     }
 
@@ -1731,7 +1704,7 @@ dir = "/etc/firma/policies"
 
 [authority]
 url = "https://authority.example.com"
-ca_cert_path = "/etc/firma/authority-ca.pem"
+ca_cert_paths = ["/etc/firma/authority-ca.pem"]
 
 [ca]
 dir = "/etc/firma/ca"
@@ -1791,15 +1764,15 @@ signing_key_path = "/etc/firma/audit.pem"
             vec!["api.openai.com".to_string()]
         );
         assert_eq!(
-            config.interceptor.https_mitm.cert_ttl,
+            config.interceptor.https_mitm.cert_ttl.duration(),
             Duration::from_mins(2)
         );
-        assert_eq!(config.interceptor.https_mitm.cert_cache_capacity, 16);
+        assert_eq!(config.interceptor.https_mitm.cert_cache_capacity.get(), 16);
         assert_eq!(config.policy.dir, PathBuf::from("/etc/firma/policies"));
         assert_eq!(config.authority.url, "https://authority.example.com");
         assert_eq!(
-            config.authority.ca_cert_path.as_deref(),
-            Some(std::path::Path::new("/etc/firma/authority-ca.pem"))
+            config.authority.trust,
+            AuthorityTrust::CustomCas(vec![PathBuf::from("/etc/firma/authority-ca.pem")])
         );
         assert_eq!(config.ca.dir, PathBuf::from("/etc/firma/ca"));
         assert_eq!(config.credentials.len(), 1);
@@ -1817,18 +1790,23 @@ signing_key_path = "/etc/firma/audit.pem"
         );
         assert!(config.enforcement.constraint_enforcement.path.is_none());
         assert_eq!(config.revocation.capacity.get(), 500_000);
-        assert!((config.revocation.fpr - 0.001).abs() < f64::EPSILON);
+        assert!((config.revocation.fpr.get() - 0.001).abs() < f64::EPSILON);
         assert_eq!(config.revocation.lru_capacity.get(), 50_000);
-        assert_eq!(config.audit.sink, AuditSink::Grpc);
+        let AuditSinkConfig::Grpc {
+            url,
+            buffer_path,
+            buffer_max_bytes,
+            ..
+        } = &config.audit.sink
+        else {
+            panic!("expected a grpc audit sink, got {:?}", config.audit.sink);
+        };
+        assert_eq!(url.as_str(), "https://audit.example.com");
         assert_eq!(
-            config.audit.grpc_url.as_deref(),
-            Some("https://audit.example.com")
+            buffer_path,
+            std::path::Path::new("/var/lib/firma/audit-buffer.jsonl")
         );
-        assert_eq!(
-            config.audit.buffer_path.as_deref(),
-            Some(std::path::Path::new("/var/lib/firma/audit-buffer.jsonl"))
-        );
-        assert_eq!(config.audit.buffer_max_bytes, 52_428_800);
+        assert_eq!(buffer_max_bytes.get(), 52_428_800);
         assert_eq!(
             config.audit.signing_key,
             AuditSigningKey::Path(PathBuf::from("/etc/firma/audit.pem"))

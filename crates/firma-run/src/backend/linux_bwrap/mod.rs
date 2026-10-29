@@ -3,7 +3,7 @@ pub mod mount;
 
 use std::env;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "linux")]
 use std::{fs::File, os::fd::AsRawFd};
 
@@ -39,7 +39,7 @@ impl SandboxBackend for BwrapBackend {
         BackendKind::Bwrap
     }
 
-    fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
+    fn preflight(&self, _profile: &crate::config::ResolvedProfile) -> Result<(), RunError> {
         if !cfg!(target_os = "linux") {
             return Err(RunError::UnsupportedBackend {
                 backend: BackendKind::Bwrap.to_string(),
@@ -56,6 +56,11 @@ impl SandboxBackend for BwrapBackend {
             });
         }
 
+        Ok(())
+    }
+
+    fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
+        self.preflight(&request.profile)?;
         let runtime_dir = create_bwrap_runtime_dir(&request.identity.sandbox_id)?;
 
         let mut mounts = request
@@ -160,7 +165,7 @@ impl SandboxBackend for BwrapBackend {
         _handle: &SandboxHandle,
         policy: &NetworkPolicy,
     ) -> Result<EnforcementProof, RunError> {
-        let structural = policy.enforce_network_namespace;
+        let structural = self.structural_network(policy);
         let detail = if structural {
             "network namespace isolation enabled with sandbox-local proxy bridge and DNS stub paths"
                 .to_string()
@@ -392,6 +397,8 @@ fn clear_fd_cloexec(file: &File) -> Result<(), RunError> {
 fn command_available(binary: &str) -> bool {
     Command::new(binary)
         .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
 }

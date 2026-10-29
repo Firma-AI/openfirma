@@ -7,27 +7,29 @@ use std::{
     time::Duration,
 };
 
-use firma_connection_store::StoreError;
-use firma_runtime_state::RuntimeLayout;
 use firma_secret_provider::IntegrationSpec;
-use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
-use crate::capability::read_capability_token;
-use crate::config::{CapabilitySource, ResolvedProfile, resolve_profile_with_layout};
+use crate::config::{CapabilitySource, ResolvedProfile};
 use crate::env::ExecutionEnv;
 use crate::error::RunError;
-use crate::identity::RunIdentity;
 use crate::mediator::enforce_local_command_governance;
 use crate::routing::{AutostartFlags, ResolveAuthorityRequest, prepare_network_runtime};
 use crate::seccomp::resolve_effective_seccomp;
-use crate::supervisor::wait_with_signal_forwarding;
+use crate::supervisor::{AgentStop, SignalForwarding, Supervised};
 use crate::trust::SidecarTrustAnchor;
 
 const DEFAULT_SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 10;
 
 #[doc(hidden)]
 pub mod vscode;
+
+mod completion;
+mod managed;
+mod resolve;
+pub use completion::RunCompletion;
+pub use managed::{ManagedRunInput, execute_managed_run, preflight_managed_run};
+use resolve::ResolvedRun;
 
 /// Secret-mediation shim injection (Unix/bwrap). Wires the broker + shim mounts
 /// into a launch when the profile lists `secret_providers`.
@@ -90,99 +92,78 @@ pub struct LaunchHooks<'a> {
     pub on_agent_exit: Option<&'a (dyn Fn() + Sync)>,
 }
 
+/// How long a managed run's agent may take to finish after SIGTERM once its
+/// Sidecar is gone, before it is killed.
+const AGENT_STOP_GRACE: Duration = Duration::from_mins(1);
+
+/// How long the run's components get to stop, early or at the end.
+const RUN_STACK_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Execute `firma run`.
 ///
 /// # Errors
 ///
 /// Returns an error when config resolution, backend lifecycle operations, or
 /// wrapped process supervision fails.
+pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunError> {
+    execute(args, hooks, None).into_result()
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "step-0 authority resolution + sidecar autostart + sandbox lifecycle are sequential and read more clearly inline"
 )]
-pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunError> {
-    if args.command.is_empty() {
-        return Err(RunError::MissingCommand);
-    }
-
-    crate::identity::reject_reserved_sandbox_id_environment()?;
-
-    ensure_required_session_identity()?;
-
-    let config_override = args.user_config_path.as_deref().or(args.config.as_deref());
-    let resolved_user_config = firma_config_loader::ConfigResolver::default()
-        .resolve_config(config_override)
-        .map_err(|error| RunError::ConfigParse {
-            path: error.path.clone(),
-            reason: error.to_string(),
-        })?;
-    let user_config_path = resolved_user_config
-        .as_ref()
-        .map(firma_config_loader::ResolvedConfig::config_file)
-        .map(Path::to_path_buf);
-    let user_config_dir = resolved_user_config
-        .as_ref()
-        .map(firma_config_loader::ResolvedConfig::config_dir);
-    let agent_id = user_config_path.as_deref().map_or_else(
-        || {
-            Err(RunError::MissingAgentId {
-                path: PathBuf::from("firma.toml"),
-            })
-        },
-        crate::identity::read_configured_agent_id,
-    )?;
-
-    let runtime_layout = RuntimeLayout::resolve(None)
-        .map_err(|error| RunError::Internal(format!("resolve runtime layout: {error}")))?;
-    let profile = resolve_profile_with_layout(args, &runtime_layout)?;
-    let identity = RunIdentity::new(agent_id, profile.id.clone());
-    if args.print_effective_config {
-        print_effective_config(&identity, &profile)?;
-    }
-
-    let allow_non_structural =
-        profile.allow_non_structural || crate::config::env_truthy("FIRMA_RUN_ALLOW_NON_STRUCTURAL");
-
-    log_run_start(&identity, &profile);
-
-    let capability_token = read_capability_token(&profile.capability.source)?;
-    let working_dir = resolve_working_dir()?;
-    let host_connection_dir = match firma_connection_store::default_dir() {
-        Ok(dir) => Some(dir),
-        Err(StoreError::NoConfigDirectory | StoreError::RelativeDirectory { .. }) => None,
-        Err(error) => {
-            return Err(RunError::Internal(format!(
-                "resolve host login directory: {error}"
-            )));
-        }
+fn execute(
+    args: &RunInput,
+    hooks: &LaunchHooks<'_>,
+    managed: Option<managed::Managed>,
+) -> RunCompletion {
+    let ResolvedRun {
+        runtime_layout,
+        profile,
+        identity,
+        mut managed_authority,
+        user_config_path,
+        user_config_dir,
+        allow_non_structural,
+        capability_token,
+        working_dir,
+        host_connection_dir,
+        firma_exe,
+    } = match resolve::resolve_run(args, managed) {
+        Ok(resolved) => resolved,
+        Err(error) => return RunCompletion::not_started(error),
     };
-    let firma_exe = env::current_exe()
-        .map_err(|error| RunError::Internal(format!("resolve current_exe: {error}")))?;
 
     let backend = build_backend(profile.backend);
-    let mut handle = Some(backend.prepare(&PrepareRequest {
+    let prepared = match backend.prepare(&PrepareRequest {
         identity: identity.clone(),
         profile: profile.clone(),
         working_dir: working_dir.clone(),
-    })?);
+    }) {
+        Ok(prepared) => prepared,
+        Err(error) => return RunCompletion::not_started(error),
+    };
     let shim_support_result = backend.resolve_secret_shim_support(
         &runtime_layout,
-        handle
-            .as_ref()
-            .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?,
+        &prepared,
         &firma_exe,
         profile
             .secret_providers
             .values()
             .any(|provider| provider.as_cli().is_some()),
     );
+    let mut handle = Some(prepared);
     let shim_support = match shim_support_result {
         Ok(support) => support,
         Err(error) => {
-            let teardown_result = handle
+            let teardown = handle
                 .take()
                 .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
-            return combine_run_and_teardown_results(Err(error), teardown_result);
+            return RunCompletion {
+                teardown,
+                ..RunCompletion::not_started(error)
+            };
         }
     };
     // Secret services (gateway + broker) for this run. Assigned once the
@@ -281,23 +262,29 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             flags.secret_gateway_addr = Some(services.gateway_addr().to_string());
             Some(services)
         };
-        let mut prompt = crate::authority::StdAuthorityPrompt;
-        let authority = crate::routing::resolve_authority(
-            ResolveAuthorityRequest {
-                identity: &identity,
-                flags: &flags,
-                cli: &args.authority_cli,
-                profile_name: &args.authority_profile,
-                user_config_path: user_config_path.as_deref(),
-                user_config_dir: user_config_dir.as_deref(),
-                firma_exe: &firma_exe,
-                capability_public_key_path: profile.capability.public_key_path.as_deref(),
-                working_dir: &working_dir,
-                state_layout: &runtime_layout,
-            },
-            &mut prompt,
-        )?;
-        let network_runtime = prepare_network_runtime(
+        // Only a managed run's Sidecar can be ended by its workspace.
+        let stops_with_sidecar = managed_authority.is_some();
+        let authority = if let Some(authority) = managed_authority.take() {
+            authority
+        } else {
+            let mut prompt = crate::authority::StdAuthorityPrompt;
+            crate::routing::resolve_authority(
+                ResolveAuthorityRequest {
+                    identity: &identity,
+                    flags: &flags,
+                    cli: &args.authority_cli,
+                    profile_name: &args.authority_profile,
+                    user_config_path: user_config_path.as_deref(),
+                    user_config_dir: user_config_dir.as_deref(),
+                    firma_exe: &firma_exe,
+                    capability_public_key_path: profile.capability.public_key_path.as_deref(),
+                    working_dir: &working_dir,
+                    state_layout: &runtime_layout,
+                },
+                &mut prompt,
+            )?
+        };
+        let mut network_runtime = prepare_network_runtime(
             &runtime_layout,
             handle_ref,
             &proof,
@@ -309,7 +296,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
         let _ = handle_ref;
-        let execution_result = (|| {
+        let supervised = (|| {
             let handle_ref = handle
                 .as_ref()
                 .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
@@ -407,6 +394,9 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
                 trust_anchor,
             };
 
+            // Caught before the start, so no signal kills `firma` between the
+            // spawn and the wait.
+            let signals = SignalForwarding::install()?;
             let child = {
                 let handle_ref = handle
                     .as_ref()
@@ -422,17 +412,45 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             if let Some(hook) = hooks.on_agent_launch {
                 hook(&marker_dir);
             }
-            let wait_result = wait_with_signal_forwarding(child, backend.kind());
+            let mut sidecar_exited =
+                || network_runtime.stop_after_component_exit(RUN_STACK_STOP_TIMEOUT);
+            let stop = stops_with_sidecar.then_some(AgentStop {
+                sidecar_exited: &mut sidecar_exited,
+                grace: AGENT_STOP_GRACE,
+            });
+            let supervised = signals.wait(child, backend.kind(), stop);
             if let Some(hook) = hooks.on_agent_exit {
                 hook();
             }
-            wait_result
-        })();
-        let shutdown_result = network_runtime.shutdown(Duration::from_secs(10));
-        combine_run_and_teardown_results(execution_result, shutdown_result)
+            Ok(supervised)
+        })()
+        .unwrap_or_else(|error| Supervised {
+            exit: Err(error),
+            interrupted: false,
+            sidecar_stopped: false,
+        });
+        let shutdown = network_runtime.shutdown(RUN_STACK_STOP_TIMEOUT);
+        Ok((supervised, shutdown))
     })();
+    let (
+        Supervised {
+            exit: command,
+            interrupted,
+            sidecar_stopped,
+        },
+        shutdown,
+    ) = run_result.unwrap_or_else(|error| {
+        (
+            Supervised {
+                exit: Err(error),
+                interrupted: false,
+                sidecar_stopped: false,
+            },
+            Ok(()),
+        )
+    });
 
-    let teardown_result = handle
+    let teardown = handle
         .take()
         .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
 
@@ -441,7 +459,13 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     // gateway socket is removed and the plaintext per-run store is dropped.
     drop(secret_services);
 
-    combine_run_and_teardown_results(run_result, teardown_result)
+    RunCompletion {
+        command,
+        interrupted,
+        sidecar_stopped,
+        shutdown,
+        teardown,
+    }
 }
 
 /// Select the autostarted Sidecar's config template.
@@ -452,52 +476,6 @@ fn resolve_sidecar_template_path(user_config_path: Option<&Path>) -> Option<Path
     user_config_path
         .filter(|p| p.is_file())
         .map(Path::to_path_buf)
-}
-
-fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
-    tracing::info!(
-        sandbox_id = %identity.sandbox_id,
-        session_id = %identity.session_id,
-        agent_id = %identity.agent_id,
-        profile = %identity.execution_profile,
-        backend = %profile.backend,
-        "starting firma run"
-    );
-}
-
-fn resolve_working_dir() -> Result<PathBuf, RunError> {
-    env::current_dir()
-        .map_err(|error| RunError::Internal(format!("failed to read current directory: {error}")))
-}
-
-fn combine_run_and_teardown_results(
-    run_result: Result<i32, RunError>,
-    teardown_result: Result<(), RunError>,
-) -> Result<i32, RunError> {
-    match (run_result, teardown_result) {
-        (Ok(code), Ok(())) => Ok(code),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(run_error), Err(teardown_error)) => Err(RunError::Internal(format!(
-            "run failed: {run_error}; teardown failed: {teardown_error}"
-        ))),
-    }
-}
-
-fn ensure_required_session_identity() -> Result<(), RunError> {
-    let require = env::var("FIRMA_RUN_REQUIRE_SESSION_ID").is_ok_and(|v| {
-        let v = v.trim().to_ascii_lowercase();
-        matches!(v.as_str(), "1" | "true" | "yes" | "on")
-    });
-    if !require {
-        return Ok(());
-    }
-    let has_session = env::var("FIRMA_RUN_SESSION_ID").is_ok_and(|v| !v.trim().is_empty());
-    if has_session {
-        return Ok(());
-    }
-    Err(RunError::ConfigValidation(
-        "FIRMA_RUN_REQUIRE_SESSION_ID is enabled but FIRMA_RUN_SESSION_ID is not set; set a stable session id so capability issuance/seed selection can match runtime attribution".to_string(),
-    ))
 }
 
 fn maybe_apply_executable_policy(
@@ -783,35 +761,6 @@ fn maybe_apply_claude_settings(
     Ok(merged)
 }
 
-fn print_effective_config(
-    identity: &RunIdentity,
-    profile: &ResolvedProfile,
-) -> Result<(), RunError> {
-    #[derive(Serialize)]
-    struct Snapshot<'a> {
-        agent_id: &'a firma_identifiers::AgentId,
-        execution_profile: &'a str,
-        profile: &'a ResolvedProfile,
-        working_dir: PathBuf,
-    }
-
-    let snapshot = Snapshot {
-        agent_id: &identity.agent_id,
-        execution_profile: &identity.execution_profile,
-        profile,
-        working_dir: env::current_dir().map_err(|error| {
-            RunError::Internal(format!(
-                "failed to resolve working dir for snapshot: {error}"
-            ))
-        })?,
-    };
-
-    let json = serde_json::to_string_pretty(&snapshot)
-        .map_err(|error| RunError::Internal(format!("snapshot serialization failed: {error}")))?;
-    println!("{json}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -826,8 +775,9 @@ mod tests {
         ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
     };
 
-    use super::{ExecutionEnv, RunIdentity, SidecarTrustAnchor};
+    use super::{ExecutionEnv, SidecarTrustAnchor};
     use crate::backend::SandboxHandle;
+    use crate::identity::RunIdentity;
 
     /// Serializes the same canonical seed the Authority writes, so the fixture
     /// cannot drift from [`firma_core::CapabilitySeed`]. `context_hash` is the
@@ -887,7 +837,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,
@@ -960,7 +909,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,
@@ -1044,7 +992,6 @@ mod tests {
                     public_key_path: None,
                     refresh_ratio: 0.60,
                     grace: Duration::from_secs(30),
-                    requested_actions: CapabilityLeaseConfig::default_requested_actions(),
                 },
                 sidecar_local_exec: None,
                 secret_gateway_addr: None,
@@ -1105,7 +1052,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,
@@ -1157,7 +1103,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,
@@ -1248,7 +1193,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,
@@ -1319,7 +1263,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,
@@ -1409,7 +1352,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,
@@ -1483,7 +1425,6 @@ mod tests {
                 public_key_path: None,
                 refresh_ratio: 0.60,
                 grace: Duration::from_secs(30),
-                requested_actions: CapabilityLeaseConfig::default_requested_actions(),
             },
             sidecar_local_exec: None,
             secret_gateway_addr: None,

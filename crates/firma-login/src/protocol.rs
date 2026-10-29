@@ -15,9 +15,9 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    AuthorizationAttempt, CallbackWaitTimeout, CompletedAuthorizationAttempt, ControlPlaneOrigin,
-    LoginRefusal, LoopbackCallbackError, MAX_AUTHORIZATION_CODE_BYTES, PendingAuthorizationAttempt,
-    PkceVerifier,
+    AuthorizationAttempt, CallbackLanding, CallbackWaitTimeout, CompletedAuthorizationAttempt,
+    ControlPlaneOrigin, LoginRefusal, LoopbackCallbackError, MAX_AUTHORIZATION_CODE_BYTES,
+    PendingAuthorizationAttempt, PkceVerifier,
 };
 
 /// OAuth public-client identifier this CLI presents to the Authority.
@@ -26,6 +26,9 @@ const AUTHORIZE_PATH: &str = "/agent-flow/authorizations/authorize";
 const TOKEN_PATH: &str = "/api/agent-flow/v1/authorizations/token";
 const REVOKE_PATH: &str = "/api/agent-flow/v1/authorizations/revoke";
 const MAX_TOKEN_RESPONSE_BYTES: usize = 4 * 1024;
+/// Carries one RFC 8941 String with the UUID of a request that may be
+/// replayed.
+pub const IDEMPOTENCY_KEY_HEADER: &str = "Idempotency-Key";
 /// Terminal delivery has no listener: the Authority shows the code in the
 /// page and never sends the browser here. Port 9 (discard) only keeps the URI
 /// inert if it were ever followed.
@@ -45,20 +48,33 @@ pub enum AuthorizationScope {
     OfflineAccess,
 }
 
-/// One UUID v4 reused for all network attempts of one in-process refresh.
+/// One UUID v4 reused for all network attempts of one request the Control
+/// Plane may replay: a refresh.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RefreshIdempotencyKey(Uuid);
+pub struct IdempotencyKey(Uuid);
 
-impl RefreshIdempotencyKey {
-    /// Creates a fresh key for one refresh transition.
+impl IdempotencyKey {
+    /// Creates a fresh key for one transition.
     ///
     /// # Errors
     /// Returns an entropy error if secure operating-system randomness is unavailable.
-    pub fn generate() -> Result<Self, NativeTokenError> {
+    pub fn generate() -> Result<Self, crate::EntropyError> {
         let mut bytes = [0; 16];
         getrandom::fill(&mut bytes).map_err(crate::EntropyError::System)?;
         Ok(Self(uuid::Builder::from_random_bytes(bytes).into_uuid()))
     }
+
+    /// The [`IDEMPOTENCY_KEY_HEADER`] value: an RFC 8941 String, the UUID
+    /// between double quotes.
+    fn header_value(&self) -> String {
+        format!("\"{}\"", self.0)
+    }
+}
+
+/// Whether a keyed request may be sent again after this status: the Control
+/// Plane was busy or failed, not refusing.
+pub fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504)
 }
 
 /// An authorization URL coupled to the only listener that can complete it.
@@ -66,6 +82,7 @@ pub struct AuthorizationRequest {
     url: Url,
     pending: PendingAuthorizationAttempt,
     scope: AuthorizationScope,
+    landing: CallbackLanding,
 }
 
 impl AuthorizationRequest {
@@ -87,10 +104,12 @@ impl AuthorizationRequest {
         if scope == AuthorizationScope::OfflineAccess {
             url.query_pairs_mut().append_pair("scope", "offline_access");
         }
+        let landing = CallbackLanding::on(origin);
         Self {
             url,
             pending,
             scope,
+            landing,
         }
     }
 
@@ -110,7 +129,7 @@ impl AuthorizationRequest {
         timeout: CallbackWaitTimeout,
     ) -> Result<AuthorizedTokenExchange, LoopbackCallbackError> {
         let redirect_uri = self.pending.redirect_uri().as_url().as_str().to_owned();
-        let completed = self.pending.receive(timeout).await?;
+        let completed = self.pending.receive(timeout, self.landing).await?;
         Ok(AuthorizedTokenExchange {
             redirect_uri,
             proof: AuthorizationProof::Loopback(completed),
@@ -305,6 +324,25 @@ struct WorkspaceResponse {
     membership_id: MembershipId,
 }
 
+/// The HTTP client for requests to `origin`: no redirects, bounded
+/// timeouts, and no environment proxy for a plain-HTTP loopback origin.
+pub fn control_plane_http(origin: &ControlPlaneOrigin) -> Result<Client, reqwest::Error> {
+    // An error here means another provider is already installed for this
+    // process, which is the outcome this call wants. Nothing is lost, so
+    // there is no error worth logging.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut http = Client::builder()
+        .redirect(Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT);
+    // Plain HTTP is only allowed to a loopback Control Plane: never send
+    // its code, verifier, or token in clear through an environment proxy.
+    if origin.as_url().scheme() == "http" {
+        http = http.no_proxy();
+    }
+    http.build()
+}
+
 /// A bounded, redirect rejecting token transport for one PKCE exchange.
 pub struct NativeTokenClient {
     http: Client,
@@ -319,20 +357,7 @@ impl NativeTokenClient {
     /// # Errors
     /// Returns an error if the HTTP client cannot be built.
     pub fn new(origin: &ControlPlaneOrigin) -> Result<Self, NativeTokenError> {
-        // An error here means another provider is already installed for this
-        // process, which is the outcome this call wants. Nothing is lost, so
-        // there is no error worth logging.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let mut http = Client::builder()
-            .redirect(Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT);
-        // Plain HTTP is only allowed to a loopback Control Plane: never send
-        // its code, verifier, or token in clear through an environment proxy.
-        if origin.as_url().scheme() == "http" {
-            http = http.no_proxy();
-        }
-        let http = http.build().map_err(NativeTokenError::Transport)?;
+        let http = control_plane_http(origin).map_err(NativeTokenError::Transport)?;
         let token_endpoint = endpoint(origin, TOKEN_PATH);
         let current_endpoint = endpoint(origin, CURRENT_PATH);
         let revoke_endpoint = endpoint(origin, REVOKE_PATH);
@@ -426,7 +451,7 @@ impl NativeTokenClient {
     pub(crate) async fn refresh(
         &self,
         token: &SecretString,
-        key: RefreshIdempotencyKey,
+        key: IdempotencyKey,
     ) -> Result<NativeAccessGrant, NativeTokenError> {
         let form = [
             ("grant_type", "refresh_token"),
@@ -436,7 +461,7 @@ impl NativeTokenClient {
         let response = self
             .http
             .post(self.endpoint.clone())
-            .header("Idempotency-Key", format!("\"{}\"", key.0))
+            .header(IDEMPOTENCY_KEY_HEADER, key.header_value())
             .form(&form)
             .send()
             .await
@@ -566,7 +591,7 @@ async fn bounded_json<T: DeserializeOwned>(
     serde_json::from_slice(&body).map_err(|_| NativeTokenError::InvalidResponse)
 }
 
-async fn bounded_json_body(
+pub async fn bounded_json_body(
     response: reqwest::Response,
 ) -> Result<Zeroizing<Vec<u8>>, NativeTokenError> {
     let status = response.status();
@@ -583,6 +608,18 @@ async fn bounded_json_body(
     if status != reqwest::StatusCode::OK {
         return Err(NativeTokenError::Rejected(status));
     }
+    json_body(response).await
+}
+
+/// Read the bounded JSON body of a response whose status the caller already
+/// accepted.
+///
+/// # Errors
+/// [`NativeTokenError::InvalidResponse`] when the body is not JSON or is
+/// longer than [`MAX_TOKEN_RESPONSE_BYTES`]; transport failures propagate.
+pub async fn json_body(
+    response: reqwest::Response,
+) -> Result<Zeroizing<Vec<u8>>, NativeTokenError> {
     if !response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -624,7 +661,7 @@ async fn oauth_refusal(response: reqwest::Response) -> Option<LoginRefusal> {
 /// once to leave no stale copy behind a reallocation. The chunks `reqwest`
 /// buffers before handing them over, and the copies it makes to send the form
 /// and the `Authorization` header, are outside this crate's reach.
-async fn bounded_body(
+pub async fn bounded_body(
     mut response: reqwest::Response,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, NativeTokenError> {
     let mut body = Zeroizing::new(Vec::with_capacity(MAX_TOKEN_RESPONSE_BYTES));

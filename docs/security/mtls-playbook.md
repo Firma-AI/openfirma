@@ -125,7 +125,7 @@ Add the Sidecar client settings to the same `firma.toml`:
 ```toml
 [sidecar.authority]
 url = "https://authority.internal:50051"
-ca_cert_path = "/etc/firma/authority-ca.crt" # server CA
+ca_cert_paths = ["/etc/firma/authority-ca.crt"] # server CA
 tls_client_cert_path = "/etc/firma/sidecar.crt" # client cert
 tls_client_key_path = "/etc/firma/sidecar.key" # client key
 ```
@@ -134,7 +134,7 @@ Both `tls_client_cert_path` and `tls_client_key_path` must be set together or bo
 
 ### 5. Distribute the server CA to Sidecars
 
-Copy the Authority's server CA cert (not the client CA cert) to every Sidecar host at the path configured in `ca_cert_path`.
+Copy the Authority's server CA cert (not the client CA cert) to every Sidecar host at the path configured in `ca_cert_paths`.
 
 ```bash
 scp authority-ca.crt sidecar-host:/etc/firma/authority-ca.crt

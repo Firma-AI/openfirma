@@ -50,13 +50,10 @@ firma-tui = { workspace = true }
 miette = { workspace = true }
 owo-colors = { workspace = true }
 p256 = { workspace = true }
-pasetors = { workspace = true }
 rcgen = { workspace = true }
 same-file = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
-sha2 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
@@ -64,11 +61,9 @@ tokio = { workspace = true, default-features = false, features = ["fs", "macros"
 tokio-util = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
-tonic = { workspace = true, features = ["tls-ring"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true }
 x509-parser = { workspace = true }
 zeroize = { workspace = true }
 
@@ -84,9 +79,6 @@ firma-protobuf = { workspace = true }
 firma-stack = { workspace = true }
 firma-test-helpers = { workspace = true }
 fs-err = { workspace = true }
-http-body-util = { workspace = true }
-hyper = { workspace = true, features = ["http1", "server"] }
-hyper-util = { workspace = true, features = ["tokio"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
@@ -96,6 +88,8 @@ rustls = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
+tonic = { workspace = true, features = ["tls-ring"] }
+uuid = { workspace = true }
 wait-timeout = { workspace = true }
 wiremock = { workspace = true }
 

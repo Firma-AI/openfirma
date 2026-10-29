@@ -10,9 +10,10 @@ use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthoritySe
 use firma_protobuf::v1::{
     ActionMappingRule, ActionMappingSnapshot, GetApprovalOutcomeRequest,
     GetApprovalOutcomeResponse, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundle,
-    PolicyBundleUpdate, RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    PolicyBundleUpdate, RevocationSet, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use firma_sidecar::audit::{AuditPayload, ExecutionEvent};
+use firma_sidecar::authority_tls::AuthorityTls;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::pipeline::{EnforcementDecision, RawRequest};
 use firma_sidecar::startup::{
@@ -68,14 +69,20 @@ impl AuthorityService for FixtureAuthority {
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    type WatchRevocationsStream = ReceiverStream<Result<RevocationEvent, Status>>;
+    type WatchRevocationsStream = ReceiverStream<Result<RevocationSet, Status>>;
 
+    /// Opens with the empty set every connection is promised, then holds the
+    /// stream open: without it the Sidecar never becomes revocation-ready.
     async fn watch_revocations(
         &self,
         _: Request<WatchRevocationsRequest>,
     ) -> Result<Response<Self::WatchRevocationsStream>, Status> {
         let (tx, rx) = mpsc::channel(1);
-        tokio::spawn(async move { tx.closed().await });
+        tokio::spawn(async move {
+            if tx.send(Ok(RevocationSet::default())).await.is_ok() {
+                tx.closed().await;
+            }
+        });
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
@@ -172,6 +179,7 @@ impl Fixture {
         let cancel = CancellationToken::new();
         let handle = spawn_authority_client_publishing(
             &config,
+            &AuthorityTls::read(&config.authority)?,
             &runtime,
             cancel.clone(),
             Some(root.join("enforcement.toml")),
@@ -179,6 +187,7 @@ impl Fixture {
         let (audit_tx, audit_rx) = mpsc::channel(64);
         let sink = spawn_audit_sink(
             &config,
+            &AuthorityTls::read(&config.authority)?,
             audit_rx,
             load_audit_event_builder(&config.audit)?,
             cancel.clone(),

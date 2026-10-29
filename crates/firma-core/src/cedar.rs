@@ -25,13 +25,13 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
 use cedar_policy::{
     Entity, EntityAttrEvaluationError, EntityId, EntityTypeName, EntityUid, PolicySet,
-    RestrictedExpression, Schema, SourceLocation, ValidationErrorKind, ValidationMode, Validator,
+    RestrictedExpression, Schema, ValidationMode, ValidationWarning, Validator,
 };
 
 use crate::ExecutionIntent;
@@ -85,52 +85,50 @@ impl PolicyFiles {
 #[derive(Debug, thiserror::Error)]
 struct PolicyError {
     files: Option<PolicyFiles>,
-    location: SourceLocation<'static>,
-    error_kind: ValidationErrorKind,
+    /// A Cedar validation error, or a warning that [`validate_policies`]
+    /// rejects.
+    error: Box<dyn miette::Diagnostic + Send + Sync>,
 }
 
 impl PolicyError {
-    fn fmt_location(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let (Some(files), Some(range_start)) = (&self.files, self.location.range_start()) {
-            let mut cur_index = 0;
-            for file in &files.0 {
-                if range_start >= cur_index && range_start <= cur_index + file.content.len() {
-                    let (line, col) = file.content.bytes().take(range_start - cur_index).fold(
-                        (1, 1),
-                        |(line, col), char| {
-                            if char == b'\n' {
-                                (line + 1, 1)
-                            } else {
-                                (line, col + 1)
-                            }
-                        },
-                    );
-
-                    write!(
-                        f,
-                        "policy `{}` on {}:{}:{}",
-                        self.location.policy_id(),
-                        file.path.display(),
-                        line,
-                        col
-                    )?;
-                    return Ok(());
-                }
-                cur_index += file.content.len() + 1;
+    /// Resolves the error's source label to `(path, line, column)` in the
+    /// concatenated policy files, when both are known.
+    fn location(&self) -> Option<(&Path, usize, usize)> {
+        let files = self.files.as_ref()?;
+        let range_start = self.error.labels()?.next()?.offset();
+        let mut cur_index = 0;
+        for file in &files.0 {
+            if range_start >= cur_index && range_start <= cur_index + file.content.len() {
+                let (line, col) = file.content.bytes().take(range_start - cur_index).fold(
+                    (1, 1),
+                    |(line, col), byte| {
+                        if byte == b'\n' {
+                            (line + 1, 1)
+                        } else {
+                            (line, col + 1)
+                        }
+                    },
+                );
+                return Some((&file.path, line, col));
             }
+            cur_index += file.content.len() + 1;
         }
-
-        fmt::Display::fmt(&self.location, f)
+        None
     }
 }
 
 impl fmt::Display for PolicyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // equivalent to write!("validation error on {}: {}", self.location, self.error_kind)
-        f.write_str("validation error on ")?;
-        self.fmt_location(f)?;
-        f.write_str(": ")?;
-        self.error_kind.fmt(f)
+        // Cedar's message already names the policy; add the file location.
+        match self.location() {
+            Some((path, line, col)) => write!(
+                f,
+                "validation error on {}:{line}:{col}: {}",
+                path.display(),
+                self.error
+            ),
+            None => write!(f, "validation error: {}", self.error),
+        }
     }
 }
 
@@ -157,30 +155,43 @@ impl fmt::Display for ValidationError {
 /// enforces (the CLI runs the equivalent strict check separately so it can
 /// render located miette diagnostics).
 ///
+/// On success, returns Cedar's validation warnings, such as a policy that can
+/// never apply, so the caller can report them.
+///
 /// # Errors
 ///
 /// Returns `Err(messages)` with one entry per validation error when the policy
-/// set does not strictly type-check against `schema`. Validation warnings are
-/// not treated as errors.
+/// set does not strictly type-check against `schema`, or when a policy's scope
+/// matches no action in the schema. Cedar reports the latter as an
+/// `InvalidActionApplication` warning since 4.13; it is rejected so a policy
+/// that can never apply fails loading, as it did before. Other validation
+/// warnings are returned in `Ok`.
 pub fn validate_policies(
     policies: &PolicySet,
     schema: &Schema,
     policy_files: Option<&PolicyFiles>,
-) -> Result<(), ValidationError> {
+) -> Result<Vec<String>, ValidationError> {
     let result = Validator::new(schema.clone()).validate(policies, ValidationMode::Strict);
-    if result.validation_passed() {
-        return Ok(());
+    let (rejected, warnings): (Vec<_>, Vec<_>) = result
+        .validation_warnings()
+        .partition(|warning| matches!(warning, ValidationWarning::InvalidActionApplication(_)));
+    if result.validation_passed() && rejected.is_empty() {
+        return Ok(warnings.into_iter().map(ToString::to_string).collect());
     }
+    let errors = result
+        .validation_errors()
+        .map(|err| Box::new(err.clone()) as Box<dyn miette::Diagnostic + Send + Sync>)
+        .chain(
+            rejected
+                .into_iter()
+                .map(|warning| Box::new(warning.clone()) as _),
+        );
     Err(ValidationError(
-        result
-            .validation_errors()
-            .map(|err| {
-                // override default error message to gain file:row:column format
-                PolicyError {
-                    files: policy_files.cloned(),
-                    location: err.location().clone(),
-                    error_kind: err.error_kind().clone(),
-                }
+        errors
+            // override default error message to gain file:row:column format
+            .map(|error| PolicyError {
+                files: policy_files.cloned(),
+                error,
             })
             .collect(),
     ))
@@ -219,7 +230,7 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
 pub enum ResourceEntityError {
     /// The resource UID string failed to parse into a Cedar entity type name.
     #[error("invalid resource entity uid: {0}")]
-    Uid(#[from] cedar_policy::ParseErrors),
+    Uid(#[source] Box<cedar_policy::ParseErrors>),
     /// Cedar rejected the resource entity's attribute record.
     #[error("invalid resource entity attributes: {0}")]
     Attr(#[source] Box<EntityAttrEvaluationError>),
@@ -249,7 +260,9 @@ impl FirmaEntityUid {
     /// parsed, or [`ResourceEntityError::Attr`] if Cedar rejects the attribute
     /// record.
     pub fn resource_entity(resource: &str) -> Result<Entity, ResourceEntityError> {
-        let uid: EntityUid = Self::Resource(resource.to_string()).try_into()?;
+        let uid: EntityUid = Self::Resource(resource.to_string())
+            .try_into()
+            .map_err(|e| ResourceEntityError::Uid(Box::new(e)))?;
         let parts = ExecutionIntent::resource_map_from(resource);
 
         let mut attrs: HashMap<String, RestrictedExpression> = HashMap::new();
@@ -280,21 +293,24 @@ mod tests {
         let agent: AgentId = "agt_01j0000000e008000000000001".parse().unwrap();
         let uid = EntityUid::try_from(FirmaEntityUid::Agent(agent)).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Agent");
-        assert_eq!(uid.id().as_ref(), "agt_01j0000000e008000000000001");
+        assert_eq!(
+            AsRef::<str>::as_ref(uid.id()),
+            "agt_01j0000000e008000000000001"
+        );
     }
 
     #[test]
     fn action_uid_roundtrip() {
         let uid = EntityUid::try_from(FirmaEntityUid::Action("read".to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Action");
-        assert_eq!(uid.id().as_ref(), "read");
+        assert_eq!(AsRef::<str>::as_ref(uid.id()), "read");
     }
 
     #[test]
     fn resource_uid_roundtrip() {
         let uid = EntityUid::try_from(FirmaEntityUid::Resource("2001:db8::1".to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Resource");
-        assert_eq!(uid.id().as_ref(), "2001:db8::1");
+        assert_eq!(AsRef::<str>::as_ref(uid.id()), "2001:db8::1");
     }
 
     // Action and Resource take raw strings (normalizer-controlled). The typed
@@ -306,7 +322,7 @@ mod tests {
         let uid = EntityUid::try_from(FirmaEntityUid::Action(evil.to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Action");
         // id stored verbatim, not interpreted as Cedar syntax
-        assert_eq!(uid.id().as_ref(), evil);
+        assert_eq!(AsRef::<str>::as_ref(uid.id()), evil);
     }
 
     #[test]
@@ -314,7 +330,7 @@ mod tests {
         let evil = "bucket\"; permit(principal, action, resource); //";
         let uid = EntityUid::try_from(FirmaEntityUid::Resource(evil.to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Resource");
-        assert_eq!(uid.id().as_ref(), evil);
+        assert_eq!(AsRef::<str>::as_ref(uid.id()), evil);
     }
 
     #[test]
@@ -338,6 +354,39 @@ mod tests {
         assert!(
             errs.0.iter().any(|e| e.to_string().contains("foo.bar")),
             "error should name the unknown action; got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn validate_policies_returns_impossible_policy_warning() {
+        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
+        let set: PolicySet = "forbid(principal, action == Firma::Action::\"filesystem.read\", resource) when { false };"
+            .parse()
+            .unwrap();
+        let warnings = validate_policies(&set, &schema, None).unwrap();
+        assert_eq!(
+            warnings,
+            [
+                "for policy `policy0`, policy is impossible: the policy expression evaluates to false for all valid requests"
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_policies_rejects_scope_matching_no_action() {
+        let policy = "permit(principal is Firma::Resource, action == Firma::Action::\"filesystem.read\", resource);";
+        let mut files = PolicyFiles::default();
+        files.push(PathBuf::from("/my/file.cedar"), policy.to_owned());
+        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
+        let set: PolicySet = policy.parse().unwrap();
+
+        let errors = validate_policies(&set, &schema, Some(&files)).unwrap_err();
+        let actual = errors.0.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            [
+                "validation error on /my/file.cedar:1:1: for policy `policy0`, unable to find an applicable action given the policy scope constraints"
+            ]
         );
     }
 
@@ -377,7 +426,7 @@ forbid (
         let errors = validate_policies(&policies, &schema, Some(&files)).unwrap_err();
         let actual = errors.0.iter().map(ToString::to_string).collect::<Vec<_>>();
         let expected = vec![
-            "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found".to_string(),
+            "validation error on /my/file2.cedar:7:5: for policy `policy1`, attribute `whatever` on entity type `Firma::Resource` not found".to_string(),
         ];
         assert_eq!(actual, expected);
     }

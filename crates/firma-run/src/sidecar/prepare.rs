@@ -10,7 +10,7 @@ use firma_identifiers::{AgentId, SandboxId};
 use firma_runtime_state::RunEntryLayout;
 use firma_secret_provider::gateway::client::GATEWAY_ADDR_ENV;
 use firma_secret_provider::spec::http::HttpIntegrationSpec;
-use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
+use firma_sidecar::authority_credentials::{SidecarCredential, SidecarCredentialsConfig};
 
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
@@ -95,6 +95,29 @@ pub struct PrepareRequest<'a> {
     pub audit_signing_key_path: Option<PathBuf>,
     pub secret_gateway_addr: Option<&'a str>,
     pub http_secret_providers: &'a [HttpIntegrationSpec<SecretMatcher>],
+    /// The resolved credential: a runtime credential is handed to this
+    /// process alone, under the variable `authority_credentials` names.
+    pub credential: Option<&'a SidecarCredential>,
+}
+
+/// The runtime credential as the one variable the Sidecar's configuration
+/// names, for that process alone.
+fn runtime_credential_env<'a>(
+    credentials: Option<&'a SidecarCredentialsConfig>,
+    credential: Option<&'a SidecarCredential>,
+) -> Result<Option<(&'a str, &'a str)>, RunError> {
+    let Some(name) = credentials.and_then(SidecarCredentialsConfig::runtime_credential_env_name)
+    else {
+        return Ok(None);
+    };
+    let bearer = credential
+        .and_then(SidecarCredential::runtime_bearer)
+        .ok_or_else(|| {
+            RunError::Internal(format!(
+                "{name} is configured but no runtime credential was resolved"
+            ))
+        })?;
+    Ok(Some((name, bearer)))
 }
 
 /// Materialize a Sidecar command and all of its launch inputs.
@@ -164,12 +187,18 @@ pub fn prepare(req: PrepareRequest<'_>) -> Result<PreparedSidecarLaunch, RunErro
         .env_remove("FIRMA_LOG_FILE")
         .env("FIRMA_SIDECAR_HEALTH_BIND_ADDR", "127.0.0.1:0")
         .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id.to_string())
+        .env("FIRMA_RUN_PID", std::process::id().to_string())
         .env("FIRMA_RUN_AUDIT_SOCK", &audit_socket_path)
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some((name, bearer)) =
+        runtime_credential_env(req.authority_credentials.as_ref(), req.credential)?
+    {
+        command.env(name, bearer);
+    }
     if let Some(ref addr) = req.secret_gateway_addr {
         command.env(GATEWAY_ADDR_ENV, addr);
     } else {

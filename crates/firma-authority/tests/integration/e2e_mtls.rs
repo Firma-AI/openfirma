@@ -18,7 +18,7 @@ use firma_protobuf::v1::{PolicyBundleUpdate, WatchPolicyBundleRequest};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair, SanType,
 };
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -63,7 +63,10 @@ fn generate_mtls_certs() -> MtlsCerts {
         .subject_alt_names
         .push(SanType::IpAddress(IpAddr::from([127, 0, 0, 1])));
     let server_cert = server_params
-        .signed_by(&server_key, &server_ca_cert, &server_ca_key)
+        .signed_by(
+            &server_key,
+            &Issuer::from_params(&server_ca_params, &server_ca_key),
+        )
         .unwrap();
 
     // Client CA
@@ -102,8 +105,7 @@ fn generate_client_cert(
     let ca_cert_str = std::str::from_utf8(ca_cert_pem).unwrap();
 
     let ca_key = KeyPair::from_pem(ca_key_str).unwrap();
-    let ca_params = CertificateParams::from_ca_cert_pem(ca_cert_str).unwrap();
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+    let ca = Issuer::from_ca_cert_pem(ca_cert_str, ca_key).unwrap();
 
     let client_key = KeyPair::generate().unwrap();
     let mut client_params = CertificateParams::default();
@@ -115,9 +117,7 @@ fn generate_client_cert(
         client_params.subject_alt_names = vec![SanType::DnsName(s.try_into().unwrap())];
     }
 
-    let cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
-        .unwrap();
+    let cert = client_params.signed_by(&client_key, &ca).unwrap();
 
     ClientCert {
         cert_pem: cert.pem().into_bytes(),

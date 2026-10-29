@@ -7,7 +7,9 @@ Run `firma login --control-plane-origin https://your-team-control-plane`.
 The browser opens the Control Plane: sign in, choose a Workspace, and approve.
 The browser hands a one-time code to the CLI's local listener; you can then
 close the window. The CLI exchanges the code and confirms the login with one
-Workspace request.
+Workspace request, then prints what to run next:
+`firma run --agent <agent handle> -- <your agent command>`. Each Agent's handle
+is on the Agents page of the Control Plane.
 
 If the browser cannot reach a listener on this machine, for example over SSH,
 add `--terminal-code`. The browser then shows the code: paste it into the
@@ -42,6 +44,72 @@ If login or process termination leaves credential state uncertain, run
 
 Refresh retries reuse one memory-only UUID within the running process;
 they do not provide recovery after a crash.
+
+## Use a Firma Team Agent
+
+`firma run --agent <handle> -- <command>` resolves the Agent with that handle in
+the Workspace of the saved login, starts a run of it, and reports the
+Agent's identity, profile, Policy Set and configuration generation with the
+run and Sidecar identities. It then runs the command as that run: a
+Sidecar started for it alone authenticates to the Authority the Control Plane
+named with the run's runtime credential, and the run stays live on
+the Control Plane while that Sidecar streams.
+
+The report goes to stderr, leaving stdout to the wrapped command. Host backend
+checks run before the start, using the same profile and environment as launch,
+including `FIRMA_RUN_ALLOW_NON_STRUCTURAL` for a proxy-only backend.
+Managed decisions use WAL delivery to the resolved Authority. The journal's
+base path is `<state_dir>/audit.wal`, outside disposable run markers; Sidecar
+configuration isolates runtime journals by run and retains old evidence.
+Project runs keep their existing file-audit defaults.
+
+The run uses the Agent's profile as configured on the Control Plane and
+reads or writes nothing under a project `.firma/`. The Authority must be
+reachable over `https` on another host, verified against the platform's
+trusted roots, or over plain `http` on a loopback host. Each run renews the
+saved login without the browser.
+
+When the command ends, `firma run` stops the Sidecar and closes the run
+on the Control Plane: `completed` when the command exits 0, `failed` when it
+exits with another code or the run fails before it starts, and `cancelled` when
+`firma run` is interrupted while the command runs. On macOS, and when `firma`
+itself runs inside a WSL Linux distribution, `firma run` cannot tell an
+interrupt from a signal the command sends itself, so there the outcome comes
+from the exit code alone. `firma run` exits with the command's code; on
+Linux and macOS, a command killed by a signal gives 128 plus the signal number.
+The `Closed:` line on stderr shows the outcome the Control Plane recorded. The
+close first renews the access token if it is about to expire. It makes at
+most three attempts for transport failures or HTTP 408, 429, 500, 502, 503 and
+504, honoring a delta-seconds `Retry-After` capped at 15 seconds (missing,
+malformed or HTTP-date values use a one-second delay), so without an answer it
+can take a couple of minutes. If it
+fails, or Ctrl-C or SIGTERM stops the close request, the line reports it as
+unconfirmed: the exit code stays the same and, if the run is still open,
+it expires within its inactivity window. From the sandbox start on, Ctrl-C and
+SIGTERM go to the command while it runs; after it, while the Sidecar stops (up
+to 10 seconds), the sandbox is torn down and the token is renewed, `firma run`
+ignores them, so a supervisor should allow that time before it kills `firma`.
+Interrupting `firma run` before the sandbox starts stops it without a close, and
+the run expires the same way.
+
+The start is never retried, because each start creates a run and
+returns its credential once: if it fails or its answer is lost, run the command
+again; a run nobody holds the credential of expires. The only replay
+follows a refused access token, which gets one immediate renewal, because the
+Control Plane refuses a token before it starts anything. Closes get the same
+one renewal, separate from their retry budget.
+
+A managed run refuses an `https` Authority on a loopback host, whose
+certificate would be checked against a local CA rather than the platform's
+roots, and a plain `http` Authority on another host. Resolution snapshots the
+active capability-signing public key; it does not distribute a live key set.
+After rotating that key, restart managed runs so they resolve the new key. The
+Authority's retiring-key grace period does not refresh running Sidecars.
+
+The Control Plane supplies the Agent's profile and governance, so `--agent`
+cannot be combined with any other `firma run` option or a `--config` on the command line; a
+`FIRMA_CONFIG` in the environment is ignored. If the Control Plane no longer
+renews the login, run `firma logout`, then `firma login`.
 
 With the Linux bubblewrap backend, `firma run` hides the host connection
 directory from the sandboxed command, including a custom location or one

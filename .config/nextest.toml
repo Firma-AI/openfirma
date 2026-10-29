@@ -18,6 +18,10 @@ final-status-level = "slow"
 failure-output = "immediate-final"
 success-output = "never"
 
+[profile.ci.junit]
+path = "junit.xml"
+report-name = "openfirma-ci"
+
 # Some live-agent enforcement scenarios require structural confinement (Linux `bwrap`).
 # On macOS `firma run` falls back to non-structural compatibility mode
 # (sandbox-exec + HTTP_PROXY), so those scenarios cannot assert real

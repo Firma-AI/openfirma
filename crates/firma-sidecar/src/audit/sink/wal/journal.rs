@@ -3,10 +3,11 @@
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Seek as _, Write as _};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use crate::audit::{AuditSinkError, ExecutionEvent};
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -14,21 +15,34 @@ pub(super) struct Scope {
     version: u8,
     endpoint: String,
     sidecar: Option<(String, String)>,
+    /// The run whose runtime credential delivers the journal: a
+    /// journal left by another run must not go out under this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run: Option<String>,
 }
 
 impl Scope {
-    pub(super) fn new(endpoint: &str, credentials: Option<&ResolvedSidecarCredentials>) -> Self {
+    pub(super) fn new(endpoint: &str, credentials: Option<&SidecarCredential>) -> Self {
         Self {
             version: 1,
             endpoint: endpoint.to_owned(),
-            sidecar: credentials.map(|c| (c.workspace_id.clone(), c.sidecar_id.clone())),
+            sidecar: credentials.map(|c| (c.workspace_id().to_owned(), c.sidecar_id().to_owned())),
+            run: credentials.and_then(|c| c.run_id().map(ToString::to_string)),
         }
+    }
+
+    /// Whether `other` is the same Sidecar at the same destination, whatever
+    /// run either serves.
+    fn same_sidecar(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.endpoint == other.endpoint
+            && self.sidecar == other.sidecar
     }
 }
 
 pub(super) struct Journal {
     path: PathBuf,
-    max_bytes: u64,
+    max_bytes: NonZeroU64,
     size: u64,
     records: VecDeque<Vec<u8>>,
     // Separate inode: replacing the queue must not release the writer lock.
@@ -38,7 +52,7 @@ pub(super) struct Journal {
 impl Journal {
     pub(super) async fn open(
         path: PathBuf,
-        max_bytes: u64,
+        max_bytes: NonZeroU64,
         scope: Scope,
     ) -> Result<Self, AuditSinkError> {
         blocking(move || {
@@ -52,9 +66,18 @@ impl Journal {
                     let stored: Scope = serde_json::from_slice(&bytes)
                         .map_err(|_| failure("invalid audit WAL scope"))?;
                     if stored != scope {
-                        return Err(failure(
-                            "audit WAL destination does not match its stored scope",
-                        ));
+                        // Another run's records never go out under this
+                        // one; with none left, the same path serves the next.
+                        let only_run_differs = file.metadata()?.len() == 0
+                            && stored.same_sidecar(&scope);
+                        if !only_run_differs {
+                            return Err(failure(
+                                "audit WAL destination does not match its stored scope",
+                            ));
+                        }
+                        let bytes = serde_json::to_vec(&scope)
+                            .map_err(|_| failure("cannot encode audit WAL scope"))?;
+                        replace(&scope_path, &bytes)?;
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -71,7 +94,7 @@ impl Journal {
             }
             repair_tail(&mut file)?;
             let size = file.metadata()?.len();
-            if size > max_bytes {
+            if size > max_bytes.get() {
                 return Err(failure(
                     "audit WAL exceeds configured capacity; retained without eviction",
                 ));
@@ -104,7 +127,7 @@ impl Journal {
             let mut record =
                 serde_json::to_vec(&event).map_err(|_| failure("cannot encode audit WAL event"))?;
             record.push(b'\n');
-            if self.size.saturating_add(record.len() as u64) > self.max_bytes {
+            if self.size.saturating_add(record.len() as u64) > self.max_bytes.get() {
                 return Err(failure(
                     "audit WAL capacity exhausted; pending records retained",
                 ));

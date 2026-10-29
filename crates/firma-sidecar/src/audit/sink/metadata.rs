@@ -5,7 +5,7 @@ use tonic::Request;
 use tonic::metadata::{MetadataMap, MetadataValue};
 
 use crate::audit::AuditSinkError;
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
 
 // These metadata keys authenticate the stream envelope. Firma Team uses them
 // to resolve the registered Sidecar, so audit scope comes from Authority state
@@ -17,11 +17,13 @@ const SIDECAR_PSK_METADATA: &str = "firma-sidecar-psk";
 /// Builds an audit stream request with optional sidecar credentials.
 pub(super) fn stream_events_request<T>(
     stream: T,
-    credentials: Option<&ResolvedSidecarCredentials>,
+    credentials: Option<&SidecarCredential>,
 ) -> Result<Request<T>, AuditSinkError> {
-    let mut request = Request::new(stream);
-    if let Some(credentials) = credentials {
-        attach_sidecar_credentials(request.metadata_mut(), &credentials.to_proto())?;
+    // A runtime credential is the bearer of the request itself; a pre-shared
+    // key travels in the three Sidecar headers.
+    let mut request = SidecarCredential::authenticated(credentials, stream);
+    if let Some(pre_shared) = credentials.and_then(SidecarCredential::body_credentials) {
+        attach_sidecar_credentials(request.metadata_mut(), &pre_shared)?;
     }
 
     Ok(request)

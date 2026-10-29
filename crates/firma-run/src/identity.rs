@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use firma_identifiers::{AgentId, SandboxId, SessionId};
+use crate::error::RunError;
+use firma_identifiers::{AgentId, RunId, SandboxId, SessionId};
 
-/// Stable identity tuple associated with a `firma run` execution.
+/// Stable identity tuple associated with a `firma run` invocation.
 ///
-/// Values are generated once per execution and then reused everywhere in the
+/// Values are generated once per run and then reused everywhere in the
 /// runtime to keep attribution stable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunIdentity {
@@ -24,6 +25,20 @@ impl RunIdentity {
             sandbox_id: SandboxId::generate(),
             session_id: read_identity_override("FIRMA_RUN_SESSION_ID")
                 .unwrap_or_else(|| SessionId::generate().to_string()),
+            agent_id,
+            execution_profile: execution_profile.into(),
+        }
+    }
+
+    /// The identity of a managed run: its session is the run the
+    /// Control Plane reserved. The caller rejects a `FIRMA_RUN_SESSION_ID`
+    /// override with [`reject_reserved_session_id_environment`] before it
+    /// reserves anything.
+    #[must_use]
+    pub fn managed(agent_id: AgentId, execution_profile: impl Into<String>, run_id: RunId) -> Self {
+        Self {
+            sandbox_id: SandboxId::generate(),
+            session_id: run_id.to_string(),
             agent_id,
             execution_profile: execution_profile.into(),
         }
@@ -84,6 +99,28 @@ impl RunIdentity {
     }
 }
 
+/// Refuses a managed run whose environment would override the session the
+/// run fixes.
+///
+/// # Errors
+///
+/// Returns [`RunError::ReservedSessionIdEnvironment`] when
+/// `FIRMA_RUN_SESSION_ID` is set.
+pub fn reject_reserved_session_id_environment() -> Result<(), RunError> {
+    reject_reserved_environment(
+        "FIRMA_RUN_SESSION_ID",
+        RunError::ReservedSessionIdEnvironment,
+    )
+}
+
+/// `error` when `name` is present in the environment, even empty.
+fn reject_reserved_environment(name: &str, error: RunError) -> Result<(), RunError> {
+    if std::env::var_os(name).is_some() {
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Reject an operator-provided sandbox identity before `firma run` performs
 /// configuration or filesystem work.
 ///
@@ -91,11 +128,11 @@ impl RunIdentity {
 ///
 /// Returns [`crate::error::RunError::ReservedSandboxIdEnvironment`] whenever
 /// `FIRMA_RUN_SANDBOX_ID` is present, including with an empty value.
-pub fn reject_reserved_sandbox_id_environment() -> Result<(), crate::error::RunError> {
-    if std::env::var_os("FIRMA_RUN_SANDBOX_ID").is_some() {
-        return Err(crate::error::RunError::ReservedSandboxIdEnvironment);
-    }
-    Ok(())
+pub fn reject_reserved_sandbox_id_environment() -> Result<(), RunError> {
+    reject_reserved_environment(
+        "FIRMA_RUN_SANDBOX_ID",
+        RunError::ReservedSandboxIdEnvironment,
+    )
 }
 
 /// Read and validate the registered agent `TypeID` from `firma.toml`.

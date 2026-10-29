@@ -15,14 +15,14 @@ use std::path::{Path, PathBuf};
 use firma_core::SecretMatcher;
 use firma_secret_provider::spec::http::HttpIntegrationSpec;
 use p256::ecdsa::SigningKey;
-use p256::elliptic_curve::rand_core::OsRng;
+use p256::elliptic_curve::Generate as _;
 use p256::pkcs8::{EncodePrivateKey, LineEnding};
 
 use crate::error::RunError;
 use firma_config_loader::AgentProfile;
 use firma_identifiers::AgentId;
 use firma_runtime_state::RunEntryLayout;
-use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
+use firma_sidecar::authority_credentials::{CredentialSource, SidecarCredentialsConfig};
 
 /// GitHub account hosts the VS Code profile keeps out of HTTPS interception.
 pub(crate) const VSCODE_GITHUB_MITM_BYPASS_HOSTS: &[&str] =
@@ -52,7 +52,7 @@ pub struct SynthesizeRequest<'a> {
     /// `None` leaves the value untouched (preserves any value from
     /// the operator template).
     pub authority_url: Option<&'a str>,
-    /// CA cert path to inject into `[sidecar.authority].ca_cert_path`.
+    /// CA cert path to inject as `[sidecar.authority].ca_cert_paths = [path]`.
     /// `None` leaves any existing template value untouched.
     pub authority_ca_cert: Option<&'a Path>,
     /// Authority pub key path to inject into `[sidecar.authority].public_key_path`.
@@ -162,7 +162,17 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     ensure_authority_pub_key_fallback(&mut value, req.out_path)?;
     configure_capability_seed(&mut value, req.capability_seed_path)?;
     if let Some(audit_path) = req.audit_fallback_path {
-        ensure_audit_file_sink(&mut value, audit_path)?;
+        if req
+            .authority_credentials
+            .is_some_and(SidecarCredentialsConfig::uses_runtime_credential)
+        {
+            let authority_url = req.authority_url.ok_or_else(|| {
+                RunError::Internal("managed audit requires a resolved Authority".into())
+            })?;
+            configure_managed_audit(&mut value, authority_url, audit_path)?;
+        } else {
+            ensure_audit_file_sink(&mut value, audit_path)?;
+        }
     }
     ensure_audit_signing_key(&mut value, req.out_path, req.audit_signing_key_path)?;
     // GitHub is strict-MITM by default, which skips CONNECT enforcement. The
@@ -368,8 +378,8 @@ fn override_authority_ca_cert(value: &mut toml::Value, cert: &Path) -> Result<()
         .as_table_mut()
         .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
     table.insert(
-        "ca_cert_path".to_string(),
-        toml::Value::String(cert.display().to_string()),
+        "ca_cert_paths".to_string(),
+        toml::Value::Array(vec![toml::Value::String(cert.display().to_string())]),
     );
     Ok(())
 }
@@ -424,19 +434,27 @@ fn override_authority_credentials(
         "sidecar_id".to_string(),
         toml::Value::String(credentials.sidecar_id.clone()),
     );
-    if let Some(env_name) = credentials.pre_shared_key_env.as_ref() {
-        table.insert(
-            "pre_shared_key_env".to_string(),
-            toml::Value::String(env_name.clone()),
-        );
-        table.remove("pre_shared_key_path");
+    // The template may carry another source; only the resolved one survives.
+    for key in [
+        "pre_shared_key_env",
+        "pre_shared_key_path",
+        "runtime_credential_env",
+        "run_id",
+    ] {
+        table.remove(key);
     }
-    if let Some(path) = credentials.pre_shared_key_path.as_ref() {
-        table.insert(
-            "pre_shared_key_path".to_string(),
-            toml::Value::String(path.display().to_string()),
-        );
-        table.remove("pre_shared_key_env");
+    let fields = match &credentials.source {
+        CredentialSource::PreSharedKeyEnv(env) => vec![("pre_shared_key_env", env.clone())],
+        CredentialSource::PreSharedKeyFile(path) => {
+            vec![("pre_shared_key_path", path.display().to_string())]
+        }
+        CredentialSource::Runtime { env, run_id } => vec![
+            ("runtime_credential_env", env.clone()),
+            ("run_id", run_id.to_string()),
+        ],
+    };
+    for (key, value) in fields {
+        table.insert(key.to_string(), toml::Value::String(value));
     }
     Ok(())
 }
@@ -519,7 +537,6 @@ const REBASE_SCALAR_FIELDS: &[&[&str]] = &[
     &["audit", "signing_key_path"],
     &["audit", "file_path"],
     &["policy", "dir"],
-    &["authority", "ca_cert_path"],
     &["authority", "public_key_path"],
     &["authority", "tls_client_cert_path"],
     &["authority", "tls_client_key_path"],
@@ -527,7 +544,10 @@ const REBASE_SCALAR_FIELDS: &[&[&str]] = &[
 ];
 
 /// Resource list fields anchored to the template's config dir.
-const REBASE_ARRAY_FIELDS: &[&[&str]] = &[&["capability_seed", "paths"]];
+const REBASE_ARRAY_FIELDS: &[&[&str]] = &[
+    &["capability_seed", "paths"],
+    &["authority", "ca_cert_paths"],
+];
 
 fn rebase_template_resource_paths(
     value: &mut toml::Value,
@@ -678,6 +698,28 @@ fn ensure_audit_file_sink(value: &mut toml::Value, audit_path: &Path) -> Result<
     Ok(())
 }
 
+fn configure_managed_audit(
+    value: &mut toml::Value,
+    authority_url: &str,
+    audit_path: &Path,
+) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let audit = sidecar
+        .entry("audit".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.audit] is not a table".into()))?;
+    audit.insert("sink".into(), toml::Value::String("wal".into()));
+    audit.insert("grpc_url".into(), toml::Value::String(authority_url.into()));
+    // The fallback lives under durable runtime state, never a disposable marker.
+    // Sidecar configuration owns run qualification of this base path.
+    audit.insert(
+        "wal_path".into(),
+        toml::Value::String(audit_path.with_extension("wal").display().to_string()),
+    );
+    Ok(())
+}
+
 fn ensure_audit_signing_key(
     value: &mut toml::Value,
     out_path: &Path,
@@ -746,7 +788,8 @@ fn ensure_audit_signing_key(
 /// Mint the per-run P-256 signing key the same way `firma config` mints the
 /// long-lived one: straight from the operating system's CSPRNG.
 fn generate_ephemeral_audit_key_pem() -> Result<String, RunError> {
-    let signing_key = SigningKey::random(&mut OsRng);
+    let signing_key = SigningKey::try_generate()
+        .map_err(|error| RunError::Internal(format!("generate audit signing key: {error}")))?;
     signing_key
         .to_pkcs8_pem(LineEnding::LF)
         .map(|pem| pem.to_string())

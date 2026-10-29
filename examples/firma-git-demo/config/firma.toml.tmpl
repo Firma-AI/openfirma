@@ -41,7 +41,7 @@ timeout = "30s"
 [sidecar.authority]
 url = "https://{{AUTHORITY_ADDR}}"
 public_key_path = "firma-authority.pub"
-ca_cert_path = "authority-ca.crt"
+ca_cert_paths = ["authority-ca.crt"]
 
 [sidecar.capability_seed]
 paths = ["capabilities/capability-git-demo.toml"]

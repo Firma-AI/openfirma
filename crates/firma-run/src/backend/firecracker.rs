@@ -16,6 +16,13 @@ impl FirecrackerBackend {
     pub(crate) fn new() -> Self {
         Self
     }
+
+    fn unsupported() -> RunError {
+        RunError::UnsupportedBackend {
+            backend: BackendKind::Firecracker.to_string(),
+            reason: "Firecracker backend is planned as enterprise additive profile".to_string(),
+        }
+    }
 }
 
 impl SandboxBackend for FirecrackerBackend {
@@ -23,11 +30,12 @@ impl SandboxBackend for FirecrackerBackend {
         BackendKind::Firecracker
     }
 
+    fn preflight(&self, _profile: &crate::config::ResolvedProfile) -> Result<(), RunError> {
+        Err(Self::unsupported())
+    }
+
     fn prepare(&self, _request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
-        Err(RunError::UnsupportedBackend {
-            backend: BackendKind::Firecracker.to_string(),
-            reason: "Firecracker backend is planned as enterprise additive profile".to_string(),
-        })
+        Err(Self::unsupported())
     }
 
     fn enforce_network(

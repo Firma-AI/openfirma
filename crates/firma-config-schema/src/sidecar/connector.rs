@@ -1,9 +1,11 @@
 //! Schema for `[sidecar.connector]`.
 //!
 //! Describes the default dispatch timeout applied to unconfigured hosts and the
-//! per-host overrides. Schema value types own intrinsic invariants;
-//! `firma-sidecar` validates rate limits, host names, and duplicate hosts.
+//! per-host overrides. Schema value types own intrinsic invariants, including
+//! non-zero rate limits; `firma-sidecar` validates host names and duplicate
+//! hosts.
 
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -46,9 +48,9 @@ pub struct HostConnectorConfig {
     pub host: String,
     /// Sustained refill rate for the token-bucket rate limiter, in requests
     /// per second.
-    pub rps: u32,
+    pub rps: NonZeroU32,
     /// Token-bucket capacity. Bounds the instantaneous burst.
-    pub burst: u32,
+    pub burst: NonZeroU32,
     /// Dispatch timeout applied to this host.
     pub timeout: NonZeroDuration,
 }

@@ -2,6 +2,8 @@
 
 #![allow(clippy::expect_used, clippy::panic, reason = "test fixture setup")]
 
+use std::assert_matches;
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -23,6 +25,22 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const STEP_LIMIT: Duration = Duration::from_secs(10);
 const RETRY_INTERVAL: Duration = Duration::from_millis(50);
+
+/// A loopback listener standing in for an Authority that must never be
+/// contacted; check it with [`assert_never_contacted`].
+pub fn unreached_authority() -> TcpListener {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    listener
+}
+
+pub fn assert_never_contacted(listener: &TcpListener) {
+    assert_matches!(
+        listener.accept().map(|(_, peer)| peer),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock,
+        "the Authority must not have been contacted"
+    );
+}
 
 /// Observe producer rules after loading the generated configuration boundary.
 pub async fn mapping_snapshot(
@@ -102,7 +120,37 @@ pub fn canonical_seed_toml(raw_token: &str) -> String {
         .expect("serialize canonical capability seed")
 }
 
-/// Handle to a real Authority running with temporary keys and permit-all policies.
+/// Runtime (enforcement) policy every fixture Authority serves. Issuance is what
+/// these tests vary, so the hot-path side stays permissive.
+const PERMIT_ALL: &str = "permit(principal, action, resource);";
+
+/// What the Authority's issuance policy set grants.
+///
+/// A run requests every action class, so the issuance policy is the only thing
+/// that decides the grant — including whether there is any grant at all.
+#[derive(Clone, Copy)]
+pub enum IssuancePolicy {
+    /// Only the named action class is authorized, so the granted set is exactly
+    /// it however much the run requested.
+    PermitOnly(&'static str),
+    /// No action class is authorized, so issuance fails closed with
+    /// `NO_AUTHORIZED_ACTIONS`.
+    ForbidAll,
+}
+
+impl IssuancePolicy {
+    fn cedar(self) -> String {
+        match self {
+            Self::PermitOnly(class) => {
+                format!("permit(principal, action == Firma::Action::\"{class}\", resource);")
+            }
+            Self::ForbidAll => "forbid(principal, action, resource);".to_string(),
+        }
+    }
+}
+
+/// Handle to a real Authority running with temporary keys and permit-all
+/// runtime policies.
 ///
 /// Start and stop run as bounded [`step`]s, so a stalled Authority fails the
 /// test with the step that stalled. Callers run under [`bounded::run`].
@@ -115,18 +163,14 @@ pub struct RealAuthority {
 }
 
 impl RealAuthority {
-    pub async fn start() -> anyhow::Result<Self> {
+    pub async fn start_with(issuance: IssuancePolicy) -> anyhow::Result<Self> {
         let dir = tempfile::tempdir()?;
         let policy_dir = dir.path().join("policies");
         let issuance_policy_dir = dir.path().join("issuance-policies");
         std::fs::create_dir(&policy_dir)?;
         std::fs::create_dir(&issuance_policy_dir)?;
-        for directory in [&policy_dir, &issuance_policy_dir] {
-            std::fs::write(
-                directory.join("permit-all.cedar"),
-                "permit(principal, action, resource);",
-            )?;
-        }
+        std::fs::write(policy_dir.join("permit-all.cedar"), PERMIT_ALL)?;
+        std::fs::write(issuance_policy_dir.join("issuance.cedar"), issuance.cedar())?;
 
         let keypair = AsymmetricKeyPair::<V4>::generate()?;
         let key_path = dir.path().join("authority.key");
@@ -197,5 +241,19 @@ async fn wait_until_serving(url: &str) {
             return;
         }
         tokio::time::sleep(RETRY_INTERVAL).await;
+    }
+}
+
+/// Credentials of a Sidecar serving one run with its runtime credential.
+pub fn runtime_credentials() -> firma_sidecar::authority_credentials::SidecarCredentialsConfig {
+    firma_sidecar::authority_credentials::SidecarCredentialsConfig {
+        workspace_id: "ws".to_string(),
+        sidecar_id: "sc".to_string(),
+        source: firma_sidecar::authority_credentials::CredentialSource::Runtime {
+            env: "FIRMA_RUNTIME_CREDENTIAL".to_string(),
+            run_id: "run_01j0000000e008000000000001"
+                .parse()
+                .expect("valid run ID"),
+        },
     }
 }

@@ -29,7 +29,6 @@ fn lease() -> CapabilityLeaseConfig {
         public_key_path: None,
         refresh_ratio: 0.60,
         grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
 
@@ -40,11 +39,11 @@ fn dead_params() -> IssueParams {
     IssueParams {
         authority_url: "http://127.0.0.1:1".to_string(),
         authority_pub_key_path: PathBuf::from("/nonexistent/firma-authority.pub"),
-        authority_ca_cert_path: None,
+        trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+        connect_addr: None,
         credentials: None,
         agent_id: *super::helper::agent_id(),
         session_id: "sess_refresh".to_string(),
-        requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
     }

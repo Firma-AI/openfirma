@@ -111,18 +111,31 @@ pub fn block_until_owned_exit_with(
             info!("termination signal received; caller will tear stack down");
             return Ok(());
         }
-        for component in &mut *components {
-            if component.try_wait()?.is_some() {
-                warn!(
-                    name = component.name().as_str(),
-                    pid = %component.leader_pid(),
-                    "component exited unexpectedly"
-                );
-                return Ok(());
-            }
+        if any_exited(components)? {
+            return Ok(());
         }
         std::thread::sleep(SUPERVISION_POLL_INTERVAL);
     }
+}
+
+/// Whether an owned component has exited, collecting and logging the first
+/// one found.
+///
+/// # Errors
+///
+/// Returns the first direct-child collection probe error.
+pub fn any_exited(components: &mut [OwnedComponent]) -> std::io::Result<bool> {
+    for component in components {
+        if component.try_wait()?.is_some() {
+            warn!(
+                name = component.name().as_str(),
+                pid = %component.leader_pid(),
+                "component exited unexpectedly"
+            );
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Transfer component ownership to the process-global background collector.

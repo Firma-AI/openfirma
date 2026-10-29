@@ -5,9 +5,10 @@ use std::time::Duration;
 use firma_config_utils::NonZeroDuration;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
+use tonic::transport::{Channel, Endpoint};
 use tower::service_fn;
 
+use crate::authority_tls::{TlsTrust, client_tls_config};
 use crate::config::AuthorityEndpoint;
 
 /// Error building the Authority channel.
@@ -16,40 +17,30 @@ pub enum BuildChannelError {
     /// The validated URI could not be represented as a tonic endpoint.
     #[error("invalid Authority URL: {0}")]
     InvalidUrl(String),
-    /// An `https://` URL was given without a CA certificate.
-    #[error("authority_url uses https:// but no CA certificate was provided")]
-    MissingCaCert,
-    /// Exactly one of client cert / client key was provided.
-    #[error("tls_client_cert and tls_client_key must both be set or both unset")]
-    PartialClientIdentity,
-    /// TLS configuration was rejected by tonic.
-    #[error("invalid TLS configuration: {0}")]
-    Tls(String),
+    /// TLS configuration was rejected by tonic, for instance because no trusted
+    /// roots could be loaded.
+    #[error("invalid TLS configuration")]
+    Tls(#[source] tonic::transport::Error),
 }
 
 /// Build a lazily connecting tonic channel to the Authority.
 ///
-/// * `ca_cert_pem` — PEM CA cert to verify the Authority's server TLS cert;
-///   required when `url` uses `https://`.
-/// * `client_cert_pem` / `client_key_pem` — PEM client cert + key for mTLS;
-///   both `Some` or both `None`.
+/// * `trust` — what the Authority's server TLS cert is verified against when
+///   `url` uses `https://`: the configured CAs alone, or the platform's
+///   trusted roots (`SSL_CERT_FILE` and `SSL_CERT_DIR` override them).
+/// * `client_identity` — PEM client cert and key for mTLS.
 ///
 /// # Errors
 ///
-/// Returns [`BuildChannelError`] when tonic rejects the validated origin, an
-/// `https://` origin has no CA cert, the client identity is partial, or TLS
-/// config is bad.
+/// Returns [`BuildChannelError`] when tonic rejects the validated origin, or
+/// TLS config is bad (including an `https://` origin with no CA cert on a host
+/// with no trusted roots).
 pub fn build_channel(
     authority: &AuthorityEndpoint,
     connect_timeout: NonZeroDuration,
-    ca_cert_pem: Option<&[u8]>,
-    client_cert_pem: Option<&[u8]>,
-    client_key_pem: Option<&[u8]>,
+    trust: TlsTrust<'_>,
+    client_identity: Option<(&[u8], &[u8])>,
 ) -> Result<Channel, BuildChannelError> {
-    if client_cert_pem.is_some() != client_key_pem.is_some() {
-        return Err(BuildChannelError::PartialClientIdentity);
-    }
-
     let mut endpoint = Endpoint::from_shared(authority.origin().to_string())
         .map_err(|e| BuildChannelError::InvalidUrl(e.to_string()))?
         .connect_timeout(connect_timeout.duration())
@@ -57,18 +48,9 @@ pub fn build_channel(
         .http2_keep_alive_interval(Duration::from_secs(30));
 
     if authority.is_https() {
-        let pem = ca_cert_pem.ok_or(BuildChannelError::MissingCaCert)?;
-        // Tonic cannot infer its provider if a workspace member also enables
-        // AWS-LC. Keep OpenFirma's Ring default, or the embedder's prior choice.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let ca_cert = Certificate::from_pem(pem);
-        let mut tls = ClientTlsConfig::new().ca_certificate(ca_cert);
-        if let (Some(cert), Some(key)) = (client_cert_pem, client_key_pem) {
-            tls = tls.identity(Identity::from_pem(cert, key));
-        }
         endpoint = endpoint
-            .tls_config(tls)
-            .map_err(|e| BuildChannelError::Tls(e.to_string()))?;
+            .tls_config(client_tls_config(trust, client_identity))
+            .map_err(BuildChannelError::Tls)?;
     }
 
     Ok(if let Some(connect_addr) = authority.connect_addr() {
@@ -99,39 +81,9 @@ mod tests {
         let ch = build_channel(
             &endpoint,
             NonZeroDuration::from_static(Duration::from_secs(5)),
-            None,
-            None,
+            TlsTrust::PlatformStore,
             None,
         );
         assert!(ch.is_ok());
-    }
-
-    #[test]
-    fn https_without_ca_fails() {
-        let endpoint = AuthorityEndpoint::new("https://authority.example:9443", None)
-            .expect("valid test endpoint");
-        let err = build_channel(
-            &endpoint,
-            NonZeroDuration::from_static(Duration::from_secs(5)),
-            None,
-            None,
-            None,
-        )
-        .unwrap_err();
-        assert!(matches!(err, BuildChannelError::MissingCaCert));
-    }
-
-    #[test]
-    fn partial_client_identity_fails() {
-        let endpoint = AuthorityEndpoint::new("http://x:1", None).expect("valid test endpoint");
-        let err = build_channel(
-            &endpoint,
-            NonZeroDuration::from_static(Duration::from_secs(5)),
-            None,
-            Some(b"cert"),
-            None,
-        )
-        .unwrap_err();
-        assert!(matches!(err, BuildChannelError::PartialClientIdentity));
     }
 }

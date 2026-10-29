@@ -90,8 +90,8 @@ not supported — define them as a full `{ type = "http", ... }` table.
   but not yet implemented.
 - **Install the private shim with the repository-owned installer.** Run the
   documented `curl | sh` installer to receive the target-qualified shim. On
-  macOS, both its tarball and Homebrew branches download and checksum-verify
-  the matching Linux-musl shim archive. Running
+  macOS, it downloads and checksum-verifies the matching Linux-musl shim
+  archive. Running
   `brew install Firma-AI/openfirma/firma` directly currently installs only the
   CLI because the external tap does not package this private resource; VZ CLI
   mediation then fails closed during preflight. The shim is intentionally not
@@ -102,10 +102,9 @@ not supported — define them as a full `{ type = "http", ... }` table.
   another build. Published releases through `v0.1.6` predate the private
   artifact, so installing one of them, whether selected with `--version` or as
   the latest release, installs only the CLI; a missing shim in a current or
-  newer release aborts before changing the installation. Tarball installs keep
+  newer release aborts before changing the installation. The installer keeps
   the shim under `libexec/openfirma/secret-shims/<linux-musl-target>/` beside
-  `firma`. The Homebrew branch preinstalls it outside versioned kegs under
-  `$(brew --prefix)/var/openfirma/secret-shims/<version>/<linux-musl-target>/`.
+  `firma`.
 - **HTTP entry** — mirrored into the autostarted Sidecar's
   `[sidecar].http_secret_providers` so the Sidecar can intercept matching vault
   responses at L7. HTTPS requires MITM for the provider host; plaintext HTTP and

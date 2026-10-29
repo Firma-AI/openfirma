@@ -70,6 +70,44 @@ fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
     }
 }
 
+#[test]
+fn synthesis_replaces_template_credentials_with_the_selected_source() {
+    use firma_sidecar::authority_credentials::{CredentialSource, SidecarCredentialsConfig};
+
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(&template, "[sidecar.authority.credentials]\nworkspace_id = 'old'\nsidecar_id = 'old'\npre_shared_key_env = 'OLD_PSK'\n").expect("template");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    for source in [
+        CredentialSource::PreSharedKeyEnv("PSK".into()),
+        CredentialSource::PreSharedKeyFile(tmp.path().join("psk")),
+        CredentialSource::Runtime {
+            env: "RUNTIME".into(),
+            run_id: "run_01j0000000e008000000000001".parse().expect("run"),
+        },
+    ] {
+        let credentials = SidecarCredentialsConfig {
+            workspace_id: "workspace".into(),
+            sidecar_id: "sidecar".into(),
+            source,
+        };
+        synthesize(SynthesizeRequest {
+            authority_url: Some("http://127.0.0.1:9000"),
+            authority_credentials: Some(&credentials),
+            template: resolve_template_sources(Some(&template)).expect("template"),
+            ..req(&sock, &out)
+        })
+        .expect("synthesize");
+        let schema: firma_config_schema::sidecar::SidecarConfig =
+            read(&out)["sidecar"].clone().try_into().expect("schema");
+        let roundtrip =
+            SidecarCredentialsConfig::try_from(schema.authority.credentials.expect("credentials"))
+                .expect("single valid source");
+        assert_eq!(roundtrip, credentials);
+    }
+}
+
 /// A GitHub host the operator names in either intercept list stays
 /// intercepted (bypass would win over both), in any spelling; the profile
 /// still bypasses the GitHub hosts the operator left unnamed.
@@ -650,6 +688,10 @@ fn relative_template_resource_paths_rebase_to_template_dir() {
     let abs_seed = "C:/abs/seed.toml";
     #[cfg(not(windows))]
     let abs_seed = "/abs/seed.toml";
+    #[cfg(windows)]
+    let abs_ca = "C:/pki/corp-ca.pem";
+    #[cfg(not(windows))]
+    let abs_ca = "/pki/corp-ca.pem";
 
     fs::write(
         &template,
@@ -664,6 +706,8 @@ dir = "policies"
 
 [sidecar.authority]
 public_key_path = "keys/authority.pub"
+ca_cert_paths = ["tls/corp-ca.pem", "{abs_ca}"]
+disable_platform_roots = true
 tls_client_cert_path = "tls/client.crt"
 tls_client_key_path = "tls/client.key"
 
@@ -746,6 +790,22 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
             "{field} must still refer to the operator's client identity"
         );
     }
+    // The CAs the operator named reach the Sidecar rebased, with their switch.
+    assert_eq!(
+        authority.get("ca_cert_paths"),
+        Some(&toml::Value::Array(vec![
+            template_dir
+                .join("tls/corp-ca.pem")
+                .display()
+                .to_string()
+                .into(),
+            abs_ca.into()
+        ]))
+    );
+    assert_eq!(
+        authority.get("disable_platform_roots"),
+        Some(&toml::Value::Boolean(true))
+    );
 
     let capability_seed = sidecar
         .get("capability_seed")
@@ -942,4 +1002,65 @@ fn empty_http_secret_providers_omits_the_field() {
         sidecar.get("http_secret_providers").is_none(),
         "no HTTP providers configured must not inject an empty array field"
     );
+}
+
+/// A managed run's Sidecar authenticates as its run even when the
+/// template still names an enrolled Sidecar's key.
+#[test]
+fn runtime_credentials_replace_the_templates_pre_shared_key() {
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(
+        &template,
+        "[sidecar.authority.credentials]\nworkspace_id = 'old'\nsidecar_id = 'old'\npre_shared_key_env = 'FIRMA_PSK'\n",
+    )
+    .expect("template");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    let credentials = super::helper::runtime_credentials();
+    synthesize(SynthesizeRequest {
+        authority_url: Some("http://127.0.0.1:9000"),
+        template: resolve_template_sources(Some(&template)).expect("template"),
+        authority_credentials: Some(&credentials),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    let credentials = read(&out)["sidecar"]["authority"]["credentials"].clone();
+    assert_eq!(
+        credentials,
+        toml::toml! {
+            workspace_id = "ws"
+            sidecar_id = "sc"
+            run_id = "run_01j0000000e008000000000001"
+            runtime_credential_env = "FIRMA_RUNTIME_CREDENTIAL"
+        }
+        .into()
+    );
+}
+
+#[test]
+fn managed_audit_delivers_to_the_resolved_authority_from_durable_state() {
+    let tmp = TempDir::new().expect("tmp");
+    let marker = tmp.path().join("run").join("marker");
+    fs::create_dir_all(&marker).expect("marker");
+    let out = marker.join("sidecar.toml");
+    let sock = marker.join("sidecar.sock");
+    let audit = tmp.path().join("audit.jsonl");
+    let credentials = super::helper::runtime_credentials();
+    synthesize(SynthesizeRequest {
+        authority_url: Some("http://127.0.0.1:9000"),
+        authority_credentials: Some(&credentials),
+        audit_fallback_path: Some(&audit),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let config = audit_table(&value);
+    assert_eq!(config["sink"].as_str(), Some("wal"));
+    assert_eq!(config["grpc_url"].as_str(), Some("http://127.0.0.1:9000"));
+    let base_path = tmp.path().join("audit.wal");
+    assert_eq!(config["wal_path"].as_str(), base_path.to_str());
+    assert!(!base_path.starts_with(marker));
 }

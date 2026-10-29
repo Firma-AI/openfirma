@@ -19,9 +19,10 @@ use firma_protobuf::v1::audit_service_server::{AuditService, AuditServiceServer}
 use firma_protobuf::v1::{ExecutionEvent as ProtoEvent, StreamEventsResponse};
 use firma_runtime_state::RuntimeLayout;
 use firma_sidecar::audit::{AuditPayload, AuditSinkError, Decision, ExecutionEvent};
+use firma_sidecar::authority_tls::AuthorityTls;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::startup::{load_audit_event_builder, spawn_audit_sink};
-use p256::elliptic_curve::rand_core::OsRng;
+use p256::elliptic_curve::Generate as _;
 use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -143,7 +144,7 @@ fn start_buffer_sink(
     mpsc::Sender<AuditPayload>,
     JoinHandle<Result<(), AuditSinkError>>,
 ) {
-    let signing_key = p256::SecretKey::random(&mut OsRng);
+    let signing_key = p256::SecretKey::generate();
     let key_path = dir.join("signing.pem");
     std::fs::write(
         &key_path,
@@ -166,8 +167,10 @@ fn start_buffer_sink(
         signing_key_path: Some(key_path),
         ..audit
     };
+    // The audit service is the Authority's own, so the credentials go with
+    // the events.
     let authority = firma_config_schema::sidecar::authority::AuthorityConfig {
-        url: Some("http://127.0.0.1:50051".to_string()),
+        url: Some(format!("http://{address}")),
         credentials,
         ..Default::default()
     };
@@ -188,7 +191,14 @@ fn start_buffer_sink(
         .expect("valid sidecar config");
     let builder = load_audit_event_builder(&config.audit).expect("event builder");
     let (payload_tx, payload_rx) = mpsc::channel(1);
-    let sink = spawn_audit_sink(&config, payload_rx, builder, exit).expect("spawn sink");
+    let sink = spawn_audit_sink(
+        &config,
+        &AuthorityTls::read(&config.authority).expect("authority TLS"),
+        payload_rx,
+        builder,
+        exit,
+    )
+    .expect("spawn sink");
     (payload_tx, sink)
 }
 
@@ -255,6 +265,8 @@ async fn configured_credentials_authenticate_replay_and_live_streams() {
                 sidecar_id: "sidecar-a".into(),
                 pre_shared_key_env: None,
                 pre_shared_key_path: Some(psk),
+                run_id: None,
+                runtime_credential_env: None,
             },
         ),
     );
@@ -558,4 +570,48 @@ async fn unparseable_only_buffer_is_discarded_once_connected() {
         .expect("sink task")
         .expect("sink result");
     server.abort();
+}
+
+/// Legacy buffers carry no execution provenance, so runtime authentication
+/// must be refused before a pre-existing buffer can be opened or replayed.
+#[test]
+fn runtime_credentials_reject_legacy_grpc_buffering_before_startup() {
+    use firma_sidecar::config::{AuditConfigError, SidecarConfigError};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let buffer = dir.path().join("buffer.jsonl");
+    let original = b"{\"event_id\":\"old-execution\"}\n{\"torn";
+    std::fs::write(&buffer, original).expect("old buffer");
+    let mut schema = firma_config_schema::sidecar::SidecarConfig::default();
+    schema.authority.url = Some("http://127.0.0.1:50051".into());
+    schema.authority.credentials = Some(
+        firma_config_schema::sidecar::authority::SidecarCredentials {
+            workspace_id: "workspace-a".into(),
+            sidecar_id: "sidecar-b".into(),
+            pre_shared_key_env: None,
+            pre_shared_key_path: None,
+            run_id: Some("run_01j0000000e008000000000002".into()),
+            runtime_credential_env: Some("CARGO_PKG_NAME".into()),
+        },
+    );
+    schema.audit = SchemaAuditConfig {
+        sink: firma_config_schema::sidecar::audit::AuditSink::Grpc,
+        grpc_url: Some("http://127.0.0.1:50051".into()),
+        buffer_path: Some(buffer.clone()),
+        ..SchemaAuditConfig::default()
+    };
+    let error = firma_sidecar::config::SidecarConfig::resolve(
+        schema,
+        &firma_runtime_state::RuntimeLayout::from_root(dir.path()),
+    )
+    .expect_err("runtime grpc is unsupported");
+    assert!(matches!(
+        error,
+        SidecarConfigError::Audit(AuditConfigError::RuntimeGrpcUnsupported)
+    ));
+    assert_eq!(
+        error.to_string(),
+        "audit: runtime credentials do not support audit.sink = grpc; use wal instead"
+    );
+    assert_eq!(std::fs::read(buffer).expect("retained buffer"), original);
 }

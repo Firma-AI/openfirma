@@ -352,34 +352,26 @@ fn build_mtls_server_config(
     allow_list: Arc<AuthorizedClientSet>,
 ) -> Result<rustls::ServerConfig> {
     use rustls::RootCertStore;
+    use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use rustls::server::WebPkiClientVerifier;
 
     let provider = Arc::new(rustls::crypto::ring::default_provider());
 
-    let certs: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem))
-            .collect::<Result<_, _>>()
-            .context("failed to parse server TLS certificate PEM")?;
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
+        .collect::<Result<_, _>>()
+        .context("failed to parse server TLS certificate PEM")?;
     if certs.is_empty() {
         anyhow::bail!("server TLS certificate PEM contains no certificates");
     }
 
-    let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
-        .context("failed to read server TLS private key PEM")?
-        .context("server TLS key PEM contains no private key")?;
-    let key = match key {
-        PrivateKeyDer::Pkcs1(k) => PrivateKeyDer::Pkcs1(k),
-        PrivateKeyDer::Pkcs8(k) => PrivateKeyDer::Pkcs8(k),
-        PrivateKeyDer::Sec1(k) => PrivateKeyDer::Sec1(k),
-        _ => anyhow::bail!("unsupported server TLS private key type"),
-    };
+    let key = PrivateKeyDer::from_pem_slice(key_pem)
+        .context("failed to read server TLS private key PEM")?;
 
     let mut roots = RootCertStore::empty();
-    let ca_certs: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut std::io::Cursor::new(client_ca_cert_pem))
-            .collect::<Result<_, _>>()
-            .context("failed to parse client CA certificate PEM")?;
+    let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(client_ca_cert_pem)
+        .collect::<Result<_, _>>()
+        .context("failed to parse client CA certificate PEM")?;
     if ca_certs.is_empty() {
         anyhow::bail!("client CA certificate PEM contains no certificates");
     }

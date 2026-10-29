@@ -47,6 +47,13 @@ firma config --yes --mode agent-remote \
   --authority-pub-key ./workspace.pub
 ```
 
+Leave out `--authority-ca-cert` when the Authority presents a publicly trusted
+certificate: the Sidecar then verifies it against the platform's trusted roots.
+A CA already in `firma.toml` is kept for the same Authority host and port; to
+stop pinning it, remove `ca_cert_paths` from `[sidecar.authority]`. Several
+CAs, for a rotation, go in `ca_cert_paths` by hand; a rerun of `firma config`
+keeps only the first.
+
 Supply required Sidecar authentication separately. Per-run synthesis with SaaS
 credentials omits fallback mapping paths and files; explicit conflicting settings
 remain visible to Sidecar validation.
@@ -82,7 +89,7 @@ firma config [--mode <mode>] [--profile <profile>] [--agent-id <agent-id>]
 | `--state-dir`         | `$FIRMA_STATE_DIR` / XDG | Keys, revocations, generated CA                                            |
 | `--authority-listen`  | `127.0.0.1:50051`        | gRPC listen address (`agent-local` / `authority` modes only)               |
 | `--authority-url`     | wizard prompt            | Authority URL for `agent-remote` mode                                      |
-| `--authority-ca-cert` | wizard prompt            | Authority CA cert PEM path for `agent-remote` mode                         |
+| `--authority-ca-cert` | wizard prompt / none     | Authority CA cert PEM path for `agent-remote` mode; omit for a publicly trusted certificate |
 | `--authority-pub-key` | adopted from state dir   | Authority public key path                                                  |
 | `--yes` / `-y`        | off                      | Skip all prompts; use existing values or flag defaults                     |
 | `--force`             | off                      | Overwrite existing files including the authority keypair                   |
@@ -125,7 +132,7 @@ rewrite `firma.toml`; non-interactive runs remove the section even without
 `--force`. The command merges `firma.toml` on every run. Switching back to
 `agent-local` removes the remote physical connection override, trust paths,
 mTLS client identity, and PSK credentials so the Sidecar uses the local
-mini-authority. Remote re-runs preserve those connection settings.
+mini-authority. Remote re-runs preserve those connection settings, except that a CA certificate is kept only for the same Authority host and port.
 
 ```bash
 # Keep everything, explicitly replace the registered identity
@@ -175,8 +182,8 @@ policy_dir    = "policies/"
 [sidecar.authority]           # agent-local and agent-remote modes
 agent_id         = "agt_01j0000000e008000000000001"
 url             = "http://127.0.0.1:50051"
-# `agent-remote` also carries ca_cert_path / public_key_path: a remote
-# Authority's anchors are operator-supplied; there is no default.
+# `agent-remote` also carries public_key_path, and ca_cert_paths for a private
+# CA: a remote Authority's anchors are operator-supplied; there is no default.
 # ... plus connect_timeout / reconnect_* / revocation_* tuning
 
 # Uncomment for remote Authorities that require Sidecar PSK authentication.

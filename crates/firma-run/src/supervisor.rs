@@ -8,70 +8,227 @@ use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
 use nix::unistd::Pid;
 
-/// Wait for the child while forwarding terminal signals to the sandbox.
-///
-/// The child is reaped with a plain blocking `Child::wait` on this thread — no
-/// SIGCHLD handling — so reaping is correct regardless of how many threads the
-/// caller runs (a `sigwait`/`SIGCHLD` scheme only works when the signal is
-/// blocked process-wide, which does not hold under the multi-threaded test
-/// harness and hangs on some platforms).
+/// How a supervised child ended.
+#[derive(Debug)]
+pub struct Supervised {
+    /// The child's exit code, or why waiting for it failed.
+    pub exit: Result<i32, RunError>,
+    /// Whether a termination signal reached `firma` while it waited, counted
+    /// only where the workload cannot send it itself.
+    pub interrupted: bool,
+    /// Whether the workload was stopped because the run's Sidecar exited.
+    pub sidecar_stopped: bool,
+}
+
+/// Stops the workload once the run's Sidecar is gone: SIGTERM, then SIGKILL
+/// after `grace`.
+#[cfg_attr(
+    windows,
+    expect(dead_code, reason = "a managed run's Sidecar runs only on Unix")
+)]
+pub struct AgentStop<'a> {
+    /// Polled while the workload runs; `true` once the Sidecar has exited.
+    pub sidecar_exited: &'a mut dyn FnMut() -> bool,
+    /// How long the workload may take to finish after SIGTERM.
+    pub grace: std::time::Duration,
+}
+
+/// Terminal signals caught from before the workload starts until it is
+/// reaped, so none of them kills `firma` in between.
 ///
 /// A background thread receives SIGINT, SIGTERM, and SIGWINCH via
 /// `signal_hook`'s self-pipe and forwards each into the sandbox. SIGWINCH (TUI
 /// resize) is relayed as-is; the first SIGINT/SIGTERM is forwarded so an
 /// interactive TUI can shut down cleanly, and a second termination signal
-/// escalates to SIGKILL. Once the child is reaped the signal source is closed,
-/// ending the forwarder thread.
+/// escalates to SIGKILL. A signal that arrives before [`Self::wait`] stays in
+/// the pipe and is forwarded once the child is known.
 ///
-/// # Errors
-///
-/// Returns an error when the signal handlers cannot be installed or the child
-/// wait operation fails.
+/// The interruption is recorded by the signal handler and by the forwarder: a
+/// terminal Ctrl-C also reaches the outer sandbox process, which may exit
+/// before the forwarder drains the signal, and a signal between the two
+/// registrations reaches only the forwarder.
 #[cfg(unix)]
-pub fn wait_with_signal_forwarding(
-    mut child: Child,
-    backend: BackendKind,
-) -> Result<i32, RunError> {
-    use signal_hook::consts::{SIGINT, SIGTERM, SIGWINCH};
-    use signal_hook::iterator::Signals;
+pub struct SignalForwarding {
+    signals: signal_hook::iterator::Signals,
+    interrupted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _flags: InterruptFlags,
+}
 
-    let child_pid = child.id();
+/// The handlers that record an interruption, unregistered when dropped.
+#[cfg(unix)]
+struct InterruptFlags(Vec<signal_hook::SigId>);
 
-    let mut signals = Signals::new([SIGINT, SIGTERM, SIGWINCH])
-        .map_err(|error| RunError::Wait(format!("failed to install signal handlers: {error}")))?;
-    let handle = signals.handle();
-
-    let forwarder = std::thread::spawn(move || {
-        let mut termination_requested = false;
-        for raw in &mut signals {
-            let Ok(signal) = Signal::try_from(raw) else {
-                continue;
-            };
-            match signal {
-                Signal::SIGWINCH => forward_signal(child_pid, backend, Signal::SIGWINCH),
-                Signal::SIGINT | Signal::SIGTERM => {
-                    let forwarded = if termination_requested {
-                        Signal::SIGKILL
-                    } else {
-                        termination_requested = true;
-                        signal
-                    };
-                    forward_signal(child_pid, backend, forwarded);
-                }
-                _ => {}
-            }
+#[cfg(unix)]
+impl Drop for InterruptFlags {
+    fn drop(&mut self) {
+        for id in self.0.drain(..) {
+            signal_hook::low_level::unregister(id);
         }
-    });
+    }
+}
 
-    let result = child
-        .wait()
-        .map(exit_code)
-        .map_err(|error| RunError::Wait(error.to_string()));
+#[cfg(unix)]
+impl SignalForwarding {
+    /// Starts catching terminal signals.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunError::Wait`] when the signal handlers cannot be
+    /// installed.
+    pub fn install() -> Result<Self, RunError> {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
 
-    // Break the forwarder's blocking iterator and reclaim the thread.
-    handle.close();
-    let _ = forwarder.join();
-    result
+        use signal_hook::consts::{SIGINT, SIGTERM, SIGWINCH};
+
+        let install_error = |error: std::io::Error| {
+            RunError::Wait(format!("failed to install signal handlers: {error}"))
+        };
+        // The forwarding source first: a signal between the two
+        // registrations is then forwarded, and the forwarder counts it.
+        let signals = signal_hook::iterator::Signals::new([SIGINT, SIGTERM, SIGWINCH])
+            .map_err(install_error)?;
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let mut flags = InterruptFlags(Vec::new());
+        for signal in [SIGINT, SIGTERM] {
+            flags.0.push(
+                signal_hook::flag::register(signal, Arc::clone(&interrupted))
+                    .map_err(install_error)?,
+            );
+        }
+        Ok(Self {
+            signals,
+            interrupted,
+            _flags: flags,
+        })
+    }
+
+    /// Waits for `child` while forwarding the caught signals to the sandbox.
+    ///
+    /// The child is reaped with a plain blocking `Child::wait` on this thread
+    /// — no SIGCHLD handling — so reaping is correct regardless of how many
+    /// threads the caller runs (a `sigwait`/`SIGCHLD` scheme only works when
+    /// the signal is blocked process-wide, which does not hold under the
+    /// multi-threaded test harness and hangs on some platforms). Once the
+    /// child is reaped the signal source is closed, ending the forwarder
+    /// thread.
+    ///
+    /// With `stop`, the child is polled instead, alongside the Sidecar, and
+    /// stopped when the Sidecar exits.
+    ///
+    /// The exit is an error when the child wait operation fails.
+    pub fn wait(
+        self,
+        mut child: Child,
+        backend: BackendKind,
+        stop: Option<AgentStop<'_>>,
+    ) -> Supervised {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let Self {
+            mut signals,
+            interrupted,
+            _flags,
+        } = self;
+        let child_pid = child.id();
+        let handle = signals.handle();
+        let counted = Arc::clone(&interrupted);
+
+        let forwarder = std::thread::spawn(move || {
+            let mut termination_requested = false;
+            for raw in &mut signals {
+                let Ok(signal) = Signal::try_from(raw) else {
+                    continue;
+                };
+                match signal {
+                    Signal::SIGWINCH => forward_signal(child_pid, backend, Signal::SIGWINCH),
+                    Signal::SIGINT | Signal::SIGTERM => {
+                        counted.store(true, Ordering::SeqCst);
+                        let forwarded = if termination_requested {
+                            Signal::SIGKILL
+                        } else {
+                            termination_requested = true;
+                            signal
+                        };
+                        forward_signal(child_pid, backend, forwarded);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let (exit, sidecar_stopped) = match stop {
+            None => (
+                child
+                    .wait()
+                    .map(exit_code)
+                    .map_err(|error| RunError::Wait(error.to_string())),
+                false,
+            ),
+            Some(stop) => wait_or_stop(&mut child, backend, stop),
+        };
+
+        // Break the forwarder's blocking iterator and reclaim the thread.
+        handle.close();
+        let _ = forwarder.join();
+        Supervised {
+            exit,
+            interrupted: interrupted.load(Ordering::SeqCst) && backend.isolates_workload(),
+            sidecar_stopped,
+        }
+    }
+}
+
+/// Polls `child` until it exits, stopping it once the Sidecar has exited.
+///
+/// Each signal is sent only after `try_wait` on this thread found the child
+/// still running, so none can reach a reused PID.
+#[cfg(unix)]
+fn wait_or_stop(
+    child: &mut Child,
+    backend: BackendKind,
+    stop: AgentStop<'_>,
+) -> (Result<i32, RunError>, bool) {
+    use std::time::{Duration, Instant};
+
+    const POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+    enum Phase {
+        Watching,
+        Terminating { kill_at: Instant },
+        Killed,
+    }
+
+    let AgentStop {
+        sidecar_exited,
+        grace,
+    } = stop;
+    let mut phase = Phase::Watching;
+    loop {
+        let stopped = !matches!(phase, Phase::Watching);
+        match child.try_wait() {
+            // An agent can fail on its own as soon as its Sidecar is gone, so
+            // the Sidecar is checked once more before the exit is reported.
+            Ok(Some(status)) => return (Ok(exit_code(status)), stopped || sidecar_exited()),
+            Ok(None) => {}
+            Err(error) => return (Err(RunError::Wait(error.to_string())), stopped),
+        }
+        match phase {
+            Phase::Watching if sidecar_exited() => {
+                forward_signal(child.id(), backend, Signal::SIGTERM);
+                phase = Phase::Terminating {
+                    kill_at: Instant::now() + grace,
+                };
+            }
+            Phase::Terminating { kill_at } if Instant::now() >= kill_at => {
+                forward_signal(child.id(), backend, Signal::SIGKILL);
+                phase = Phase::Killed;
+            }
+            _ => {}
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }
 
 /// Map an exit status to a process exit code.
@@ -88,53 +245,87 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
         .unwrap_or_else(|| status.signal().map_or(1, |signal| 128 + signal))
 }
 
-/// Wait for the child while forwarding Ctrl-C termination.
+/// Ctrl-C caught from before the workload starts until it exits.
 ///
 /// Windows retains a bounded poll loop: `std` offers no kill-by-pid, so the
 /// thread-based waiter used on Unix cannot terminate the child from the signal
 /// path. SIGWINCH forwarding is Unix-only and not relevant here.
-///
-/// # Errors
-///
-/// Returns an error when child wait operations fail or repeated termination
-/// signals are received before process exit.
 #[cfg(windows)]
-pub fn wait_with_signal_forwarding(
-    mut child: Child,
-    _backend: BackendKind,
-) -> Result<i32, RunError> {
-    use std::sync::mpsc;
-    use std::time::Duration;
+pub struct SignalForwarding {
+    signal_rx: std::sync::mpsc::Receiver<()>,
+}
 
-    let (signal_tx, signal_rx) = mpsc::channel::<()>();
-
-    if let Err(error) = ctrlc::set_handler(move || {
-        let _ = signal_tx.send(());
-    }) {
-        tracing::warn!(
-            "ctrl-c handler could not be installed (continuing without custom forwarding): {error}"
-        );
+#[cfg(windows)]
+impl SignalForwarding {
+    /// Starts catching Ctrl-C.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunError::Wait`] when the Ctrl-C handler cannot be
+    /// installed.
+    pub fn install() -> Result<Self, RunError> {
+        let (signal_tx, signal_rx) = std::sync::mpsc::channel::<()>();
+        ctrlc::set_handler(move || {
+            let _ = signal_tx.send(());
+        })
+        .map_err(|error| {
+            RunError::Wait(format!("failed to install the Ctrl-C handler: {error}"))
+        })?;
+        Ok(Self { signal_rx })
     }
 
-    let mut termination_requested = false;
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| RunError::Wait(error.to_string()))?
-        {
-            return Ok(status.code().unwrap_or(1));
-        }
+    /// Waits for `child`, terminating it on the first Ctrl-C.
+    ///
+    /// The exit is an error when child wait operations fail or repeated
+    /// termination signals are received before process exit.
+    /// `stop` is ignored: a managed run's Sidecar runs only on Unix.
+    pub fn wait(
+        self,
+        mut child: Child,
+        _backend: BackendKind,
+        _stop: Option<AgentStop<'_>>,
+    ) -> Supervised {
+        use std::time::Duration;
 
-        if signal_rx.recv_timeout(Duration::from_millis(100)).is_ok() {
-            if termination_requested {
-                return Err(RunError::Wait(
-                    "received repeated termination signals while child did not exit".to_string(),
-                ));
+        let Self { signal_rx } = self;
+        let mut termination_requested = false;
+        loop {
+            match child.try_wait() {
+                // The console delivers Ctrl-C to the child too, which may exit
+                // before the loop reads the channel: a pending send counts.
+                Ok(Some(status)) => {
+                    return Supervised {
+                        exit: Ok(status.code().unwrap_or(1)),
+                        interrupted: termination_requested || signal_rx.try_recv().is_ok(),
+                        sidecar_stopped: false,
+                    };
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return Supervised {
+                        exit: Err(RunError::Wait(error.to_string())),
+                        interrupted: termination_requested || signal_rx.try_recv().is_ok(),
+                        sidecar_stopped: false,
+                    };
+                }
             }
 
-            termination_requested = true;
-            if let Err(error) = child.kill() {
-                tracing::warn!("failed to terminate child process on signal: {error}");
+            if signal_rx.recv_timeout(Duration::from_millis(100)).is_ok() {
+                if termination_requested {
+                    return Supervised {
+                        exit: Err(RunError::Wait(
+                            "received repeated termination signals while child did not exit"
+                                .to_string(),
+                        )),
+                        interrupted: true,
+                        sidecar_stopped: false,
+                    };
+                }
+
+                termination_requested = true;
+                if let Err(error) = child.kill() {
+                    tracing::warn!("failed to terminate child process on signal: {error}");
+                }
             }
         }
     }
@@ -214,15 +405,22 @@ mod tests {
     use nix::unistd::Pid;
 
     use crate::backend::BackendKind;
-    use crate::supervisor::wait_with_signal_forwarding;
+    use crate::error::RunError;
+    use crate::supervisor::SignalForwarding;
 
     #[cfg(target_os = "linux")]
     use crate::supervisor::{forward_signal, parse_first_pid, sandbox_child_pid};
 
+    /// The child's exit as supervised on a backend without isolation.
+    fn supervise(child: std::process::Child) -> Result<i32, RunError> {
+        SignalForwarding::install()
+            .and_then(|signals| signals.wait(child, BackendKind::Vz, None).exit)
+    }
+
     /// Send `signal` to this test process after `delay`.
     ///
     /// Each test runs in its own process under nextest, so signals raised here
-    /// are caught by the forwarder installed in `wait_with_signal_forwarding`
+    /// are caught by the handlers [`SignalForwarding::install`] registers
     /// and never leak into other tests.
     fn raise_self_after(delay: Duration, signal: Signal) {
         let Ok(pid) = i32::try_from(std::process::id()) else {
@@ -257,7 +455,7 @@ mod tests {
             .args(["-c", "exit 7"])
             .spawn()
             .expect("spawn sh");
-        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        let code = supervise(child).expect("wait succeeds");
         assert_eq!(code, 7);
     }
 
@@ -267,7 +465,7 @@ mod tests {
             .args(["-c", "exit 0"])
             .spawn()
             .expect("spawn sh");
-        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        let code = supervise(child).expect("wait succeeds");
         assert_eq!(code, 0);
     }
 
@@ -279,7 +477,7 @@ mod tests {
             .args(["-c", "kill -TERM $$"])
             .spawn()
             .expect("spawn sh");
-        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        let code = supervise(child).expect("wait succeeds");
         assert_eq!(code, 143);
     }
 
@@ -293,7 +491,7 @@ mod tests {
             .spawn()
             .expect("spawn sh");
         raise_self_after(Duration::from_millis(150), Signal::SIGWINCH);
-        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        let code = supervise(child).expect("wait succeeds");
         assert_eq!(code, 0);
     }
 
@@ -306,7 +504,7 @@ mod tests {
             .spawn()
             .expect("spawn sh");
         raise_self_after(Duration::from_millis(150), Signal::SIGTERM);
-        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        let code = supervise(child).expect("wait succeeds");
         assert_eq!(code, 143);
     }
 
@@ -321,7 +519,7 @@ mod tests {
             .expect("spawn sh");
         raise_self_after(Duration::from_millis(200), Signal::SIGTERM);
         raise_self_after(Duration::from_millis(700), Signal::SIGTERM);
-        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        let code = supervise(child).expect("wait succeeds");
         assert_eq!(code, 137);
     }
 

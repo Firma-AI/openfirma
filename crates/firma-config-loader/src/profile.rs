@@ -48,6 +48,12 @@ impl AgentProfile {
         }
     }
 
+    /// Parses only the canonical name, without CLI aliases.
+    #[must_use]
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        Self::from_name(name).filter(|profile| profile.as_str() == name)
+    }
+
     /// Provider identifier used for mapping selection (`"anthropic"`, `"openai"`).
     #[must_use]
     pub fn provider(self) -> &'static str {

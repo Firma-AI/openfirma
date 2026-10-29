@@ -80,6 +80,7 @@
 
 use std::fmt::Write as _;
 use std::future::Future;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -89,13 +90,14 @@ use firma_protobuf::v1::audit_service_client::AuditServiceClient;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 use super::metadata::stream_events_request;
 use super::{create_private_dir_all, execution_event_to_proto};
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
 use crate::backoff::ExponentialBackoff;
+use crate::config::AuditServiceUrl;
 
 /// Upper bound on a single connect attempt.
 ///
@@ -160,13 +162,15 @@ async fn until_cancelled<F: Future>(exit: &CancellationToken, work: F) -> Option
 #[derive(Debug)]
 pub struct GrpcAuditSink {
     /// Remote audit service endpoint URL.
-    endpoint: String,
+    endpoint: AuditServiceUrl,
     /// Path to the local buffer file.
     buffer_path: PathBuf,
     /// Maximum buffer file size in bytes. When exceeded the oldest events
     /// are compacted away.
-    buffer_max_bytes: u64,
-    credentials: Option<ResolvedSidecarCredentials>,
+    buffer_max_bytes: NonZeroU64,
+    credentials: Option<SidecarCredential>,
+    /// How `endpoint` is dialed, over TLS once [`Self::with_tls`] set it.
+    dial: Endpoint,
     /// Upper bound on waiting for the server to acknowledge a replay.
     ///
     /// [`CONNECT_TIMEOUT`] covers the dial, not the response. A collector that
@@ -178,12 +182,13 @@ pub struct GrpcAuditSink {
 impl GrpcAuditSink {
     /// Constructs a new [`GrpcAuditSink`].
     pub(crate) fn new(
-        endpoint: impl Into<String>,
+        endpoint: AuditServiceUrl,
         buffer_path: impl AsRef<Path>,
-        buffer_max_bytes: u64,
+        buffer_max_bytes: NonZeroU64,
     ) -> Self {
         Self {
-            endpoint: endpoint.into(),
+            dial: Endpoint::from(endpoint.uri().clone()),
+            endpoint,
             buffer_path: buffer_path.as_ref().to_path_buf(),
             buffer_max_bytes,
             credentials: None,
@@ -199,18 +204,31 @@ impl GrpcAuditSink {
 
     pub(crate) fn with_credentials(
         mut self,
-        credentials: Option<ResolvedSidecarCredentials>,
+        credentials: Option<SidecarCredential>,
     ) -> Result<Self, AuditSinkError> {
         stream_events_request((), credentials.as_ref())?;
         self.credentials = credentials;
         Ok(self)
     }
 
+    /// Dials the endpoint over TLS with `tls`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the tonic error when `tls` is unusable, for instance because
+    /// no trusted roots could be loaded.
+    pub(crate) fn with_tls(
+        mut self,
+        tls: ClientTlsConfig,
+    ) -> Result<Self, tonic::transport::Error> {
+        self.dial = self.dial.tls_config(tls)?;
+        Ok(self)
+    }
+
     /// Attempts to connect to the audit service endpoint, bounded by
     /// [`CONNECT_TIMEOUT`].
     async fn connect(&self) -> Result<AuditServiceClient<Channel>, tonic::transport::Error> {
-        let endpoint =
-            Endpoint::from_shared(self.endpoint.clone())?.connect_timeout(CONNECT_TIMEOUT);
+        let endpoint = self.dial.clone().connect_timeout(CONNECT_TIMEOUT);
         endpoint.connect().await.map(AuditServiceClient::new)
     }
 
@@ -230,7 +248,7 @@ impl GrpcAuditSink {
     async fn buffer_append(
         file: &mut tokio::fs::File,
         buffer_size: &mut u64,
-        buffer_max_bytes: u64,
+        buffer_max_bytes: NonZeroU64,
         event: &ExecutionEvent,
     ) -> Result<u64, std::io::Error> {
         let serialized = match serde_json::to_string(event) {
@@ -251,8 +269,8 @@ impl GrpcAuditSink {
         let line_len = line.len() as u64;
 
         // Compact if this append would exceed the cap.
-        let dropped = if *buffer_size + line_len > buffer_max_bytes {
-            Self::buffer_compact(file, buffer_size, buffer_max_bytes / 2).await
+        let dropped = if *buffer_size + line_len > buffer_max_bytes.get() {
+            Self::buffer_compact(file, buffer_size, buffer_max_bytes.get() / 2).await
         } else {
             0u64
         };
@@ -950,12 +968,18 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
+    const TEST_BUFFER_MAX_BYTES: NonZeroU64 = NonZeroU64::new(10 * 1024 * 1024).unwrap();
+
+    fn unreachable_url() -> AuditServiceUrl {
+        "http://127.0.0.1:1".parse().unwrap()
+    }
+
     #[tokio::test]
     async fn test_sink_falls_back_to_buffer_when_grpc_unreachable() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let buffer_path = dir.path().join("buffer.jsonl");
 
-        let sink = GrpcAuditSink::new("http://127.0.0.1:1", &buffer_path, 10 * 1024 * 1024);
+        let sink = GrpcAuditSink::new(unreachable_url(), &buffer_path, TEST_BUFFER_MAX_BYTES);
         let (tx, rx) = mpsc::channel(16);
         let exit = CancellationToken::new();
 
@@ -1002,7 +1026,7 @@ mod tests {
 
         // `/dev/full` opens like any file and fails every write with ENOSPC,
         // which is the full-filesystem case without needing a full filesystem.
-        let sink = GrpcAuditSink::new("http://127.0.0.1:1", "/dev/full", 10 * 1024 * 1024);
+        let sink = GrpcAuditSink::new(unreachable_url(), "/dev/full", TEST_BUFFER_MAX_BYTES);
         let (tx, rx) = mpsc::channel(16);
 
         let handle = tokio::spawn(async move { sink.run(rx, CancellationToken::new()).await });
@@ -1032,9 +1056,9 @@ mod tests {
             .unwrap_or_else(|e| panic!("write blocker: {e}"));
 
         let sink = GrpcAuditSink::new(
-            "http://127.0.0.1:1",
+            unreachable_url(),
             blocker.join("buffer.jsonl"),
-            10 * 1024 * 1024,
+            TEST_BUFFER_MAX_BYTES,
         );
         let (_tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
@@ -1069,7 +1093,7 @@ mod tests {
         // boundary) but NOT 3. This guarantees the 3rd append triggers
         // compaction while giving the compaction target enough room to
         // keep exactly 1 line unambiguously.
-        let cap = 2 * one_line_len + one_line_len / 2;
+        let cap = NonZeroU64::new(2 * one_line_len + one_line_len / 2).unwrap();
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -1114,7 +1138,7 @@ mod tests {
 
         assert_eq!(event_ids, ["b", "c"]);
         assert!(
-            buffer_size <= cap,
+            buffer_size <= cap.get(),
             "buffer size {buffer_size} should be within cap {cap}"
         );
     }
@@ -1138,7 +1162,7 @@ mod tests {
 
         // Cap holds exactly one line. The second append triggers
         // compaction with target_bytes = cap/2 < one line.
-        let cap = one_line_len;
+        let cap = NonZeroU64::new(one_line_len).unwrap();
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -1176,7 +1200,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let buffer_path = dir.path().join("empty.jsonl");
 
-        let sink = GrpcAuditSink::new("http://127.0.0.1:1", &buffer_path, 10 * 1024 * 1024);
+        let sink = GrpcAuditSink::new(unreachable_url(), &buffer_path, TEST_BUFFER_MAX_BYTES);
         let (tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
 

@@ -18,7 +18,8 @@ const DEFAULT_MIN_BACKOFF: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_millis(250));
 const DEFAULT_MAX_BACKOFF: NonZeroDuration = NonZeroDuration::from_static(Duration::from_secs(30));
 
-/// Sidecar pre-shared-key credentials presented to Authority RPCs.
+/// Sidecar credentials presented to Authority RPCs: a pre-shared key, or the
+/// runtime credential of one run.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SidecarCredentials {
@@ -32,6 +33,14 @@ pub struct SidecarCredentials {
     /// File containing the pre-shared key.
     #[serde(default)]
     pub pre_shared_key_path: Option<PathBuf>,
+    /// The run this Sidecar serves, when it authenticates with that
+    /// run's runtime credential.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// Environment variable the Sidecar reads its runtime credential from at
+    /// startup.
+    #[serde(default)]
+    pub runtime_credential_env: Option<String>,
 }
 
 /// Tuning for background Authority stream clients.
@@ -58,7 +67,9 @@ pub struct AuthorityConfig {
     /// Maximum reconnect backoff.
     #[serde(default = "default_max_backoff")]
     pub reconnect_max_backoff: NonZeroDuration,
-    /// Grace period before the revocation stream is considered ready.
+    /// How long a connection may deliver no revocation set before the Sidecar
+    /// warns. Readiness is granted only by an applied set, never by this
+    /// elapsing, so a Sidecar that has never applied one stays not-ready.
     #[serde(
         with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
         default = "default_readiness_grace"
@@ -70,10 +81,17 @@ pub struct AuthorityConfig {
     /// Path to the Authority's PASETO v4 Ed25519 public key.
     #[serde(default)]
     pub public_key_path: Option<PathBuf>,
-    /// Path to the PEM-encoded CA certificate used to verify the Authority's
-    /// TLS certificate.
+    /// Paths to PEM-encoded CA certificates used to verify the Authority's
+    /// TLS certificate. When any CA is named, only those CAs are trusted and
+    /// the platform's roots are ignored; when none is, an `https://`
+    /// Authority is verified against the platform's trusted roots.
     #[serde(default)]
-    pub ca_cert_path: Option<PathBuf>,
+    pub ca_cert_paths: Vec<PathBuf>,
+    /// Never verify the Authority against the platform's trusted roots. That
+    /// is already the behavior whenever `ca_cert_paths` names a CA; the only
+    /// effect is rejecting an empty `ca_cert_paths`.
+    #[serde(default)]
+    pub disable_platform_roots: bool,
     /// Allow an insecure plain `http://` authority URL to a non-loopback host.
     #[serde(default)]
     pub allow_insecure_remote_authority: bool,
@@ -102,7 +120,8 @@ impl Default for AuthorityConfig {
             revocation_readiness_grace: default_readiness_grace(),
             revocation_fail_closed_on_disconnect: false,
             public_key_path: None,
-            ca_cert_path: None,
+            ca_cert_paths: Vec::new(),
+            disable_platform_roots: false,
             allow_insecure_remote_authority: false,
             tls_client_cert_path: None,
             tls_client_key_path: None,

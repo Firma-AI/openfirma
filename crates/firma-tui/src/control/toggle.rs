@@ -434,11 +434,13 @@ fn policy_blocks_by_id(source: &str) -> Result<HashMap<String, PolicyBlock>, Pol
             });
         }
 
-        let policy_source = policy_texts.get(policy.id()).copied().ok_or_else(|| {
-            PolicyRewriteError::MissingSourceSpan {
+        let policy_source = policy_texts
+            .get(policy.id())
+            .copied()
+            .flatten()
+            .ok_or_else(|| PolicyRewriteError::MissingSourceSpan {
                 id: policy_id.to_string(),
-            }
-        })?;
+            })?;
 
         let start = source_offset(source, policy_source)?;
         let source_end = start + policy_source.len();
@@ -531,11 +533,11 @@ fn managed_conditions_by_generated_id(
     })?;
     let policies = cst
         .with_generated_policyids()
-        .ok_or(PolicyRewriteError::EmptyCst)?;
+        .map_err(|_| PolicyRewriteError::EmptyCst)?;
 
     let mut conditions = Vec::new();
     for (generated_id, policy_node) in policies {
-        let Some(policy) = policy_node.as_inner() else {
+        let Some(cst::Policy::Policy(policy)) = policy_node.as_inner() else {
             return Err(PolicyRewriteError::MissingCstPolicy {
                 id: generated_id.to_string(),
             });
@@ -561,14 +563,14 @@ fn find_managed_condition(
         })
 }
 
-fn managed_condition(source: &str, policy: &cst::Policy) -> Option<ManagedCondition> {
+fn managed_condition(source: &str, policy: &cst::PolicyImpl) -> Option<ManagedCondition> {
     policy.conds.iter().find_map(|condition_node| {
         let condition = condition_node.as_inner()?;
         if !is_when_condition(condition) {
             return None;
         }
 
-        let loc = &condition_node.loc;
+        let loc = condition_node.loc.as_ref()?;
         let (clause_end, comment_end) = managed_condition_end_after_condition(source, loc.end())?;
         Some(ManagedCondition {
             clause_start: loc.start(),
@@ -764,7 +766,7 @@ impl ManagedConditionExpr {
     }
 
     fn matches_expr(expression: &parser::Node<Option<cst::Expr>>) -> bool {
-        let Some(expression) = expression.as_inner() else {
+        let Some(cst::Expr::Expr(expression)) = expression.as_inner() else {
             return false;
         };
 

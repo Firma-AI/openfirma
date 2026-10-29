@@ -132,7 +132,7 @@ The Sidecar supplies request context such as session ID, timestamp, serialized p
 
 `WatchPolicyBundle` streams the current policy bundle immediately on connect and again whenever policies change.
 
-`WatchRevocations` streams token revocation events so Sidecars can deny revoked tokens locally.
+`WatchRevocations` streams the workspace's complete token revocation set — on connect and on every change — so Sidecars can deny revoked tokens locally.
 
 ## Revoke a token
 

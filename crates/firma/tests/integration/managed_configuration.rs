@@ -407,7 +407,7 @@ fn rerun_infers_local_authority_with_default_listener() -> anyhow::Result<()> {
                 "[sidecar.authority]\n\
                  agent_id = 'agt_01j0000000e008000000000001'\n\
                  url = 'https://[::1]:50051'\n\
-                 ca_cert_path = 'local-ca.crt'\n\
+                 ca_cert_paths = ['local-ca.crt']\n\
                  public_key_path = 'local.pub'\n",
             );
         }
@@ -439,7 +439,11 @@ fn rerun_infers_local_authority_with_default_listener() -> anyhow::Result<()> {
                 config["sidecar"]["authority"]["url"].as_str(),
                 Some("https://[::1]:50051")
             );
-            assert!(config["sidecar"]["authority"].get("ca_cert_path").is_none());
+            assert!(
+                config["sidecar"]["authority"]
+                    .get("ca_cert_paths")
+                    .is_none()
+            );
             assert!(
                 config["sidecar"]["authority"]
                     .get("public_key_path")
@@ -546,7 +550,7 @@ url = 'https://authority.example.com:9443'
 connect_addr = '192.0.2.42:9443'
 tls_client_cert_path = 'remote-client.crt'
 tls_client_key_path = 'remote-client.key'
-ca_cert_path = 'remote-ca.crt'
+ca_cert_paths = ['remote-ca.crt']
 public_key_path = 'remote.pub'
 [sidecar.authority.credentials]
 workspace_id = 'ws-example'
@@ -578,7 +582,7 @@ profile = 'generic'
         "connect_addr",
         "tls_client_cert_path",
         "tls_client_key_path",
-        "ca_cert_path",
+        "ca_cert_paths",
         "public_key_path",
         "credentials",
     ] {

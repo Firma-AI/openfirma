@@ -9,7 +9,7 @@ mod signal;
 
 use std::process::ExitCode;
 
-use crate::args::Command;
+use crate::args::{Command, run};
 
 fn main() -> ExitCode {
     let cli = args::parse();
@@ -26,6 +26,11 @@ fn main() -> ExitCode {
 
     let config = cli.config;
     let result = match cli.command {
+        Command::Run(run::RunArgs {
+            agent: Some(handle),
+            command,
+            ..
+        }) => services::agent_run::run(&handle, command, &foreground),
         Command::Authority(a) => block_on_async(services::authority::run(a, config.as_deref())),
         Command::DnsStub(a) => services::dns_stub::run(a),
         #[cfg(target_os = "linux")]
@@ -60,10 +65,17 @@ fn block_on_async_detached<F>(fut: F) -> anyhow::Result<ExitCode>
 where
     F: std::future::Future<Output = anyhow::Result<ExitCode>>,
 {
+    block_on_detached(fut)?
+}
+
+/// Runs `fut` on a runtime that is shut down, without waiting for blocking
+/// tasks, before the result is returned: what a synchronous launcher that
+/// builds runtimes of its own needs to run next.
+fn block_on_detached<F: std::future::Future>(fut: F) -> anyhow::Result<F::Output> {
     let runtime = runtime()?;
     let result = runtime.block_on(fut);
     runtime.shutdown_background();
-    result
+    Ok(result)
 }
 
 fn block_on_async<F>(fut: F) -> anyhow::Result<ExitCode>

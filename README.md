@@ -53,12 +53,15 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 curl -fsSL https://install.openfirma.ai | sh
 ```
 
-On macOS with Homebrew installed, the installer uses `brew install firma-ai/openfirma/firma`
-automatically. You can also install directly:
+The installer downloads a verified release archive into `~/.local/bin`. It does not use Homebrew.
+You can also install with Homebrew directly:
 
 ```bash
 brew install firma-ai/openfirma/firma
 ```
+
+The Homebrew formula installs only the CLI. On macOS, the VZ sandbox backend needs the
+`curl | sh` install to mediate CLI secret providers.
 
 **Build and install from source** (requires Rust and `protoc`):
 

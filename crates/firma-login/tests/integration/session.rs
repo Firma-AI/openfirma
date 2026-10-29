@@ -23,7 +23,7 @@ const R0: &str = "refresh-zero";
 const R1: &str = "refresh-one";
 const R2: &str = "refresh-two";
 
-fn saved_login(
+pub fn saved_login(
     dir: &std::path::Path,
     server: &MockServer,
 ) -> Result<ConnectionStore, Box<dyn std::error::Error>> {
@@ -44,7 +44,7 @@ fn saved_login(
     Ok(store)
 }
 
-fn token_response(access: &str, refresh: &str) -> ResponseTemplate {
+pub fn token_response(access: &str, refresh: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(serde_json::json!({
         "access_token": access,
         "refresh_token": refresh,
@@ -87,8 +87,11 @@ async fn transient_retries_reuse_one_key_and_publish_before_returning()
             source: firma_login::NativeTokenError::Refused(firma_login::LoginRefusal::ServerError)
         }
     ));
-    assert_eq!(error.to_string(), "native refresh failed");
-    assert_eq!(session.access_token().await?.expose_secret(), "access-one");
+    insta::assert_snapshot!(error, @"the renewal outcome may be unknown; run `firma logout`, then `firma login` before retrying in a new process");
+    assert_eq!(
+        session.access_token().await?.token().expose_secret(),
+        "access-one"
+    );
     let requests = server.received_requests().await.ok_or("missing requests")?;
     assert_eq!(requests.len(), 4);
     let key = requests[0]
@@ -99,6 +102,12 @@ async fn transient_retries_reuse_one_key_and_publish_before_returning()
         assert_eq!(request.headers.get("idempotency-key"), Some(key));
         assert!(String::from_utf8_lossy(&request.body).contains("refresh_token=refresh-zero"));
     }
+    let access = session.access_token().await?;
+    assert_eq!(
+        access.origin().as_url().as_str(),
+        format!("{}/", server.uri())
+    );
+    assert_eq!(access.workspace_id(), WORKSPACE.parse()?);
     let guard = store.shared()?;
     let saved = guard.load()?.ok_or("missing saved login")?;
     assert_eq!(saved.secret.secret().ok_or("missing R1")?.expose(), R1);
@@ -133,7 +142,10 @@ async fn cancellation_after_send_recovers_with_the_same_r0_and_key()
             }
         }).await?;
     }
-    assert_eq!(session.access_token().await?.expose_secret(), "access-one");
+    assert_eq!(
+        session.access_token().await?.token().expose_secret(),
+        "access-one"
+    );
     let requests = server.received_requests().await.ok_or("missing request")?;
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].body, requests[1].body);
@@ -170,7 +182,7 @@ async fn concurrent_sessions_hold_the_lock_through_successor_publication()
         first
             .access_token()
             .await
-            .map(|token| token.expose_secret().to_owned())
+            .map(|access| access.token().expose_secret().to_owned())
     });
     tokio::time::timeout(Duration::from_secs(1), async {
         while attempts.load(Ordering::Acquire) == 0 {
@@ -181,7 +193,7 @@ async fn concurrent_sessions_hold_the_lock_through_successor_publication()
     let second_access = second.access_token().await?;
 
     assert_eq!(first_access.await??, "access-one");
-    assert_eq!(second_access.expose_secret(), "access-two");
+    assert_eq!(second_access.token().expose_secret(), "access-two");
     let requests = server.received_requests().await.ok_or("missing requests")?;
     assert_eq!(requests.len(), 2);
     assert!(String::from_utf8_lossy(&requests[0].body).contains("refresh_token=refresh-zero"));
@@ -189,5 +201,35 @@ async fn concurrent_sessions_hold_the_lock_through_successor_publication()
     let guard = store.shared()?;
     let saved = guard.load()?.ok_or("missing saved login")?;
     assert_eq!(saved.secret.secret().ok_or("missing R2")?.expose(), R2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_no_retry_can_change_requires_a_new_login()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(TOKEN_PATH))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error": "invalid_client"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let root = tempfile::tempdir()?;
+    let store = saved_login(&root.path().join("firma"), &server)?;
+    let mut session = NativeSession::new(store);
+
+    let error = session.access_token().await.expect_err("refused");
+
+    assert!(matches!(
+        error,
+        SessionError::RenewalRefused {
+            source: firma_login::NativeTokenError::Refused(firma_login::LoginRefusal::Other)
+        }
+    ));
+    insta::assert_snapshot!(error, @"the saved login could not be renewed; run `firma logout`, then `firma login`");
+    server.verify().await;
     Ok(())
 }

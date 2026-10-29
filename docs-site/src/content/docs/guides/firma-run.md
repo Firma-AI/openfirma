@@ -45,6 +45,9 @@ For development work, a Sidecar you wrote, or a CI script you trust, plain proxy
 
 For the conceptual background, read [The sandbox boundary](../../concepts/sandbox/).
 
+To run an Agent registered in Firma Team instead of a local profile, see
+[Use a Firma Team Agent](../native-login/#use-a-firma-team-agent).
+
 ## Step 1: Pick a backend
 
 `firma run` uses a different sandbox backend per platform. The defaults are usually right:

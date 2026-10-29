@@ -75,7 +75,7 @@ timeout = "30s"
 agent_id = "agt_01j0000000e008000000000001"
 url = "https://127.0.0.1:50051"
 public_key_path = "firma-authority.pub"
-ca_cert_path = "authority-ca.crt"
+ca_cert_paths = ["authority-ca.crt"]
 
 [sidecar.capability_seed]
 paths = ["capabilities/capability-demo-agent.toml"]

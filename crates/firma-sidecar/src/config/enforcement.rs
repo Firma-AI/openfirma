@@ -27,21 +27,11 @@ pub struct EnforcementConfig {
     pub constraint_enforcement: ConstraintEnforcementConfig,
 }
 
-/// Error validating an [`EnforcementConfig`].
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum EnforcementConfigError {
-    /// `sidecar.constraint_enforcement.session_state_capacity` was zero.
-    #[error("constraint_enforcement.session_state_capacity must be at least 1")]
-    ZeroSessionStateCapacity,
-}
-
-impl TryFrom<schema::EnforcementConfig> for EnforcementConfig {
-    type Error = EnforcementConfigError;
-
-    fn try_from(s: schema::EnforcementConfig) -> Result<Self, Self::Error> {
-        Ok(Self {
-            constraint_enforcement: s.constraint_enforcement.try_into()?,
-        })
+impl From<schema::EnforcementConfig> for EnforcementConfig {
+    fn from(s: schema::EnforcementConfig) -> Self {
+        Self {
+            constraint_enforcement: s.constraint_enforcement.into(),
+        }
     }
 }
 
@@ -58,24 +48,17 @@ pub struct ConstraintEnforcementConfig {
 
 impl Default for ConstraintEnforcementConfig {
     fn default() -> Self {
-        Self {
-            capacity: default_session_state_capacity(),
-            backend: SessionStateBackend::default(),
-            path: None,
-        }
+        schema::ConstraintEnforcementConfig::default().into()
     }
 }
 
-impl TryFrom<schema::ConstraintEnforcementConfig> for ConstraintEnforcementConfig {
-    type Error = EnforcementConfigError;
-
-    fn try_from(s: schema::ConstraintEnforcementConfig) -> Result<Self, Self::Error> {
-        Ok(Self {
-            capacity: NonZeroUsize::new(s.session_state_capacity)
-                .ok_or(EnforcementConfigError::ZeroSessionStateCapacity)?,
+impl From<schema::ConstraintEnforcementConfig> for ConstraintEnforcementConfig {
+    fn from(s: schema::ConstraintEnforcementConfig) -> Self {
+        Self {
+            capacity: s.session_state_capacity,
             backend: s.session_state_backend,
             path: s.session_state_path,
-        })
+        }
     }
 }
 
@@ -187,14 +170,6 @@ impl CapabilityManifestEntry {
         }
         Ok(())
     }
-}
-
-// ---------------------------------------------------------------------------
-// Defaults
-// ---------------------------------------------------------------------------
-
-const fn default_session_state_capacity() -> NonZeroUsize {
-    const { NonZeroUsize::new(8192).unwrap() }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,14 +323,7 @@ mod tests {
 
     // -- EnforcementConfig --------------------------------------------------
 
-    use firma_config_schema::sidecar::enforcement::{
-        ConstraintEnforcementConfig as SchemaConstraint, EnforcementConfig as SchemaEnforcement,
-    };
-
-    #[test]
-    fn defaults_valid() {
-        assert!(EnforcementConfig::try_from(SchemaEnforcement::default()).is_ok());
-    }
+    use firma_config_schema::sidecar::enforcement::ConstraintEnforcementConfig as SchemaConstraint;
 
     // -- SessionStateBackend / capacity (AARM R2 G4) -----------------------
 
@@ -377,23 +345,13 @@ mod tests {
             "#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        let cfg = ConstraintEnforcementConfig::try_from(schema).unwrap_or_else(|e| panic!("{e}"));
+        let cfg = ConstraintEnforcementConfig::from(schema);
         assert_eq!(cfg.capacity.get(), 4096);
         assert_eq!(cfg.backend, SessionStateBackend::Persistent);
         assert_eq!(
             cfg.path.as_deref(),
             Some(std::path::Path::new("/var/lib/firma/sessions.jsonl"))
         );
-    }
-
-    #[test]
-    fn session_state_zero_capacity_rejected() {
-        let mut schema = SchemaEnforcement::default();
-        schema.constraint_enforcement.session_state_capacity = 0;
-        assert!(matches!(
-            EnforcementConfig::try_from(schema),
-            Err(EnforcementConfigError::ZeroSessionStateCapacity)
-        ));
     }
 
     #[test]

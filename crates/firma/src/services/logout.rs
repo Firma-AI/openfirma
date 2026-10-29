@@ -1,8 +1,8 @@
 use std::process::ExitCode;
 
 use anyhow::Context as _;
-use firma_connection_store::{ConnectionStore, Durability, OriginMode, Removed, SavedConnection};
-use firma_login::{ControlPlaneOrigin, NativeTokenClient, OriginValidationMode};
+use firma_connection_store::{ConnectionStore, Durability, Removed, SavedConnection};
+use firma_login::{ControlPlaneOrigin, NativeTokenClient};
 
 /// Attempts Control Plane revocation, then removes local authority regardless.
 ///
@@ -60,11 +60,7 @@ pub async fn run() -> anyhow::Result<ExitCode> {
 }
 
 async fn revoke_saved(saved: SavedConnection) -> anyhow::Result<()> {
-    let mode = match saved.connection.origin_mode {
-        OriginMode::Production => OriginValidationMode::Production,
-        OriginMode::DevelopmentLoopback => OriginValidationMode::DevelopmentLoopback,
-    };
-    let origin = ControlPlaneOrigin::new(saved.connection.origin, mode)
+    let origin = ControlPlaneOrigin::saved(&saved.connection)
         .context("the saved control-plane origin is invalid")?;
     let client = NativeTokenClient::new(&origin).context("could not prepare server revocation")?;
     let secret = saved

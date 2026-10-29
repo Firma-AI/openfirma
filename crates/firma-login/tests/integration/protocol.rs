@@ -267,8 +267,19 @@ async fn authorize(
             let receiving = tokio::spawn(
                 request.receive(CallbackWaitTimeout::try_from(Duration::from_secs(5))?),
             );
-            let callback_response = reqwest::get(callback).await?;
-            assert_eq!(callback_response.status(), StatusCode::OK);
+            // The listener sends the browser on to the Control Plane's page.
+            let browser = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?;
+            let callback_response = browser.get(callback).send().await?;
+            assert_eq!(callback_response.status(), StatusCode::SEE_OTHER);
+            let mut landing = origin.as_url().clone();
+            landing.set_path(firma_login::LANDING_PATH);
+            landing.query_pairs_mut().append_pair("outcome", "approved");
+            assert_eq!(
+                callback_response.headers()[reqwest::header::LOCATION],
+                landing.as_str()
+            );
             (receiving.await??, expected_redirect)
         }
         Delivery::Terminal => (

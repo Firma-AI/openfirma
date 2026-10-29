@@ -2,6 +2,38 @@
 
 User-facing changes are listed first. Internal improvements are grouped at the end.
 
+## [0.2.0-rc3](https://github.com/Firma-AI/openfirma/compare/v0.2.0-rc2...v0.2.0-rc3) - 2026-10-29
+
+### Added
+
+- **run:** **Breaking:** Derive agent capabilities from policy, not firma.toml
+- **cli:** Resolve a Firma Team Agent with firma run --agent
+- **cli:** Reserve and activate an execution with firma run --agent
+- **executions:** Keep an execution alive while its Sidecar's stream ticks
+- **agents:** Advertise the gRPC URI and the capability key at resolution
+- **sidecar:** Authenticate with an execution's runtime credential
+- **cli:** Run the command as the activated execution
+- **cli:** Close the execution when firma run --agent ends
+- **revocation:** **Breaking:** Send the unpurged set instead of one event per revocation
+- **openfirma:** **Breaking:** Evaluate policies with Cedar 4.10
+- **executions:** **Breaking:** Start an execution with one one-shot call
+- **cli:** Print the next command after firma login
+- **authority-ui:** Render the firma login return page on the server
+- **runs:** **Breaking:** Name authorized worker starts runs
+- **authority:** Preserve machine runtime provenance
+- **sidecar:** Verify an https Authority against the platform roots when no CA is set
+- **config:** Make the Authority CA optional for agent-remote
+- **run:** Reach an https Authority from managed runs
+- **sidecar:** Trust a list of Authority CAs and allow switching the platform store off
+- **run:** Stop a running agent when the workspace ends its run
+
+### Fixed
+
+- **ci:** Preserve live-agent TLS failure diagnostics
+- **revocation:** Gate readiness on a delivered set and floor the purge grace
+- **deps:** Move the workspace ECDSA stack to crypto-bigint 0.7
+- **installer:** Drop Homebrew and fix Rosetta and PATH-shadow failures
+
 ## [0.2.0-rc2](https://github.com/Firma-AI/openfirma/compare/v0.2.0-rc1...v0.2.0-rc2) - 2026-10-19
 
 This release candidate inspects all agent HTTPS traffic by default, makes the

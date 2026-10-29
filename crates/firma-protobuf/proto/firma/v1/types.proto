@@ -275,9 +275,10 @@ message ActionMappingRule {
   string action_class = 4;
 }
 
-// RevocationEvent signals the invalidation of a previously issued
-// capability token. Propagated from Authority to Sidecar via streaming.
-// Enforced locally in Stage 1 with no network calls at decision time.
+// RevocationEvent is one member of a RevocationSet: the invalidation of a
+// previously issued capability token. Authorities send whole sets, never a
+// bare event. Enforced locally in Stage 1 with no network calls at decision
+// time.
 message RevocationEvent {
   // The token_id being revoked.
   string token_id = 1;

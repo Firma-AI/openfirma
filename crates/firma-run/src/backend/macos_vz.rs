@@ -159,7 +159,11 @@ impl SandboxBackend for VzBackend {
         BackendKind::Vz
     }
 
-    fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
+    fn structural_network(&self, _policy: &NetworkPolicy) -> bool {
+        vz_structural_mode() != VzStructuralMode::Compatibility
+    }
+
+    fn preflight(&self, _profile: &crate::config::ResolvedProfile) -> Result<(), RunError> {
         if !cfg!(target_os = "macos") {
             return Err(RunError::UnsupportedBackend {
                 backend: BackendKind::Vz.to_string(),
@@ -189,6 +193,15 @@ impl SandboxBackend for VzBackend {
             }
         }
 
+        if mode == VzStructuralMode::VzGuest {
+            let inputs = VzGuestLaunchInputs::from_env_lookup(|name| std::env::var(name).ok())?;
+            VzGuestManifest::read(&inputs)?.validate_artifacts(&inputs)?;
+        }
+        Ok(())
+    }
+
+    fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
+        self.preflight(&request.profile)?;
         let runtime_dir =
             SandboxRuntimeLayout::in_temp_dir(&env::temp_dir(), &request.identity.sandbox_id)
                 .into_root();

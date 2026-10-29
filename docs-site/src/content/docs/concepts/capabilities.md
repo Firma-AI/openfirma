@@ -57,7 +57,7 @@ The Authority does three things in order:
 2. **TTL clamping.** The requested TTL is clamped to the Authority's `max_ttl` config (default `"1h"` in the demo). The configured maximum must be greater than zero; zero is rejected during configuration instead of minting immediately expired tokens. You cannot mint long-lived tokens by asking for them.
 3. **Signing.** If at least one class is authorized, the Authority assembles a `CapabilityClaims` over the granted subset, signs it with its Ed25519 key, and returns the PASETO token + the parsed claims.
 
-Because the Authority narrows, the caller can safely over-request. `firma run` does exactly that: by default it requests **all** action classes and lets the issuance policy decide the grant, so a session is never denied merely because its config omitted a class the mapping rules later emit. The policy — not the request — is the source of truth. Setting `[run.profiles.<name>.capability] requested_actions` in `firma.toml` narrows the request further, an opt-in knob for running with *fewer* permissions than the policy would allow.
+Because the Authority narrows, the caller can safely over-request. `firma run` does exactly that: it always requests **all** action classes and lets the issuance policy decide the grant, so a session is never denied merely because a config omitted a class the mapping rules later emit. The policy — not the request — is the source of truth, and `firma.toml` has no say in it: an agent's capabilities follow the policy set applied to it, so changing that set changes what the next run may do with no local edit.
 
 In the normal `firma run` flow, this entire sequence happens automatically:
 `firma run` calls the Authority's `IssueCapability` gRPC endpoint, receives the
@@ -182,7 +182,9 @@ In the reference Authority, this is:
 firma authority revocations add <token_id>
 ```
 
-The Authority appends `token_id` to its revocation file and broadcasts a `RevocationEvent` over its `WatchRevocations` gRPC stream. Every connected Sidecar updates its local store as the event arrives. Propagation is sub-second in normal conditions.
+The Authority appends `token_id` to its revocation file and sends the workspace's complete `RevocationSet` over its `WatchRevocations` gRPC stream — the whole set, not the one token that changed. Every connected Sidecar adds the set to what it holds as it arrives — its store cannot drop an entry, and one the Authority has dropped can only reject a token already past expiry — and a Sidecar that reconnects gets a set as complete as the last one it saw, with no cursor to report. Propagation is sub-second in normal conditions.
+
+The set is bounded by capability retention rather than by all-time history: a revocation leaves it once the Authority drops the expired record it came from, and a token that drops out is already past its expiry.
 
 The local store has two layers:
 

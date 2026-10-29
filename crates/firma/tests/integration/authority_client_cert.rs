@@ -22,29 +22,8 @@ fn issue_client_cert_prints_canonical_allow_list_entries() {
     let config = temp.path().join("firma.toml");
     let ca_cert = temp.path().join("client-ca.crt");
     let ca_key = temp.path().join("client-ca.key");
-    write_section(
-        &config,
-        "authority",
-        &AuthorityConfig {
-            mapping_rules_paths: vec!["mapping-rules.toml".into()],
-            tls_cert_path: Some("server.crt".into()),
-            tls_key_path: Some("server.key".into()),
-            mtls_client_ca_cert_path: Some(ca_cert.clone()),
-            mtls_client_ca_key_path: Some(ca_key.clone()),
-            authorized_clients_path: Some("authorized_clients.toml".into()),
-            ..AuthorityConfig::default()
-        },
-    )
-    .expect("write config");
-
-    let generate = authority_command(&config)
-        .args(["generate-client-ca", "--cert-out"])
-        .arg(&ca_cert)
-        .arg("--key-out")
-        .arg(&ca_key)
-        .output()
-        .expect("generate client CA");
-    assert_success(&generate, "generate-client-ca");
+    write_client_ca_config(&config, &ca_cert, &ca_key);
+    generate_client_ca(&config, &ca_cert, &ca_key);
 
     let cases = [
         ("cn-only-sidecar", None, "cn-only-sidecar"),
@@ -97,6 +76,69 @@ fn issue_client_cert_prints_canonical_allow_list_entries() {
             "stdout exposed a noncanonical allow-list field: {stdout}"
         );
     }
+}
+
+#[test]
+fn issue_client_cert_rejects_a_ca_key_that_does_not_match_the_ca_cert() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("firma.toml");
+    let ca_cert = temp.path().join("client-ca.crt");
+    let ca_key = temp.path().join("client-ca.key");
+    write_client_ca_config(&config, &ca_cert, &ca_key);
+    generate_client_ca(&config, &ca_cert, &ca_key);
+    let other_cert = temp.path().join("other-ca.crt");
+    let other_key = temp.path().join("other-ca.key");
+    generate_client_ca(&config, &other_cert, &other_key);
+    std::fs::copy(&other_key, &ca_key).expect("replace CA key with an unrelated key");
+
+    let cert_out = temp.path().join("client.crt");
+    let output = authority_command(&config)
+        .args(["issue-client-cert", "--cn", "sidecar", "--cert-out"])
+        .arg(&cert_out)
+        .arg("--key-out")
+        .arg(temp.path().join("client.key"))
+        .output()
+        .expect("issue client certificate");
+
+    assert!(
+        !output.status.success(),
+        "issue-client-cert accepted a mismatched CA key; stdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not match"),
+        "stderr does not report the CA mismatch: {stderr}"
+    );
+    assert!(!cert_out.exists(), "a client certificate was written");
+}
+
+fn write_client_ca_config(config: &Path, ca_cert: &Path, ca_key: &Path) {
+    write_section(
+        config,
+        "authority",
+        &AuthorityConfig {
+            mapping_rules_paths: vec!["mapping-rules.toml".into()],
+            tls_cert_path: Some("server.crt".into()),
+            tls_key_path: Some("server.key".into()),
+            mtls_client_ca_cert_path: Some(ca_cert.to_path_buf()),
+            mtls_client_ca_key_path: Some(ca_key.to_path_buf()),
+            authorized_clients_path: Some("authorized_clients.toml".into()),
+            ..AuthorityConfig::default()
+        },
+    )
+    .expect("write config");
+}
+
+fn generate_client_ca(config: &Path, cert_out: &Path, key_out: &Path) {
+    let output = authority_command(config)
+        .args(["generate-client-ca", "--cert-out"])
+        .arg(cert_out)
+        .arg("--key-out")
+        .arg(key_out)
+        .output()
+        .expect("generate client CA");
+    assert_success(&output, "generate-client-ca");
 }
 
 fn authority_command(config: &Path) -> Command {

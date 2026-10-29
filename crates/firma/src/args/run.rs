@@ -5,20 +5,40 @@ use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
 
+use firma_identifiers::AgentHandle;
 use firma_run::backend::BackendKind;
 use firma_run::config::SandboxIdentityMode;
 
 /// Arguments for `firma run`.
 #[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Run the Agent with this handle from the Firma Team Workspace of the
+    /// saved `firma login`. The Control Plane supplies its profile and
+    /// governance, so local governance options cannot be combined with it.
+    #[arg(long, value_name = "HANDLE", conflicts_with = "local_options")]
+    pub agent: Option<AgentHandle>,
+
+    #[command(flatten)]
+    pub local: LocalRunOptions,
+
+    /// Wrapped command and args (use `--` to separate child options).
+    #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
+    pub command: Vec<String>,
+}
+
+/// Options supplied locally rather than by a Firma Team Agent.
+#[derive(Debug, Args)]
+#[group(id = "local_options", multiple = true)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "this type intentionally models independent CLI/runtime flags one-to-one"
 )]
-pub struct RunArgs {
+pub struct LocalRunOptions {
     /// Built-in agent profile (e.g. `generic`, `codex`, `claude-code`) that selects
     /// default backend, identity mode and policy bundle.
-    /// When omitted, falls back to `[run].default_profile` in `firma.toml`,
-    /// then to `generic`.
+    /// When omitted, falls back to `[run].profile` in `firma.toml`, then to
+    /// the profile named by the wrapped command (e.g. `codex`), then to
+    /// `generic`.
     #[arg(long)]
     pub profile: Option<String>,
 
@@ -87,10 +107,6 @@ pub struct RunArgs {
     /// firma.toml as a persistent alternative to this flag.
     #[arg(long, default_value_t = false)]
     pub allow_non_structural: bool,
-
-    /// Wrapped command and args (use `--` to separate child options).
-    #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
-    pub command: Vec<String>,
 }
 
 /// Internal helper args for proxy-bridge process.

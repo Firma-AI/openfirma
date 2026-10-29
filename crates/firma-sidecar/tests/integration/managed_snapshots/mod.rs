@@ -8,6 +8,7 @@ mod fixture;
 mod freshness;
 mod query_names;
 mod recovery;
+mod rejection;
 mod support;
 
 use std::sync::Arc;

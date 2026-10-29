@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use firma_config_utils::NonZeroDuration;
 
+const DEFAULT_TOKEN_TTL: NonZeroDuration = NonZeroDuration::from_static(Duration::from_mins(5));
 const DEFAULT_RETRY_AFTER: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_millis(500));
 
@@ -38,19 +39,16 @@ pub struct LocalExecConfig {
     #[serde(default)]
     pub default_action: DefaultAction,
     /// Approval token time-to-live (default: 5 minutes).
-    #[serde(
-        with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required",
-        default = "default_token_ttl"
-    )]
-    pub token_ttl: Duration,
+    #[serde(default = "default_token_ttl")]
+    pub token_ttl: NonZeroDuration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (default: 500 milliseconds).
     #[serde(default = "default_retry_after")]
     pub retry_after: NonZeroDuration,
 }
 
-const fn default_token_ttl() -> Duration {
-    Duration::from_mins(5)
+const fn default_token_ttl() -> NonZeroDuration {
+    DEFAULT_TOKEN_TTL
 }
 
 const fn default_retry_after() -> NonZeroDuration {

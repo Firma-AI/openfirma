@@ -69,6 +69,7 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     let authenticated = authenticated?;
     let workspace_id = authenticated.connection.workspace_id;
     let membership_id = authenticated.connection.membership_id;
+    let origin = authenticated.connection.origin.clone();
     eprintln!("Saving this login...");
     // Once authentication succeeds, finish the local commit even if Ctrl-C
     // arrives. A blocking save cannot be cancelled after it starts, so tell
@@ -85,6 +86,12 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     .context("could not save the login")?;
     println!("Logged in to Workspace {workspace_id} as Membership {membership_id}.");
     println!("Saved this login to {}.", saved.dir.display());
+    // What to run next: the handle is chosen per Agent, so it stays a placeholder.
+    println!("Next: firma run --agent <agent handle> -- <your agent command>");
+    println!(
+        "Agent handles are on the Agents page at {}.",
+        origin.as_str().trim_end_matches('/')
+    );
     match saved.replaced.backend {
         Backend::None => {}
         Backend::Native => eprintln!("Credential saved in the operating system credential store."),

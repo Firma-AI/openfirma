@@ -88,6 +88,8 @@
 
 ### `DEC-R09`: Complete the repository-owned Homebrew path
 
+> Superseded: `install.sh` no longer invokes Homebrew; it installs only from verified release archives (FIR-955).
+
 - Choice: Before invoking Homebrew, `install.sh` checksum-fetches and atomically installs the matching Linux guest shim under the prefix-stable, version-qualified `$(brew --prefix)/var/openfirma/secret-shims/<version>/<target>/` resource path. Homebrew then exclusively owns keg/package mutation, with no fallible installer validation afterward. Installer smoke covers this branch with a controlled Brew fixture. Direct formula installation remains documented as CLI-only until the external tap packages the resource itself.
 - Rationale and evidence: The repository cannot atomically edit the separately published tap, but it owns the advertised curl installer and can make that default path complete.
 - Consequences and rejected alternatives: Reject silently claiming raw `brew install` provides VZ CLI mediation and reject copying binaries between versioned kegs as rollback. A later release-packaging change may move the checksum-pinned resource into the formula.

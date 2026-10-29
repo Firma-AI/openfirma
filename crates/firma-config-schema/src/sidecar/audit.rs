@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bytesize::ByteSize;
-use firma_config_utils::NonZeroDuration;
+use firma_config_utils::{NonZeroByteSize, NonZeroDuration};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_REPLAY_ACK_TIMEOUT: NonZeroDuration =
@@ -104,8 +104,8 @@ pub struct AuditConfig {
     #[serde(default)]
     pub buffer_path: Option<PathBuf>,
     /// Maximum size of the `grpc` sink's local buffer. Default: 100 MiB.
-    #[serde(with = "crate::utils::byte_size", default = "default_buffer_max_size")]
-    pub buffer_max_size: ByteSize,
+    #[serde(default = "default_buffer_max_size")]
+    pub buffer_max_size: NonZeroByteSize,
     /// How long the `grpc` sink waits for the audit service to acknowledge a
     /// buffer replay. Default: 30 s.
     #[serde(default = "default_replay_ack_timeout")]
@@ -115,8 +115,8 @@ pub struct AuditConfig {
     pub wal_path: Option<PathBuf>,
     /// Maximum pending WAL size. Exhaustion stops the sink without eviction.
     /// Rejection archives require separate operator management.
-    #[serde(with = "crate::utils::byte_size", default = "default_buffer_max_size")]
-    pub wal_max_size: ByteSize,
+    #[serde(default = "default_buffer_max_size")]
+    pub wal_max_size: NonZeroByteSize,
     /// Bound on each `wal` sink delivery attempt: connecting, sending, and
     /// waiting for the audit service to commit. Default: 5 s.
     #[serde(default = "default_wal_request_timeout")]
@@ -154,8 +154,8 @@ impl Default for AuditConfig {
 }
 
 /// 100 MiB default cap on the `grpc` sink's local buffer.
-const fn default_buffer_max_size() -> ByteSize {
-    ByteSize::mib(100)
+const fn default_buffer_max_size() -> NonZeroByteSize {
+    const { NonZeroByteSize::from_static(ByteSize::mib(100)) }
 }
 
 const fn default_replay_ack_timeout() -> NonZeroDuration {

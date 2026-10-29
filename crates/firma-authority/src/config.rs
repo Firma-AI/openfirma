@@ -871,8 +871,6 @@ pub enum ConfigError {
         field: &'static str,
         reason: String,
     },
-    #[error("{field} must be greater than zero")]
-    DurationNotPositive { field: &'static str },
 }
 
 #[cfg(test)]

@@ -66,9 +66,11 @@ pub struct DocInputs<'a> {
     pub authority_listen: &'a str,
     pub authority_url: &'a str,
     /// Trust anchors for a remote Authority. Operator-supplied material that
-    /// no default can reproduce, so these keys are still written; a local
-    /// Authority's anchors are adopted from the state directory instead.
-    pub authority_ca_cert: &'a str,
+    /// no default can reproduce: the public key is always written, the CA only
+    /// when supplied, since a remote Authority with none is verified against
+    /// the platform's trusted roots. A local Authority's anchors are adopted
+    /// from the state directory instead.
+    pub authority_ca_cert: Option<&'a str>,
     pub authority_pub_key: &'a str,
     pub mapping_paths: &'a [String],
     /// Hosts the selected mappings need left uninspected — certificate-pinned
@@ -290,15 +292,21 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         if inputs.has_connect() {
             set_str(auth, "url", inputs.authority_url);
             // A local Authority's anchors sit at their default positions in
-            // the state directory, so nothing is written for them. Any existing
-            // value is removed rather than left: switching a config from remote
-            // to local would otherwise keep pointing the Sidecar at the remote
-            // CA and public key it no longer talks to.
+            // the state directory, so nothing is written for them, and a remote
+            // one without a CA uses the platform's roots. Any existing value is
+            // removed rather than left: switching a config from remote to local,
+            // or to a CA-less remote, would otherwise keep pointing the Sidecar
+            // at a CA it no longer talks to.
+            if let Some(ca_cert) = inputs.authority_ca_cert {
+                auth.insert("ca_cert_paths", value(Array::from_iter([ca_cert])));
+            } else {
+                auth.remove("ca_cert_paths");
+                // Without a CA the switch would leave nothing to trust.
+                auth.remove("disable_platform_roots");
+            }
             if matches!(inputs.mode, Mode::AgentRemote) {
-                set_str(auth, "ca_cert_path", inputs.authority_ca_cert);
                 set_str(auth, "public_key_path", inputs.authority_pub_key);
             } else {
-                auth.remove("ca_cert_path");
                 auth.remove("public_key_path");
                 if inputs.reset_remote_connection {
                     auth.remove("connect_addr");
@@ -312,7 +320,8 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
             }
         } else {
             auth.remove("url");
-            auth.remove("ca_cert_path");
+            auth.remove("ca_cert_paths");
+            auth.remove("disable_platform_roots");
             auth.remove("public_key_path");
         }
         set_str_if_absent(auth, "connect_timeout", "10s");
@@ -411,10 +420,9 @@ fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) ->
         replace_workspace_mount(mounts, inputs.workspace);
     }
 
-    // No `[run.profiles.<name>.capability] requested_actions` is scaffolded: a
-    // run requests every action class by default and the Authority narrows the
-    // grant to what its issuance policy authorizes. Users can set
-    // `requested_actions` by hand as an opt-in extra-restriction knob.
+    // No `[run.profiles.<name>.capability]` action list is scaffolded, and the
+    // format no longer has one: a run requests every action class and the policy
+    // set applied to the agent decides the grant.
     Ok(())
 }
 
@@ -780,7 +788,8 @@ mod tests {
             agent_id: Some(&TEST_AGENT_ID),
             authority_listen: "127.0.0.1:50051",
             authority_url: "http://127.0.0.1:50051",
-            authority_ca_cert: "/state/tls/authority-ca.crt",
+            authority_ca_cert: matches!(mode, Mode::AgentRemote)
+                .then_some("/state/tls/authority-ca.crt"),
             authority_pub_key: "/state/authority.pub",
             mapping_paths: &[],
             mitm_bypass_hosts: &[],
@@ -851,7 +860,7 @@ mod tests {
             Some("http://127.0.0.1:50051")
         );
         // Both anchors are adopted from the state directory in local mode.
-        assert!(auth.get("ca_cert_path").is_none(), "got: {out}");
+        assert!(auth.get("ca_cert_paths").is_none(), "got: {out}");
         assert!(auth.get("public_key_path").is_none(), "got: {out}");
     }
 
@@ -860,7 +869,7 @@ mod tests {
         let existing = "\
 [sidecar.authority]
 url = \"https://stale.example.com:9443\"
-ca_cert_path = \"/old/ca.crt\"
+ca_cert_paths = [\"/old/ca.crt\"]
 public_key_path = \"/old/pub.key\"
 ";
         let inputs = dummy_inputs(&Mode::AgentLocal);
@@ -873,7 +882,7 @@ public_key_path = \"/old/pub.key\"
         );
         // The remote anchors must not survive the switch: the local Authority
         // has its own CA and public key at the default positions.
-        assert!(auth.get("ca_cert_path").is_none(), "got: {out}");
+        assert!(auth.get("ca_cert_paths").is_none(), "got: {out}");
         assert!(auth.get("public_key_path").is_none(), "got: {out}");
     }
 

@@ -14,7 +14,7 @@ use firma_authority::{
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_identifiers::{AgentId, SessionId, TokenId};
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair, SanType,
 };
 
 use crate::args::authority::{
@@ -154,9 +154,9 @@ pub fn run_generate_key(path: &std::path::Path) -> Result<()> {
 /// Returns an error on key generation failure or I/O error.
 pub fn generate_audit_key_if_absent(path: &Path, force: bool) -> Result<()> {
     use p256::ecdsa::SigningKey;
-    use p256::elliptic_curve::rand_core::OsRng;
+    use p256::elliptic_curve::Generate as _;
     use p256::pkcs8::EncodePrivateKey as _;
-    let key = SigningKey::random(&mut OsRng);
+    let key = SigningKey::try_generate().context("failed to generate audit key")?;
     let pem = key
         .to_pkcs8_pem(p256::pkcs8::LineEnding::default())
         .context("failed to encode audit key as PKCS#8 PEM")?;
@@ -226,7 +226,7 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         }
     }
     let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
+        .signed_by(&server_key, &Issuer::from_params(&ca_params, &ca_key))
         .context("failed to sign server certificate with CA")?;
 
     firma_fs::write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
@@ -247,11 +247,14 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
     println!(
         "Material generated here is picked up automatically when it sits in the\n\
          state directory: `tls_cert_path`, `tls_key_path`, and the Sidecar's\n\
-         `ca_cert_path` all default from it. Set them in firma.toml only to pin a\n\
-         different location."
+         `ca_cert_paths` all default from it. The Sidecar uses its `ca_cert_paths`\n\
+         default only for a loopback `authority_url` (and `connect_addr`, if\n\
+         set); for any other host, set `ca_cert_paths` in firma.toml unless the\n\
+         Authority uses a publicly trusted certificate."
     );
     println!("sidecar config:");
     println!("  authority_url = \"https://{}:50051\"", hosts[0]);
+    println!("  ca_cert_paths = [\"{}\"]", ca_cert_path.display());
     Ok(())
 }
 
@@ -289,7 +292,7 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
 }
 
 fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -> Result<()> {
-    use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
+    use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair, SanType};
 
     let mtls = config
         .tls()
@@ -311,16 +314,13 @@ fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -
         .with_context(|| format!("failed to read client CA key {}", ca_key_path.display()))?;
     let ca_key = KeyPair::from_pem(&ca_key_pem).context("failed to parse client CA private key")?;
 
-    // Load CA cert params (for signing authority).
+    // Load the CA certificate as the signing authority.
     let ca_cert_pem = std::fs::read_to_string(ca_cert_path)
         .with_context(|| format!("failed to read client CA cert {}", ca_cert_path.display()))?;
-    let ca_params = CertificateParams::from_ca_cert_pem(&ca_cert_pem)
-        .context("failed to parse client CA certificate")?;
-    let ca_cert = ca_params
-        .self_signed(&ca_key)
-        .context("failed to reconstruct client CA for signing")?;
-    ensure_ca_cert_matches_key(&ca_cert_pem, &ca_cert.pem())
+    ensure_ca_cert_matches_key(&ca_cert_pem, &ca_key)
         .context("configured mtls_client_ca_cert_path does not match mtls_client_ca_key_path")?;
+    let ca = Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key)
+        .context("failed to parse client CA certificate")?;
 
     // Build client cert params.
     let client_key = KeyPair::generate().context("failed to generate client key pair")?;
@@ -332,7 +332,7 @@ fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -
     client_params.distinguished_name = dn;
 
     if let Some(ref san) = args.san {
-        let san_name: rcgen::Ia5String = san
+        let san_name: rcgen::string::Ia5String = san
             .as_str()
             .try_into()
             .with_context(|| format!("invalid DNS SAN value: {san}"))?;
@@ -343,7 +343,7 @@ fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -
     client_params.not_after = days_from_now(args.days)?;
 
     let client_cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
+        .signed_by(&client_key, &ca)
         .context("failed to sign client certificate")?;
 
     // Write cert and key.
@@ -368,23 +368,19 @@ fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -
 
 /// Ensure the configured CA certificate and private key correspond to each other.
 ///
-/// We compare `SubjectPublicKeyInfo` bytes between the configured CA cert and a
-/// certificate rebuilt from the configured CA key.
-fn ensure_ca_cert_matches_key(input_ca_cert_pem: &str, rebuilt_ca_cert_pem: &str) -> Result<()> {
+/// We compare the configured CA cert's `SubjectPublicKeyInfo` bytes with those
+/// of the configured CA key.
+fn ensure_ca_cert_matches_key(input_ca_cert_pem: &str, ca_key: &rcgen::KeyPair) -> Result<()> {
+    use rcgen::PublicKeyData as _;
     use x509_parser::pem::parse_x509_pem;
     use x509_parser::prelude::*;
 
     let (_, input_pem) = parse_x509_pem(input_ca_cert_pem.as_bytes())
         .map_err(|e| anyhow::anyhow!("failed to parse configured CA cert PEM: {e}"))?;
-    let (_, rebuilt_pem) = parse_x509_pem(rebuilt_ca_cert_pem.as_bytes())
-        .map_err(|e| anyhow::anyhow!("failed to parse rebuilt CA cert PEM: {e}"))?;
-
     let (_, input_cert) = X509Certificate::from_der(input_pem.contents.as_slice())
         .map_err(|e| anyhow::anyhow!("failed to decode configured CA cert DER: {e}"))?;
-    let (_, rebuilt_cert) = X509Certificate::from_der(rebuilt_pem.contents.as_slice())
-        .map_err(|e| anyhow::anyhow!("failed to decode rebuilt CA cert DER: {e}"))?;
 
-    if input_cert.tbs_certificate.subject_pki.raw == rebuilt_cert.tbs_certificate.subject_pki.raw {
+    if input_cert.tbs_certificate.subject_pki.raw == ca_key.subject_public_key_info().as_slice() {
         Ok(())
     } else {
         anyhow::bail!("CA cert public key does not match CA private key")

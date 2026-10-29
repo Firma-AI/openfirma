@@ -1,18 +1,20 @@
 //! On-demand access to one saved renewable native login.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use firma_connection_store::{
-    Backend, ConnectionSecret, ConnectionStore, OriginMode, SavedConnection, SecretPolicy,
-    StoreError, WriteGuard,
+    Backend, ConnectionSecret, ConnectionStore, SavedConnection, SecretPolicy, StoreError,
+    WriteGuard,
 };
+use firma_identifiers::WorkspaceId;
 use secrecy::SecretString;
 use thiserror::Error;
+// Tokio's clock, so a test can advance time past the renewal threshold.
+use tokio::time::Instant;
 
-use crate::protocol::RefreshIdempotencyKey;
+use crate::protocol::{IdempotencyKey, is_retryable_status};
 use crate::{
     ControlPlaneOrigin, ControlPlaneOriginError, LoginRefusal, NativeTokenClient, NativeTokenError,
-    OriginValidationMode,
 };
 
 const EARLY_REFRESH: Duration = Duration::from_mins(1);
@@ -20,16 +22,46 @@ const REFRESH_ATTEMPTS: usize = 3;
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const RECOVERY_WINDOW: Duration = Duration::from_secs(90);
 
+/// An access token and the saved connection it was issued for, read under
+/// the same lock that obtained it.
+#[derive(Debug)]
+pub struct SessionAccess {
+    token: SecretString,
+    origin: ControlPlaneOrigin,
+    workspace_id: WorkspaceId,
+}
+
+impl SessionAccess {
+    /// The bearer token; never log or format it.
+    #[must_use]
+    pub const fn token(&self) -> &SecretString {
+        &self.token
+    }
+
+    /// The Control Plane that issued the token, the only one it may reach.
+    #[must_use]
+    pub const fn origin(&self) -> &ControlPlaneOrigin {
+        &self.origin
+    }
+
+    /// The Workspace the token speaks for.
+    #[must_use]
+    pub const fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+}
+
 struct CachedAccess {
-    secret: SecretString,
+    access: SessionAccess,
     refresh_after: Instant,
 }
 
 struct PendingRefresh {
     guard: WriteGuard,
     saved: SavedConnection,
+    origin: ControlPlaneOrigin,
     client: NativeTokenClient,
-    key: RefreshIdempotencyKey,
+    key: IdempotencyKey,
     policy: SecretPolicy,
     started_at: Instant,
     outcome_unknown: bool,
@@ -59,13 +91,19 @@ impl NativeSession {
         }
     }
 
+    /// Drops the cached access token, so the next [`Self::access_token`]
+    /// renews instead of returning a token the Control Plane refused.
+    pub(crate) fn forget_access(&mut self) {
+        self.cached = None;
+    }
+
     /// Returns cached access or rotates and saves the renewable credential.
     ///
     /// # Errors
     /// Returns a redacted storage, origin, transport, or protocol error. If
     /// the process ends after the server consumes R0 but before R1 is saved,
-    /// the caller must run `firma login` again.
-    pub async fn access_token(&mut self) -> Result<&SecretString, SessionError> {
+    /// the caller must run `firma logout`, then `firma login`.
+    pub async fn access_token(&mut self) -> Result<&SessionAccess, SessionError> {
         if self.login_required {
             return Err(SessionError::LoginRequired);
         }
@@ -77,7 +115,7 @@ impl NativeSession {
             return self
                 .cached
                 .as_ref()
-                .map(|cached| &cached.secret)
+                .map(|cached| &cached.access)
                 .ok_or(SessionError::MissingCredential);
         }
         if self.pending.as_ref().is_some_and(|pending| {
@@ -100,6 +138,16 @@ impl NativeSession {
                 if !is_retryable(&source) {
                     self.pending = None;
                     self.login_required = true;
+                    return Err(
+                        if matches!(
+                            source,
+                            NativeTokenError::Refused(LoginRefusal::InvalidGrant)
+                        ) {
+                            SessionError::LoginExpired
+                        } else {
+                            SessionError::RenewalRefused { source }
+                        },
+                    );
                 } else if !pending.outcome_unknown {
                     // A connection failure before dispatch leaves R0 untouched.
                     self.pending = None;
@@ -113,7 +161,7 @@ impl NativeSession {
         self.login_required = true;
         let access = complete_refresh(pending, grant).await?;
         self.login_required = false;
-        Ok(&self.cached.insert(access).secret)
+        Ok(&self.cached.insert(access).access)
     }
 }
 
@@ -125,23 +173,20 @@ async fn prepare_refresh(store: ConnectionStore) -> Result<PendingRefresh, Sessi
     })
     .await??;
     if saved.secret.secret().is_none() {
-        return Err(SessionError::MissingCredential);
+        return Err(SessionError::NotRenewable);
     }
     let policy = match saved.secret.backend() {
         Backend::File => SecretPolicy::AllowPlaintextFile,
         Backend::Native => SecretPolicy::NativeOnly,
         _ => return Err(SessionError::MissingCredential),
     };
-    let mode = match saved.connection.origin_mode {
-        OriginMode::Production => OriginValidationMode::Production,
-        OriginMode::DevelopmentLoopback => OriginValidationMode::DevelopmentLoopback,
-    };
-    let origin = ControlPlaneOrigin::new(saved.connection.origin.clone(), mode)?;
+    let origin = ControlPlaneOrigin::saved(&saved.connection)?;
     let client = NativeTokenClient::new(&origin)?;
-    let key = RefreshIdempotencyKey::generate()?;
+    let key = IdempotencyKey::generate().map_err(NativeTokenError::from)?;
     Ok(PendingRefresh {
         guard,
         saved,
+        origin,
         client,
         key,
         policy,
@@ -157,6 +202,7 @@ async fn complete_refresh(
     let PendingRefresh {
         guard,
         saved,
+        origin,
         policy,
         started_at,
         ..
@@ -164,7 +210,7 @@ async fn complete_refresh(
     let (access, successor, expires_in, workspace_id, membership_id) =
         grant
             .into_session_parts()
-            .map_err(|source| SessionError::RefreshFailed { source })?;
+            .map_err(|source| SessionError::RenewalRefused { source })?;
     if workspace_id != saved.connection.workspace_id
         || membership_id != saved.connection.membership_id
     {
@@ -178,7 +224,11 @@ async fn complete_refresh(
     .await?
     .map_err(|source| SessionError::SaveAfterRefresh { source })?;
     Ok(CachedAccess {
-        secret: access,
+        access: SessionAccess {
+            token: access,
+            origin,
+            workspace_id,
+        },
         refresh_after: started_at + expires_in.saturating_sub(EARLY_REFRESH),
     })
 }
@@ -220,9 +270,7 @@ fn is_retryable(error: &NativeTokenError) -> bool {
         | NativeTokenError::Refused(
             LoginRefusal::TemporarilyUnavailable | LoginRefusal::ServerError,
         ) => true,
-        NativeTokenError::Rejected(status) => {
-            *status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
-        }
+        NativeTokenError::Rejected(status) => is_retryable_status(*status),
         _ => false,
     }
 }
@@ -233,12 +281,21 @@ pub enum SessionError {
     /// This process can no longer safely reuse the saved credential.
     #[error("the renewable login may have been consumed; run `firma logout`, then `firma login`")]
     LoginRequired,
+    /// The Control Plane no longer renews the saved login: it expired, was
+    /// revoked, or its Membership can no longer use it.
+    #[error("the saved login expired or was revoked; run `firma logout`, then `firma login`")]
+    LoginExpired,
     /// No login is saved locally.
     #[error("no login is saved; run `firma login`")]
     MissingConnection,
-    /// The saved login has no renewable credential.
-    #[error("the saved login cannot be renewed; run `firma login`")]
+    /// The saved renewable credential could not be read.
+    #[error("the saved login cannot be renewed; run `firma logout`, then `firma login`")]
     MissingCredential,
+    /// The saved login is access-only: it has no renewable credential.
+    #[error(
+        "this saved login cannot be renewed; managed runs need a renewable login, so run `firma logout`, then `firma login` (not yet available on Windows)"
+    )]
+    NotRenewable,
     /// A blocking store operation could not complete.
     #[error("native login storage task failed")]
     BlockingTask(#[from] tokio::task::JoinError),
@@ -251,8 +308,17 @@ pub enum SessionError {
     /// Token-client setup failed before a refresh request was sent.
     #[error(transparent)]
     TokenSetup(#[from] NativeTokenError),
+    /// The Control Plane answered a refresh in a way no retry can change.
+    #[error("the saved login could not be renewed; run `firma logout`, then `firma login`")]
+    RenewalRefused {
+        /// Redacted protocol failure.
+        #[source]
+        source: NativeTokenError,
+    },
     /// A refresh request was sent but did not yield a usable successor.
-    #[error("native refresh failed")]
+    #[error(
+        "the renewal outcome may be unknown; run `firma logout`, then `firma login` before retrying in a new process"
+    )]
     RefreshFailed {
         /// Redacted protocol or transport failure.
         #[source]
@@ -266,6 +332,8 @@ pub enum SessionError {
         source: StoreError,
     },
     /// The refresh response named a different saved identity.
-    #[error("native refresh returned a different Workspace or Membership")]
+    #[error(
+        "the renewed login names a different Workspace or Membership; run `firma logout`, then `firma login`"
+    )]
     IdentityMismatch,
 }

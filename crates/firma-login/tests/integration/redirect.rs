@@ -5,8 +5,9 @@ use std::{
 };
 
 use firma_login::{
-    AuthorizationAttempt, CallbackTimeoutError, CallbackWaitTimeout, LoginRefusal,
-    LoopbackCallbackError, PendingAuthorizationAttempt,
+    AuthorizationAttempt, CallbackLanding, CallbackTimeoutError, CallbackWaitTimeout,
+    ControlPlaneOrigin, LANDING_PATH, LoginRefusal, LoopbackCallbackError, OriginValidationMode,
+    PendingAuthorizationAttempt,
 };
 use secrecy::ExposeSecret as _;
 use tokio::{
@@ -35,6 +36,14 @@ fn callback_address(attempt: &PendingAuthorizationAttempt) -> Result<SocketAddr,
         .ok_or_else(|| std::io::Error::other("bound callback URI has no port"))?;
 
     Ok(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+}
+
+fn landing() -> Result<CallbackLanding, Box<dyn std::error::Error>> {
+    let origin = ControlPlaneOrigin::new(
+        url::Url::parse("https://team.example.com")?,
+        OriginValidationMode::Production,
+    )?;
+    Ok(CallbackLanding::on(&origin))
 }
 
 fn callback_timeout() -> Result<CallbackWaitTimeout, CallbackTimeoutError> {
@@ -132,7 +141,7 @@ async fn returns_one_valid_callback_with_its_matching_verifier()
     );
     let client = tokio::spawn(send_request(address, request));
 
-    let completed = attempt.receive(callback_timeout()?).await?;
+    let completed = attempt.receive(callback_timeout()?, landing()?).await?;
     let response = client.await??;
 
     assert_eq!(
@@ -143,10 +152,10 @@ async fn returns_one_valid_callback_with_its_matching_verifier()
         completed.pkce_verifier().as_secret().expose_secret().len(),
         43
     );
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(response.ends_with(
-        "Authorization received. You can close this window and return to the terminal."
-    ));
+    assert!(
+        response.starts_with("HTTP/1.1 303 See Other\r\n"),
+        "{response}"
+    );
     assert!(TcpStream::connect(address).await.is_err());
     Ok(())
 }
@@ -161,7 +170,7 @@ async fn treats_a_matching_oauth_error_as_terminal() -> Result<(), Box<dyn std::
     );
     let client = tokio::spawn(send_request(address, request));
 
-    let error = attempt.receive(callback_timeout()?).await.err();
+    let error = attempt.receive(callback_timeout()?, landing()?).await.err();
     let response = client.await??;
 
     assert!(matches!(
@@ -170,10 +179,10 @@ async fn treats_a_matching_oauth_error_as_terminal() -> Result<(), Box<dyn std::
             LoginRefusal::AccessDenied
         ))
     ));
-    assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
-    assert!(response.ends_with(
-        "Authorization was not granted. You can close this window and return to the terminal."
-    ));
+    assert!(
+        response.starts_with("HTTP/1.1 303 See Other\r\n"),
+        "{response}"
+    );
     assert!(TcpStream::connect(address).await.is_err());
     Ok(())
 }
@@ -183,7 +192,7 @@ async fn an_invalid_state_does_not_consume_the_attempt() -> Result<(), Box<dyn s
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver = tokio::spawn(attempt.receive(callback_timeout()?));
+    let receiver = tokio::spawn(attempt.receive(callback_timeout()?, landing()?));
 
     let invalid = send_request(
         address,
@@ -214,7 +223,7 @@ async fn an_invalid_state_does_not_consume_the_attempt() -> Result<(), Box<dyn s
 
     assert!(invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     assert!(same_length.starts_with("HTTP/1.1 400 Bad Request\r\n"));
-    assert!(valid.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(valid.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         "authorization-code"
@@ -228,7 +237,7 @@ async fn invalid_host_shapes_do_not_consume_the_attempt() -> Result<(), Box<dyn 
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver = tokio::spawn(attempt.receive(callback_timeout()?));
+    let receiver = tokio::spawn(attempt.receive(callback_timeout()?, landing()?));
     let path = format!("/callback?code=authorization-code&state={state}");
     let mut non_utf8_host = format!("GET {path} HTTP/1.1\r\nHost: ").into_bytes();
     non_utf8_host.push(0xff);
@@ -250,7 +259,7 @@ async fn invalid_host_shapes_do_not_consume_the_attempt() -> Result<(), Box<dyn 
 
     for request in invalid_requests {
         let response = send_request(address, request).await?;
-        assert!(!response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(!response.starts_with("HTTP/1.1 303 See Other\r\n"));
     }
 
     let response = send_request(
@@ -263,7 +272,7 @@ async fn invalid_host_shapes_do_not_consume_the_attempt() -> Result<(), Box<dyn 
     .await?;
     let completed = receiver.await??;
 
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         "authorization-code"
@@ -277,7 +286,7 @@ async fn incorrect_routes_and_methods_do_not_consume_the_attempt()
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver = tokio::spawn(attempt.receive(callback_timeout()?));
+    let receiver = tokio::spawn(attempt.receive(callback_timeout()?, landing()?));
 
     let route_response = send_request(
         address,
@@ -309,7 +318,7 @@ async fn incorrect_routes_and_methods_do_not_consume_the_attempt()
 
     assert!(route_response.starts_with("HTTP/1.1 404 Not Found\r\n"));
     assert!(method_response.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
-    assert!(valid_response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(valid_response.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         "authorization-code"
@@ -323,7 +332,7 @@ async fn invalid_query_parameters_do_not_consume_the_attempt()
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver = tokio::spawn(attempt.receive(callback_timeout()?));
+    let receiver = tokio::spawn(attempt.receive(callback_timeout()?, landing()?));
 
     let invalid_response = send_request(
         address,
@@ -356,7 +365,7 @@ async fn invalid_query_parameters_do_not_consume_the_attempt()
 
     assert!(invalid_response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     assert!(oversized_response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
-    assert!(valid_response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(valid_response.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         code
@@ -378,10 +387,10 @@ async fn accepts_exactly_the_configured_header_limit() -> Result<(), Box<dyn std
     );
     let client = tokio::spawn(send_request(address, request));
 
-    let completed = attempt.receive(callback_timeout()?).await?;
+    let completed = attempt.receive(callback_timeout()?, landing()?).await?;
     let response = client.await??;
 
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         "authorization-code"
@@ -394,8 +403,10 @@ async fn too_many_headers_do_not_consume_the_attempt() -> Result<(), Box<dyn std
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver =
-        tokio::spawn(attempt.receive(CallbackWaitTimeout::try_from(PARSER_LIMIT_TEST_TIMEOUT)?));
+    let receiver = tokio::spawn(attempt.receive(
+        CallbackWaitTimeout::try_from(PARSER_LIMIT_TEST_TIMEOUT)?,
+        landing()?,
+    ));
 
     let rejected = send_request(
         address,
@@ -416,8 +427,8 @@ async fn too_many_headers_do_not_consume_the_attempt() -> Result<(), Box<dyn std
     .await?;
     let completed = receiver.await??;
 
-    assert!(!rejected.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(accepted.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(!rejected.starts_with("HTTP/1.1 303 See Other\r\n"));
+    assert!(accepted.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         "authorization-code"
@@ -431,8 +442,10 @@ async fn incomplete_buffer_at_the_limit_does_not_consume_the_attempt()
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver =
-        tokio::spawn(attempt.receive(CallbackWaitTimeout::try_from(PARSER_LIMIT_TEST_TIMEOUT)?));
+    let receiver = tokio::spawn(attempt.receive(
+        CallbackWaitTimeout::try_from(PARSER_LIMIT_TEST_TIMEOUT)?,
+        landing()?,
+    ));
     tokio::task::yield_now().await;
 
     send_request_and_wait_for_close(
@@ -453,7 +466,7 @@ async fn incomplete_buffer_at_the_limit_does_not_consume_the_attempt()
     .await?;
     let completed = receiver.await??;
 
-    assert!(accepted.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(accepted.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         "authorization-code"
@@ -467,8 +480,10 @@ async fn header_read_timeout_does_not_consume_the_attempt() -> Result<(), Box<dy
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver =
-        tokio::spawn(attempt.receive(CallbackWaitTimeout::try_from(HEADER_TIMEOUT_TEST_TIMEOUT)?));
+    let receiver = tokio::spawn(attempt.receive(
+        CallbackWaitTimeout::try_from(HEADER_TIMEOUT_TEST_TIMEOUT)?,
+        landing()?,
+    ));
     tokio::task::yield_now().await;
 
     let mut stalled = TcpStream::connect(address).await?;
@@ -498,7 +513,7 @@ async fn header_read_timeout_does_not_consume_the_attempt() -> Result<(), Box<dy
     .await?;
     let completed = receiver.await??;
 
-    assert!(accepted.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(accepted.starts_with("HTTP/1.1 303 See Other\r\n"));
     assert_eq!(
         completed.authorization_code().as_secret().expose_secret(),
         "authorization-code"
@@ -521,7 +536,7 @@ async fn concurrent_terminal_callbacks_produce_one_completed_attempt()
         callback_request(&format!("code=second&state={state}"), address.port()),
     ));
 
-    let completed = attempt.receive(callback_timeout()?).await?;
+    let completed = attempt.receive(callback_timeout()?, landing()?).await?;
     let _ = first.await?;
     let _ = second.await?;
 
@@ -542,7 +557,7 @@ async fn a_stalled_peer_does_not_extend_the_overall_deadline()
     // this connection after the paused-time server task starts can let Tokio
     // advance directly to the callback deadline before the connection completes.
     let mut stalled = TcpStream::connect(address).await?;
-    let receiver = tokio::spawn(attempt.receive(timeout));
+    let receiver = tokio::spawn(attempt.receive(timeout, landing()?));
     tokio::task::yield_now().await;
 
     let write_result = stalled.write_all(b"GET /callback?").await;
@@ -575,7 +590,7 @@ async fn a_callback_cannot_arrive_after_the_deadline() -> Result<(), Box<dyn std
     let attempt = pending_attempt()?;
     let address = callback_address(&attempt)?;
     let state = attempt.state_parameter().to_owned();
-    let receiver = tokio::spawn(attempt.receive(callback_timeout()?));
+    let receiver = tokio::spawn(attempt.receive(callback_timeout()?, landing()?));
     tokio::task::yield_now().await;
     tokio::time::advance(CALLBACK_TIMEOUT).await;
 
@@ -594,7 +609,7 @@ async fn a_callback_cannot_arrive_after_the_deadline() -> Result<(), Box<dyn std
         Some(LoopbackCallbackError::CallbackFailed(_))
     ));
     if let Ok(response) = callback {
-        assert!(!response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(!response.starts_with("HTTP/1.1 303 See Other\r\n"));
     }
     assert!(TcpStream::connect(address).await.is_err());
     Ok(())
@@ -606,4 +621,45 @@ fn rejects_a_zero_callback_timeout() {
         CallbackWaitTimeout::try_from(Duration::ZERO),
         Err(CallbackTimeoutError::Zero)
     ));
+}
+
+#[tokio::test]
+async fn a_callback_sends_the_browser_to_the_control_plane_without_a_referrer()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (query, outcome, refusal) in [
+        ("code=opaque", "approved", false),
+        ("error=access_denied", "denied", true),
+    ] {
+        let attempt = pending_attempt()?;
+        let address = callback_address(&attempt)?;
+        let request = callback_request(
+            &format!("{query}&state={}", attempt.state_parameter()),
+            address.port(),
+        );
+        let client = tokio::spawn(send_request(address, request));
+
+        let result = attempt.receive(callback_timeout()?, landing()?).await;
+        let response = client.await??;
+
+        assert_eq!(result.is_err(), refusal, "{query}");
+        assert!(
+            response.starts_with("HTTP/1.1 303 See Other\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains(&format!(
+                "\r\nlocation: https://team.example.com{LANDING_PATH}?outcome={outcome}\r\n"
+            )),
+            "{response}"
+        );
+        assert!(
+            response.contains("\r\nreferrer-policy: no-referrer\r\n"),
+            "{response}"
+        );
+        assert!(
+            !response.contains("opaque"),
+            "the one-time code must not reach the Location: {response}"
+        );
+    }
+    Ok(())
 }

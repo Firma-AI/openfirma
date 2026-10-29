@@ -163,9 +163,12 @@ fn bounded_read_to_end<R: Read>(
     max_decompressed_bytes: NonZeroUsize,
 ) -> Result<Vec<u8>, BodyEncodingError> {
     let max_decompressed_bytes = max_decompressed_bytes.get();
+    // One byte past the limit tells an exact fit from an overflow.
+    let read_limit =
+        u64::try_from(max_decompressed_bytes).map_or(u64::MAX, |max| max.saturating_add(1));
     let mut out = Vec::new();
     reader
-        .take(max_decompressed_bytes as u64 + 1)
+        .take(read_limit)
         .read_to_end(&mut out)
         .map_err(BodyEncodingError::Decode)?;
     if out.len() > max_decompressed_bytes {

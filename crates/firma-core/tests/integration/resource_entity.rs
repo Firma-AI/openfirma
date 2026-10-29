@@ -7,7 +7,10 @@ fn resource_entity_populates_id_host_and_path() {
         FirmaEntityUid::resource_entity("api.openai.com/v1/models").expect("resource entity");
 
     assert_eq!(entity.uid().type_name().to_string(), "Firma::Resource");
-    assert_eq!(entity.uid().id().as_ref(), "api.openai.com/v1/models");
+    assert_eq!(
+        AsRef::<str>::as_ref(entity.uid().id()),
+        "api.openai.com/v1/models"
+    );
     assert_eq!(
         entity.attr("id").expect("id attr").expect("id value"),
         EvalResult::String("api.openai.com/v1/models".to_string())

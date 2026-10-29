@@ -1,8 +1,8 @@
 //! Runner for `firma config` — scaffold a new agent config directory.
 
 mod doc;
+mod remote_authority;
 
-use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -17,14 +17,17 @@ use firma_config_loader::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 use firma_fs::create_private_dir_all;
 use firma_identifiers::AgentId;
 use firma_runtime_state::RuntimeLayout;
+use remote_authority::{collect_remote_connect_inputs, same_authority_endpoint};
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
     listen: String,
     /// URL written to `[sidecar.authority].url`.
     connect_url: String,
-    /// CA cert path written to `[sidecar.authority].ca_cert_path`.
-    connect_ca_cert: String,
+    /// CA cert path written as `[sidecar.authority].ca_cert_paths = [path]`. `None`
+    /// writes none: a remote Authority is then verified against the platform's
+    /// trusted roots, and a local one against the state directory's CA.
+    connect_ca_cert: Option<String>,
     /// Public key path written to `[sidecar.authority].public_key_path`.
     connect_pub_key: String,
 }
@@ -366,7 +369,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         agent_id: inputs.agent_id.as_ref(),
         authority_listen: &inputs.authority.listen,
         authority_url: &inputs.authority.connect_url,
-        authority_ca_cert: &inputs.authority.connect_ca_cert,
+        authority_ca_cert: inputs.authority.connect_ca_cert.as_deref(),
         authority_pub_key: &inputs.authority.connect_pub_key,
         mapping_paths: &mapping_paths,
         mitm_bypass_hosts: &mitm_bypass_hosts,
@@ -499,18 +502,6 @@ fn has_server(inputs: &CollectedInputs) -> bool {
     inputs.keep_local_authority || matches!(inputs.mode, Mode::AgentLocal | Mode::Authority)
 }
 
-/// Preserve operator routing when only the URL spelling or scheme changes.
-/// Compare parsed hosts and effective ports so equivalent IPv6 spellings and
-/// implicit default ports do not discard a same-endpoint route or mTLS identity.
-fn same_authority_endpoint(left: &str, right: &str) -> bool {
-    let (Ok(left), Ok(right)) = (url::Url::parse(left), url::Url::parse(right)) else {
-        return false;
-    };
-    left.host().is_some()
-        && left.host() == right.host()
-        && left.port_or_known_default() == right.port_or_known_default()
-}
-
 /// Decide whether to retain the existing local `[authority]` section
 /// when the operator is switching to `agent-remote`.
 ///
@@ -613,7 +604,22 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
         has_server.then(|| firma_config_schema::authority::AuthorityConfig::default().listen_addr)
     });
     defaults.authority_url = get_str(&value, &["sidecar", "authority", "url"]);
-    defaults.authority_ca_cert = get_path(&value, &["sidecar", "authority", "ca_cert_path"]);
+    // `firma config` writes a single CA; a hand-edited list is offered by its
+    // first entry.
+    let ca_cert_paths = ["sidecar", "authority", "ca_cert_paths"]
+        .iter()
+        .try_fold(&value, |current, key| current.get(key))
+        .and_then(toml::Value::as_array);
+    defaults.authority_ca_cert = ca_cert_paths
+        .and_then(|paths| paths.first())
+        .and_then(toml::Value::as_str)
+        .map(PathBuf::from);
+    if let Some(paths) = ca_cert_paths.filter(|paths| paths.len() > 1) {
+        crate::output::warn(format!(
+            "[sidecar.authority].ca_cert_paths lists {} CAs; firma config writes a single CA and drops the others",
+            paths.len()
+        ));
+    }
     defaults.authority_pub_key = get_path(&value, &["sidecar", "authority", "public_key_path"]);
     defaults.posture = posture_from_policy_dir(config_dir);
     defaults.mappings = mappings_from_rules_paths(&value, config_dir);
@@ -775,101 +781,18 @@ fn workspace_from_firma_toml(value: &toml::Value) -> Option<PathBuf> {
     None
 }
 
-fn collect_local_connect_inputs(listen: &str, state_dir: &Path) -> (String, String, String) {
+fn collect_local_connect_inputs(
+    listen: &str,
+    state_dir: &Path,
+) -> (String, Option<String>, String) {
     let url = format!("https://{listen}");
-    let layout = RuntimeLayout::from_root(state_dir);
-    let tls_ca = layout
-        .authority_tls_ca_certificate()
+    let pub_key = RuntimeLayout::from_root(state_dir)
+        .authority_public_key()
         .to_string_lossy()
         .into_owned();
-    let pub_key = layout.authority_public_key().to_string_lossy().into_owned();
-    (url, tls_ca, pub_key)
-}
-
-struct RemoteAuthorityField<'a> {
-    value: Option<Cow<'a, str>>,
-    existing: Option<Cow<'a, str>>,
-    interactive: bool,
-    theme: &'a ColorfulTheme,
-    prompt: &'a str,
-    context: &'a str,
-    flag: &'a str,
-    configured_name: &'a str,
-}
-
-fn collect_required_remote_authority_field(field: RemoteAuthorityField<'_>) -> Result<String> {
-    let value = match field.value {
-        Some(value) => value.to_string(),
-        None if field.existing.is_some() && !field.interactive => {
-            field.existing.unwrap_or_default().to_string()
-        }
-        None if field.interactive => dialoguer::Input::with_theme(field.theme)
-            .with_prompt(field.prompt)
-            .default(field.existing.unwrap_or_default().to_string())
-            .interact_text()
-            .with_context(|| field.context.to_string())?,
-        None => String::new(),
-    };
-
-    if value.trim().is_empty() {
-        anyhow::bail!(
-            "{} is required when --mode agent-remote and no existing remote {} is configured",
-            field.flag,
-            field.configured_name
-        );
-    }
-    Ok(value)
-}
-
-fn collect_remote_connect_inputs(
-    args: &InitArgs,
-    existing: &ExistingConfigDefaults,
-    interactive: bool,
-    theme: &ColorfulTheme,
-) -> Result<(String, String, String)> {
-    let url = collect_required_remote_authority_field(RemoteAuthorityField {
-        value: args.authority_url.as_deref().map(Cow::Borrowed),
-        existing: existing.authority_url.as_deref().map(Cow::Borrowed),
-        interactive,
-        theme,
-        prompt: "Authority URL",
-        context: "authority URL prompt",
-        flag: "--authority-url",
-        configured_name: "URL",
-    })?;
-    let ca = collect_required_remote_authority_field(RemoteAuthorityField {
-        value: args
-            .authority_ca_cert
-            .as_deref()
-            .map(|p| p.to_string_lossy()),
-        existing: existing
-            .authority_ca_cert
-            .as_ref()
-            .map(|p| p.to_string_lossy()),
-        interactive,
-        theme,
-        prompt: "Path to authority CA certificate (PEM)",
-        context: "authority CA cert prompt",
-        flag: "--authority-ca-cert",
-        configured_name: "CA certificate",
-    })?;
-    let pub_key = collect_required_remote_authority_field(RemoteAuthorityField {
-        value: args
-            .authority_pub_key
-            .as_deref()
-            .map(|p| p.to_string_lossy()),
-        existing: existing
-            .authority_pub_key
-            .as_ref()
-            .map(|p| p.to_string_lossy()),
-        interactive,
-        theme,
-        prompt: "Path to authority public key",
-        context: "authority public key prompt",
-        flag: "--authority-pub-key",
-        configured_name: "public key",
-    })?;
-    Ok((url, ca, pub_key))
+    // A local Authority's CA is adopted from the state directory, so none is
+    // written.
+    (url, None, pub_key)
 }
 
 fn collect_authority_inputs(
@@ -911,7 +834,7 @@ fn collect_authority_inputs(
     let (connect_url, connect_ca_cert, connect_pub_key) = match mode {
         Mode::AgentLocal => collect_local_connect_inputs(&listen, state_dir),
         Mode::AgentRemote => collect_remote_connect_inputs(args, existing, interactive, theme)?,
-        Mode::Authority => (String::new(), String::new(), String::new()),
+        Mode::Authority => (String::new(), None, String::new()),
     };
 
     Ok(AuthorityInputs {
@@ -1400,21 +1323,15 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     let authority_layout = RuntimeLayout::from_root(&plan.state_dir);
     let (mode, authority) = match &plan.authority {
         AuthorityShape::Local => {
-            let connect_url = format!("https://{}", plan.authority_listen);
-            let connect_ca_cert = authority_layout
-                .authority_tls_ca_certificate()
-                .to_string_lossy()
-                .into_owned();
+            let (connect_url, connect_ca_cert, connect_pub_key) =
+                collect_local_connect_inputs(&plan.authority_listen, &plan.state_dir);
             (
                 Mode::AgentLocal,
                 AuthorityInputs {
                     listen: plan.authority_listen.clone(),
                     connect_url,
                     connect_ca_cert,
-                    connect_pub_key: authority_layout
-                        .authority_public_key()
-                        .to_string_lossy()
-                        .into_owned(),
+                    connect_pub_key,
                 },
             )
         }
@@ -1587,7 +1504,7 @@ mod tests {
             authority: AuthorityInputs {
                 listen: "127.0.0.1:50051".to_string(),
                 connect_url: "http://127.0.0.1:50051".to_string(),
-                connect_ca_cert: "/tmp/test-state/tls/authority-ca.crt".to_string(),
+                connect_ca_cert: None,
                 connect_pub_key: "/tmp/test-state/authority.pub".to_string(),
             },
             sidecar: SidecarInputs {
@@ -1614,7 +1531,7 @@ mod tests {
             authority: AuthorityInputs {
                 listen: "127.0.0.1:50051".to_string(),
                 connect_url: "http://127.0.0.1:50051".to_string(),
-                connect_ca_cert: "/tmp/test-state/tls/authority-ca.crt".to_string(),
+                connect_ca_cert: None,
                 connect_pub_key: "/tmp/test-state/authority.pub".to_string(),
             },
             sidecar: SidecarInputs {
@@ -2219,10 +2136,10 @@ mod tests {
     }
 
     #[test]
-    fn run_profile_does_not_scaffold_capability_requested_actions() {
-        // A run requests all action classes by default and the Authority narrows
-        // the grant, so `firma config` no longer writes a posture-derived
-        // `requested_actions` list into the profile regardless of posture.
+    fn run_profile_does_not_scaffold_capability_table() {
+        // A run requests all action classes and the agent's policy set decides
+        // the grant, so `firma config` writes no `[capability]` table into the
+        // profile regardless of posture.
         for posture in Posture::iter() {
             let files = make_files(&posture, &[], &[]);
             let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();

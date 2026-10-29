@@ -11,6 +11,7 @@ use firma_protobuf::v1::{
 };
 use firma_runtime_state::RuntimeLayout;
 use firma_sidecar::authority_client::AuthorityClientHandle;
+use firma_sidecar::authority_tls::AuthorityTls;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::pipeline::RawRequest;
 use firma_sidecar::startup::{PipelineRuntime, build_pipeline_runtime, spawn_authority_client};
@@ -65,13 +66,21 @@ impl AuthorityService for Service {
         Ok(Response::new(ReceiverStream::new(receiver)))
     }
 
-    type WatchRevocationsStream = tokio_stream::Pending<Result<v1::RevocationEvent, Status>>;
+    type WatchRevocationsStream = ReceiverStream<Result<v1::RevocationSet, Status>>;
 
+    /// Opens with the empty set every connection is promised, then holds the
+    /// stream open: without it the Sidecar never becomes revocation-ready.
     async fn watch_revocations(
         &self,
         _: Request<v1::WatchRevocationsRequest>,
     ) -> Result<Response<Self::WatchRevocationsStream>, Status> {
-        Ok(Response::new(tokio_stream::pending()))
+        let (tx, rx) = mpsc::channel(1);
+        tokio::spawn(async move {
+            if tx.send(Ok(v1::RevocationSet::default())).await.is_ok() {
+                tx.closed().await;
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 
@@ -85,8 +94,36 @@ pub(super) struct Harness {
     server: tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
 }
 
+/// The environment variable that holds the runtime credential of
+/// [`Harness::with_runtime_credential`].
+const RUNTIME_CREDENTIAL_ENV: &str = "FIRMA_SNAPSHOT_TEST_RUNTIME_CREDENTIAL";
+
 impl Harness {
     pub fn new(credentialed: bool) -> anyhow::Result<Self> {
+        let credentials = if credentialed {
+            "[authority.credentials]\nworkspace_id = 'workspace-test'\nsidecar_id = 'sidecar-test'\npre_shared_key_path = 'sidecar.psk'\n"
+        } else {
+            ""
+        };
+        Self::with_credentials(credentials)
+    }
+
+    /// A Sidecar authenticating as one run with a runtime credential.
+    pub fn with_runtime_credential() -> anyhow::Result<Self> {
+        // Each nextest test is its own process; the name is this suite's
+        // alone, so no other reader races the write.
+        #[expect(unsafe_code, reason = "test-private variable in a single-test process")]
+        // SAFETY: nothing else in this process reads or writes the
+        // environment concurrently with this single-threaded setup.
+        unsafe {
+            std::env::set_var(RUNTIME_CREDENTIAL_ENV, "runtime-credential-value");
+        }
+        Self::with_credentials(&format!(
+            "[authority.credentials]\nworkspace_id = 'workspace-test'\nsidecar_id = 'sidecar-test'\nrun_id = 'run_01j0000000e008000000000001'\nruntime_credential_env = '{RUNTIME_CREDENTIAL_ENV}'\n"
+        ))
+    }
+
+    fn with_credentials(credentials: &str) -> anyhow::Result<Self> {
         let root = tempfile::tempdir()?;
         let layout = RuntimeLayout::from_root(root.path().join("state"));
         std::fs::create_dir_all(layout.capabilities_dir())?;
@@ -128,11 +165,6 @@ impl Harness {
                 .serve_with_incoming_shutdown(incoming, server_cancel.cancelled())
                 .await
         });
-        let credentials = if credentialed {
-            "[authority.credentials]\nworkspace_id = 'workspace-test'\nsidecar_id = 'sidecar-test'\npre_shared_key_path = 'sidecar.psk'\n"
-        } else {
-            ""
-        };
         let path = root.path().join("firma.toml");
         std::fs::write(
             &path,
@@ -217,7 +249,13 @@ signing_key_path = "audit.pem"
         let (sender, receiver) = mpsc::channel(16);
         let builder = load_audit_event_builder(&self.config.audit)?;
         let exit = CancellationToken::new();
-        let sink = spawn_audit_sink(&self.config, receiver, builder, exit.clone())?;
+        let sink = spawn_audit_sink(
+            &self.config,
+            &AuthorityTls::read(&self.config.authority)?,
+            receiver,
+            builder,
+            exit.clone(),
+        )?;
         for payload in payloads {
             sender.send(payload).await?;
         }
@@ -228,6 +266,13 @@ signing_key_path = "audit.pem"
             .lines()
             .map(|line| serde_json::from_str(line).map_err(Into::into))
             .collect()
+    }
+
+    /// Whether the Sidecar asked to shut down within `within`.
+    pub async fn shuts_down_within(&self, within: Duration) -> bool {
+        tokio::time::timeout(within, self.cancel.cancelled())
+            .await
+            .is_ok()
     }
 
     fn audit_path(&self) -> PathBuf {

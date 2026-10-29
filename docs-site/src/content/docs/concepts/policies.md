@@ -45,6 +45,28 @@ Cedar's default is **deny** — if no policy explicitly permits an action, it's 
 
 The schema is shared between Authority and Sidecar — `examples/demo/policies/schema.cedarschema` is the source of truth. The 15 base FEP action classes plus extensions are declared there. If you reference a class that isn't in the schema, Cedar refuses to compile the policy at all — a malformed bundle never reaches the hot path.
 
+### Cedar version
+
+OpenFirma parses, validates, and evaluates policies with Cedar 4.14. If you
+set `[authority].schema_path` to your own schema or write policies that relied
+on Cedar 3 leniency, check them against these Cedar 4 rules. Input that breaks
+them fails to load, and the Authority or Sidecar fails closed:
+
+- Every `appliesTo` block lists both `principal` and `resource`, and neither
+  list is empty.
+- Names containing `__cedar` are reserved.
+- A name cannot be defined both in the empty namespace and in a named one.
+- Strict validation rejects comparisons between records that differ in whether
+  an attribute is required or optional.
+
+Cedar 4 strict validation also accepts an `in` test between entity expressions
+whose types the schema hierarchy can never relate, such as
+`when { principal in resource }`, which Cedar 3 rejected. Cedar 4 treats that
+test as always `false`. When this makes the whole policy impossible, the
+Authority logs a `cedar policy validation warning`; otherwise the policy loads
+without one. A policy disabled through Policy Control
+(`when { false }`) logs the same warning, by design.
+
 ## The runtime context
 
 When Stage 2 evaluates a runtime policy, it builds a Cedar context with these required fields (see `crates/firma-sidecar/src/enforcement/constraint_enforcement.rs` and `schema.cedarschema`):

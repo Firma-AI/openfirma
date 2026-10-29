@@ -1,6 +1,7 @@
 //! Typed, security-oriented primitives for the `OpenFirma` native login flow.
 
 mod browser;
+mod control_plane;
 mod entropy;
 mod origin;
 mod pkce;
@@ -14,6 +15,9 @@ mod session;
 const MAX_AUTHORIZATION_CODE_BYTES: usize = 512;
 
 pub use browser::print_and_open;
+pub use control_plane::{
+    CloseOutcome, ControlPlaneClient, ControlPlaneError, RecordedOutcome, ResolvedAgent, StartedRun,
+};
 pub use entropy::EntropyError;
 pub use origin::{ControlPlaneOrigin, ControlPlaneOriginError, OriginValidationMode};
 pub use pkce::{AuthorizationAttempt, AuthorizationState, PkceChallenge, PkceVerifier};
@@ -22,9 +26,9 @@ pub use protocol::{
     NativeAccessGrant, NativeTokenClient, NativeTokenError, TerminalAuthorizationRequest,
 };
 pub use redirect::{
-    AuthorizationCode, CallbackTimeoutError, CallbackWaitTimeout, CompletedAuthorizationAttempt,
-    LoopbackCallbackError, LoopbackCallbackListenerError, LoopbackRedirectUri,
-    PendingAuthorizationAttempt,
+    AuthorizationCode, CallbackLanding, CallbackTimeoutError, CallbackWaitTimeout,
+    CompletedAuthorizationAttempt, LANDING_PATH, LoopbackCallbackError,
+    LoopbackCallbackListenerError, LoopbackRedirectUri, PendingAuthorizationAttempt,
 };
 pub use refusal::LoginRefusal;
-pub use session::{NativeSession, SessionError};
+pub use session::{NativeSession, SessionAccess, SessionError};

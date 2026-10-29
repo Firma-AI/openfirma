@@ -34,6 +34,7 @@
 pub mod audit;
 pub mod authority_client;
 pub mod authority_credentials;
+pub mod authority_tls;
 pub(crate) mod backoff;
 pub mod body_encoding;
 pub mod composio;

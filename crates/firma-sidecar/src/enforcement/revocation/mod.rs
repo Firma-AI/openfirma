@@ -29,13 +29,36 @@ use self::bloom::AtomicBloom;
 use self::lru::LruSet;
 use self::metrics::{RevocationMetrics, RevocationMetricsSnapshot};
 
+/// A bloom filter's target false positive rate, in the open interval
+/// `(0.0, 1.0)`.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct FalsePositiveRate(f64);
+
+impl FalsePositiveRate {
+    /// Returns `None` unless `0.0 < rate < 1.0`; NaN is rejected.
+    #[must_use]
+    pub(crate) const fn new(rate: f64) -> Option<Self> {
+        if rate > 0.0 && rate < 1.0 {
+            Some(Self(rate))
+        } else {
+            None
+        }
+    }
+
+    /// The rate as a probability.
+    #[must_use]
+    pub(crate) const fn get(self) -> f64 {
+        self.0
+    }
+}
+
 /// Configuration for [`BloomLruRevocationStore`].
 #[derive(Debug, Clone, Copy)]
 pub struct RevocationConfig {
     /// Expected distinct revoked tokens the bloom is sized for.
     pub(crate) capacity: NonZeroUsize,
-    /// Target false positive rate. Must be `0.0 < fpr < 1.0`.
-    pub(crate) fpr: f64,
+    /// Target false positive rate.
+    pub(crate) fpr: FalsePositiveRate,
     /// Capacity of the confirmed-positive LRU cache.
     pub(crate) lru_capacity: NonZeroUsize,
 }
@@ -44,7 +67,7 @@ impl Default for RevocationConfig {
     fn default() -> Self {
         Self {
             capacity: const { NonZeroUsize::new(1_000_000).unwrap() },
-            fpr: 0.0001,
+            fpr: const { FalsePositiveRate::new(0.0001).unwrap() },
             lru_capacity: const { NonZeroUsize::new(100_000).unwrap() },
         }
     }
@@ -120,7 +143,7 @@ mod tests {
     fn small_store() -> BloomLruRevocationStore {
         BloomLruRevocationStore::new(RevocationConfig {
             capacity: NonZeroUsize::new(1_000).unwrap(),
-            fpr: 0.001,
+            fpr: FalsePositiveRate::new(0.001).unwrap(),
             lru_capacity: NonZeroUsize::new(4).unwrap(),
         })
     }
@@ -169,7 +192,7 @@ mod tests {
     fn concurrent_reads_and_writes_no_panic() {
         let store = Arc::new(BloomLruRevocationStore::new(RevocationConfig {
             capacity: NonZeroUsize::new(10_000).unwrap(),
-            fpr: 0.001,
+            fpr: FalsePositiveRate::new(0.001).unwrap(),
             lru_capacity: NonZeroUsize::new(1_000).unwrap(),
         }));
 
@@ -211,7 +234,7 @@ mod proptests {
             let members: Vec<TokenId> = (0..count).map(|_| TokenId::generate()).collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
                 capacity: NonZeroUsize::new(10_000).unwrap(),
-                fpr: 0.001,
+                fpr: FalsePositiveRate::new(0.001).unwrap(),
                 lru_capacity: NonZeroUsize::new(count).unwrap(),
             });
             for member in &members {
@@ -232,7 +255,7 @@ mod proptests {
             let member_set: HashSet<TokenId> = members.iter().copied().collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
                 capacity: NonZeroUsize::new(10_000).unwrap(),
-                fpr: 0.001,
+                fpr: FalsePositiveRate::new(0.001).unwrap(),
                 lru_capacity: NonZeroUsize::new(count).unwrap(),
             });
             for member in &members {

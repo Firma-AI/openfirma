@@ -172,9 +172,13 @@ mod tests {
         Arc::new(AuthorizedClientSet::load(f.path()).unwrap())
     }
 
-    fn generate_client_cert(cn: &str, san_dns: Option<&str>) -> rcgen::CertifiedKey {
+    fn generate_client_cert(
+        cn: &str,
+        san_dns: Option<&str>,
+    ) -> rcgen::CertifiedKey<rcgen::KeyPair> {
         use rcgen::{
-            BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType,
+            BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+            SanType,
         };
 
         let ca_key = KeyPair::generate().unwrap();
@@ -183,7 +187,7 @@ mod tests {
         let mut dn = DistinguishedName::new();
         dn.push(DnType::CommonName, "Test CA");
         ca_params.distinguished_name = dn;
-        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let ca = Issuer::from_params(&ca_params, &ca_key);
 
         let client_key = KeyPair::generate().unwrap();
         let mut client_params = CertificateParams::default();
@@ -193,12 +197,10 @@ mod tests {
         if let Some(dns) = san_dns {
             client_params.subject_alt_names = vec![SanType::DnsName(dns.try_into().unwrap())];
         }
-        let client_cert = client_params
-            .signed_by(&client_key, &ca_cert, &ca_key)
-            .unwrap();
+        let client_cert = client_params.signed_by(&client_key, &ca).unwrap();
         rcgen::CertifiedKey {
             cert: client_cert,
-            key_pair: client_key,
+            signing_key: client_key,
         }
     }
 

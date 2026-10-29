@@ -19,6 +19,14 @@ case "${1:-}" in
 esac
 EOF
 
+# Models `sysctl -n hw.optional.arm64`: 1 on Apple silicon (also under
+# Rosetta), and an unknown-oid failure on Intel Macs.
+cat > "${MOCK_BIN}/sysctl" <<'EOF'
+#!/bin/sh
+[ "$*" = '-n hw.optional.arm64' ] && [ -n "${MOCK_SYSCTL_ARM64:-}" ] || exit 1
+printf '%s\n' "$MOCK_SYSCTL_ARM64"
+EOF
+
 cat > "${MOCK_BIN}/curl" <<'EOF'
 #!/bin/sh
 set -eu
@@ -66,7 +74,7 @@ case "$dest" in
 esac
 exec /bin/mv "$@"
 EOF
-chmod 0755 "${MOCK_BIN}/uname" "${MOCK_BIN}/curl" "${MOCK_BIN}/mkdir" "${MOCK_BIN}/mv"
+chmod 0755 "${MOCK_BIN}/uname" "${MOCK_BIN}/sysctl" "${MOCK_BIN}/curl" "${MOCK_BIN}/mkdir" "${MOCK_BIN}/mv"
 
 make_archive() {
     version=$1
@@ -134,7 +142,6 @@ exec_installer() {
         MOCK_ASSET_DIR="$MOCK_ASSET_DIR" \
         MOCK_OS="$os" \
         PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-        FIRMA_NO_BREW=1 \
         FIRMA_NO_INIT=1 \
         FIRMA_NO_MODIFY_PATH=1 \
         sh "${REPO_ROOT}/install.sh" --version "$version" --install-dir "$install_dir"
@@ -151,7 +158,7 @@ test ! -e "${legacy_install}/libexec/openfirma/secret-shims/x86_64-unknown-linux
 
 legacy_latest_install="${TEST_ROOT}/legacy-latest/bin"
 MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_LATEST_VERSION=v0.1.2 \
-    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_BREW=1 FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
+    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
     sh "${REPO_ROOT}/install.sh" --install-dir "$legacy_latest_install" \
     > "${TEST_ROOT}/legacy-latest.out" 2>&1
 ! grep -F -i -e shim -e CLI-only "${TEST_ROOT}/legacy-latest.out"
@@ -364,371 +371,103 @@ if MOCK_FAIL_MV_PATTERN=/firma-secret-shim run_installer v0.1.7 "$darwin_mv_inst
 fi
 assert_old_pair "$darwin_mv_install" darwin-mv-old
 
-cat > "${MOCK_BIN}/brew" <<'EOF'
-#!/bin/sh
-set -eu
-case "$1" in
-    info)
-        [ "${MOCK_BREW_FAIL_STEP:-}" != info ] || exit 1
-        printf '%s\n' "{\"formulae\":[{\"versions\":{\"stable\":\"${MOCK_BREW_VERSION}\"}}]}"
-        ;;
-    ruby)
-        cat >/dev/null
-        [ "${MOCK_BREW_FAIL_STEP:-}" != ruby ] || exit 1
-        printf '%s\n' "$MOCK_BREW_VERSION"
-        ;;
-    install)
-        printf '%s\n' install >> "$MOCK_BREW_LOG"
-        [ -z "$MOCK_BREW_EXPECTED_SHIM" ] || [ -x "$MOCK_BREW_EXPECTED_SHIM" ]
-        if [ "${MOCK_BREW_SIGNAL:-0}" = 1 ]; then
-            kill -TERM "$PPID"
-            sleep 0.1
-            exit 1
-        fi
-        if [ "${MOCK_BREW_HOLD:-0}" = 1 ]; then
-            : > "$MOCK_BREW_HOLD_READY"
-            while [ ! -e "$MOCK_BREW_HOLD_RELEASE" ]; do sleep 0.05; done
-        fi
-        [ "${MOCK_BREW_INSTALL_FAIL:-0}" != 1 ] || exit 1
-        mkdir -p "$(dirname "$MOCK_BREW_NEW_FIRMA_BIN")"
-        printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'not-a-firma-version'" > "$MOCK_BREW_NEW_FIRMA_BIN"
-        chmod 0755 "$MOCK_BREW_NEW_FIRMA_BIN"
-        printf '%s\n' "$MOCK_BREW_NEW_FIRMA_BIN" > "$MOCK_BREW_ACTIVE_STATE"
-        ;;
-    list)
-        printf '%s\n' list >> "$MOCK_BREW_LOG"
-        exit 99
-        ;;
-    --prefix)
-        [ "${MOCK_BREW_FAIL_STEP:-}" != prefix ] || exit 1
-        printf '%s\n' "$MOCK_BREW_PREFIX"
-        ;;
-    *) exit 2 ;;
-esac
-EOF
-chmod 0755 "${MOCK_BIN}/brew"
-brew_prefix="${TEST_ROOT}/brew"
-brew_old_bin="${brew_prefix}/Cellar/firma/0.1.6/bin/firma"
-brew_new_bin="${brew_prefix}/Cellar/firma/0.1.7/bin/firma"
-brew_old_dir=$(dirname "$brew_old_bin")
-brew_new_dir=$(dirname "$brew_new_bin")
-brew_active_state="${TEST_ROOT}/brew-active"
-brew_shim="${brew_prefix}/var/openfirma/secret-shims/0.1.7/x86_64-unknown-linux-musl/firma-secret-shim"
-seed_old_pair "$brew_old_dir" brew-old
-printf '%s\n' "$brew_old_bin" > "$brew_active_state"
-
-MOCK_ASSET_DIR="${TEST_ROOT}/brew-assets"
+# Under Rosetta, `uname -m` reports x86_64 on Apple silicon. Only arm64 assets
+# exist here, so picking the Intel build fails the download.
+MOCK_ASSET_DIR="${TEST_ROOT}/rosetta-assets"
 mkdir -p "$MOCK_ASSET_DIR"
-make_archive 0.1.7 x86_64-unknown-linux-musl 0 current
-brew_log="${TEST_ROOT}/brew.log"
-if MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$brew_log \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim \
-    MOCK_LATEST_VERSION=v0.1.7 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "${TEST_ROOT}/brew/bin" \
-    > "${TEST_ROOT}/brew.out" 2>&1; then
-    printf '%s\n' 'expected Homebrew preflight without a shim to fail' >&2
-    exit 1
-fi
-grep -F 'refusing to partially install v0.1.7' "${TEST_ROOT}/brew.out"
-grep -F 'falling back to verified tarball v0.1.7' "${TEST_ROOT}/brew.out"
-test ! -e "$brew_log"
-test ! -e "${TEST_ROOT}/brew/bin"
-test "$(cat "$brew_active_state")" = "$brew_old_bin"
-assert_old_pair "$brew_old_dir" brew-old
-test ! -e "$brew_shim"
+make_archive 0.1.7 aarch64-apple-darwin 0 current
+make_archive 0.1.7 aarch64-unknown-linux-musl 1 current
+rosetta_install="${TEST_ROOT}/rosetta/bin"
+MOCK_ARCH=x86_64 MOCK_SYSCTL_ARM64=1 run_installer v0.1.7 "$rosetta_install" Darwin \
+    > "${TEST_ROOT}/rosetta.out" 2>&1
+grep -F 'target: aarch64-apple-darwin' "${TEST_ROOT}/rosetta.out"
+test "$("${rosetta_install}/firma")" = 'firma 0.1.7'
+test -x "${rosetta_install}/libexec/openfirma/secret-shims/aarch64-unknown-linux-musl/firma-secret-shim"
 
-MOCK_ASSET_DIR="${TEST_ROOT}/brew-complete-assets"
+# An Intel Mac installs the x86_64 build when the latest release resolves
+# without --version, and fetches the matching Linux guest archive for the shim.
+MOCK_ASSET_DIR="${TEST_ROOT}/darwin-complete-assets"
+intel_install="${TEST_ROOT}/intel-darwin/bin"
+intel_curl_log="${TEST_ROOT}/intel-darwin-curl.log"
+MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_LATEST_VERSION=v0.1.7 \
+    MOCK_CURL_LOG=$intel_curl_log PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
+    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
+    sh "${REPO_ROOT}/install.sh" --install-dir "$intel_install" \
+    > "${TEST_ROOT}/intel-darwin.out" 2>&1
+grep -F 'target: x86_64-apple-darwin' "${TEST_ROOT}/intel-darwin.out"
+test "$("${intel_install}/firma")" = 'firma 0.1.7'
+test -x "${intel_install}/libexec/openfirma/secret-shims/x86_64-unknown-linux-musl/firma-secret-shim"
+grep -F '/download/v0.1.7/firma-x86_64-unknown-linux-musl.tar.gz' "$intel_curl_log"
+
+# A checksum mismatch aborts before the previous installation changes.
+MOCK_ASSET_DIR="${TEST_ROOT}/checksum-assets"
 mkdir -p "$MOCK_ASSET_DIR"
 make_archive 0.1.7 x86_64-unknown-linux-musl 1 current
-brew_log="${TEST_ROOT}/brew-shim-failure.log"
-if MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$brew_log \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim \
-    MOCK_LATEST_VERSION=v0.1.7 MOCK_FAIL_MKDIR_PATTERN=var/openfirma \
-    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "${TEST_ROOT}/brew-unused/bin" \
-    > "${TEST_ROOT}/brew-shim-failure.out" 2>&1; then
-    printf '%s\n' 'expected Homebrew private shim preflight mkdir failure' >&2
-    exit 1
-fi
-test ! -e "$brew_log"
-grep -F 'falling back to verified tarball v0.1.7' "${TEST_ROOT}/brew-shim-failure.out"
-test "$(cat "$brew_active_state")" = "$brew_old_bin"
-assert_old_pair "$brew_old_dir" brew-old
-
-brew_log="${TEST_ROOT}/brew-shim-mv-failure.log"
-if MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$brew_log \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim \
-    MOCK_LATEST_VERSION=v0.1.7 MOCK_FAIL_MV_PATTERN=.firma-secret-shim.new \
-    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "${TEST_ROOT}/brew-mv-unused/bin" \
-    > "${TEST_ROOT}/brew-shim-mv-failure.out" 2>&1; then
-    printf '%s\n' 'expected Homebrew private shim preflight move failure' >&2
-    exit 1
-fi
-test ! -e "$brew_log"
-grep -F 'falling back to verified tarball v0.1.7' "${TEST_ROOT}/brew-shim-mv-failure.out"
-test "$(cat "$brew_active_state")" = "$brew_old_bin"
-assert_old_pair "$brew_old_dir" brew-old
-
-rm -rf "$(dirname "$(dirname "$(dirname "$brew_shim")")")"
-brew_log="${TEST_ROOT}/brew-success.log"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$brew_log \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim \
-    MOCK_LATEST_VERSION=v0.1.7 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "${TEST_ROOT}/brew-success-unused/bin" >/dev/null
-test "$(cat "$brew_log")" = install
-test "$(cat "$brew_active_state")" = "$brew_new_bin"
-test "$("$brew_new_bin")" = 'not-a-firma-version'
-test -x "$brew_shim"
-test ! -e "${brew_new_dir}/libexec"
-assert_old_pair "$brew_old_dir" brew-old
-
-MOCK_ASSET_DIR="${TEST_ROOT}/brew-legacy-assets"
-mkdir -p "$MOCK_ASSET_DIR"
-make_archive 0.1.2 x86_64-unknown-linux-musl 0 legacy
-brew_legacy_bin="${brew_prefix}/Cellar/firma/0.1.2/bin/firma"
-brew_log="${TEST_ROOT}/brew-legacy.log"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$brew_log \
-    MOCK_BREW_VERSION=0.1.2 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_legacy_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM='' \
-    MOCK_LATEST_VERSION=v0.1.2 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "${TEST_ROOT}/brew-legacy-unused/bin" \
-    > "${TEST_ROOT}/brew-legacy.out" 2>&1
-grep -F 'Homebrew installed firma 0.1.2' "${TEST_ROOT}/brew-legacy.out"
-test "$(cat "$brew_log")" = install
-test "$(cat "$brew_active_state")" = "$brew_legacy_bin"
-test ! -e "${brew_prefix}/var/openfirma/secret-shims/0.1.2"
-test ! -e "${TEST_ROOT}/brew-legacy-unused"
-
-MOCK_ASSET_DIR="${TEST_ROOT}/brew-fallback-assets"
-mkdir -p "$MOCK_ASSET_DIR"
-make_archive 0.1.7 x86_64-unknown-linux-musl 1 current
-make_archive 0.1.8 x86_64-apple-darwin 0 current
-make_archive 0.1.8 x86_64-unknown-linux-musl 1 current
-printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'preinstalled-brew-resource'" > "$brew_shim"
-chmod 0755 "$brew_shim"
-seed_old_pair "$brew_old_dir" fallback-old
-printf '%s\n' "$brew_old_bin" > "$brew_active_state"
-rm -rf "$(dirname "$brew_new_dir")"
-brew_log="${TEST_ROOT}/brew-fallback.log"
-curl_log="${TEST_ROOT}/brew-fallback-curl.log"
-fallback_install="${TEST_ROOT}/brew-fallback/bin"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$brew_log \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim \
-    MOCK_BREW_INSTALL_FAIL=1 \
-    MOCK_LATEST_VERSION=v0.1.8 MOCK_CURL_LOG=$curl_log PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$fallback_install" >/dev/null
-test "$("${fallback_install}/firma")" = 'firma 0.1.8'
-test -x "${fallback_install}/libexec/openfirma/secret-shims/x86_64-unknown-linux-musl/firma-secret-shim"
-grep -F '/download/v0.1.8/firma-x86_64-unknown-linux-musl.tar.gz' "$curl_log"
-test "$(cat "$brew_active_state")" = "$brew_old_bin"
-assert_old_pair "$brew_old_dir" fallback-old
-test ! -e "$brew_new_bin"
-test "$("$brew_shim")" = preinstalled-brew-resource
-
-for fail_step in info ruby prefix; do
-    step_install="${TEST_ROOT}/brew-${fail_step}-fallback/bin"
-    MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG="${TEST_ROOT}/brew-${fail_step}.log" \
-        MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-        MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-        MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_BREW_FAIL_STEP=$fail_step \
-        MOCK_LATEST_VERSION=v0.1.8 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-        FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-        sh "${REPO_ROOT}/install.sh" --install-dir "$step_install" \
-        > "${TEST_ROOT}/brew-${fail_step}.out" 2>&1
-    test "$("${step_install}/firma")" = 'firma 0.1.8'
-    grep -F 'falling back to verified tarball v0.1.8' "${TEST_ROOT}/brew-${fail_step}.out"
-    test "$("$brew_shim")" = preinstalled-brew-resource
-done
-
-download_failure_install="${TEST_ROOT}/brew-download-fallback/bin"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG="${TEST_ROOT}/brew-download.log" \
-    MOCK_BREW_VERSION=0.1.10 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_LATEST_VERSION=v0.1.8 \
-    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$download_failure_install" \
-    > "${TEST_ROOT}/brew-download.out" 2>&1
-test "$("${download_failure_install}/firma")" = 'firma 0.1.8'
-grep -F 'falling back to verified tarball v0.1.8' "${TEST_ROOT}/brew-download.out"
-
-make_archive 0.1.11 x86_64-unknown-linux-musl 1 current
 printf '%064d  %s\n' 0 firma-x86_64-unknown-linux-musl.tar.gz \
-    > "${MOCK_ASSET_DIR}/0.1.11/firma-x86_64-unknown-linux-musl.tar.gz.sha256"
-verification_failure_install="${TEST_ROOT}/brew-verification-fallback/bin"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG="${TEST_ROOT}/brew-verification.log" \
-    MOCK_BREW_VERSION=0.1.11 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_LATEST_VERSION=v0.1.8 \
-    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$verification_failure_install" \
-    > "${TEST_ROOT}/brew-verification.out" 2>&1
-test "$("${verification_failure_install}/firma")" = 'firma 0.1.8'
-grep -F 'falling back to verified tarball v0.1.8' "${TEST_ROOT}/brew-verification.out"
-
-signal_resource_install="${TEST_ROOT}/brew-signal-fallback/bin"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG="${TEST_ROOT}/brew-signal.log" \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_BREW_SIGNAL=1 \
-    MOCK_LATEST_VERSION=v0.1.8 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$signal_resource_install" \
-    > "${TEST_ROOT}/brew-signal.out" 2>&1
-test "$("${signal_resource_install}/firma")" = 'firma 0.1.8'
-test "$("$brew_shim")" = preinstalled-brew-resource
-grep -F 'caught TERM during Homebrew installation' "${TEST_ROOT}/brew-signal.out"
-
-top_signal_install="${TEST_ROOT}/brew-top-signal/bin"
-brew_hold_ready="${TEST_ROOT}/brew-top-signal.ready"
-brew_hold_release="${TEST_ROOT}/brew-top-signal.release"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG="${TEST_ROOT}/brew-top-signal.log" \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_BREW_HOLD=1 \
-    MOCK_BREW_HOLD_READY=$brew_hold_ready MOCK_BREW_HOLD_RELEASE=$brew_hold_release \
-    MOCK_LATEST_VERSION=v0.1.8 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$top_signal_install" \
-    > "${TEST_ROOT}/brew-top-signal.out" 2>&1 &
-top_signal_pid=$!
-wait_count=0
-while [ ! -e "$brew_hold_ready" ] && [ "$wait_count" -lt 100 ]; do
-    sleep 0.05
-    wait_count=$((wait_count + 1))
-done
-test -e "$brew_hold_ready"
-kill -TERM "$top_signal_pid"
-touch "$brew_hold_release"
-if wait "$top_signal_pid"; then
-    printf '%s\n' 'expected top-level caught TERM to stop Homebrew installation' >&2
+    > "${MOCK_ASSET_DIR}/0.1.7/firma-x86_64-unknown-linux-musl.tar.gz.sha256"
+checksum_install="${TEST_ROOT}/checksum/bin"
+seed_old_pair "$checksum_install" checksum-old
+if run_installer v0.1.7 "$checksum_install" > "${TEST_ROOT}/checksum.out" 2>&1; then
+    printf '%s\n' 'expected a checksum mismatch to fail' >&2
     exit 1
 fi
-grep -F 'caught TERM; waiting for the Homebrew installation to finish' "${TEST_ROOT}/brew-top-signal.out"
-test "$(cat "$brew_active_state")" = "$brew_new_bin"
-test "$("$brew_shim")" = fixture-shim-0.1.7
-test ! -e "${brew_prefix}/.openfirma-installer.lock"
-test ! -e "$top_signal_install"
+grep -F 'checksum mismatch for firma-x86_64-unknown-linux-musl.tar.gz' "${TEST_ROOT}/checksum.out"
+assert_old_pair "$checksum_install" checksum-old
 
-printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'preinstalled-brew-resource'" > "$brew_shim"
-chmod 0755 "$brew_shim"
-printf '%s\n' "$brew_old_bin" > "$brew_active_state"
-rm -f "$brew_new_bin"
-published_ready="${TEST_ROOT}/brew-published.ready"
-published_release="${TEST_ROOT}/brew-published.release"
-published_signal_install="${TEST_ROOT}/brew-published-signal/bin"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG="${TEST_ROOT}/brew-published-signal.log" \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_LATEST_VERSION=v0.1.8 \
-    FIRMA_INSTALLER_TEST_BREW_PUBLISHED_READY=$published_ready \
-    FIRMA_INSTALLER_TEST_BREW_PUBLISHED_RELEASE=$published_release \
-    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$published_signal_install" \
-    > "${TEST_ROOT}/brew-published-signal.out" 2>&1 &
-published_signal_pid=$!
-wait_count=0
-while [ ! -e "$published_ready" ] && [ "$wait_count" -lt 100 ]; do
-    sleep 0.05
-    wait_count=$((wait_count + 1))
-done
-test -e "$published_ready"
-test "$(cat "$brew_active_state")" = "$brew_new_bin"
-test -d "${brew_prefix}/.openfirma-installer.lock"
-kill -TERM "$published_signal_pid"
-touch "$published_release"
-if wait "$published_signal_pid"; then
-    printf '%s\n' 'expected post-publication TERM to report interruption' >&2
+# Existing-install contract for the install dir: a complete same-version
+# install exits early, --force reinstalls it, and a different version is
+# replaced without a terminal. The retired --no-brew opt-outs stay accepted.
+MOCK_ASSET_DIR="${TEST_ROOT}/complete-assets"
+contract_install="${TEST_ROOT}/contract/bin"
+run_installer v0.1.7 "$contract_install" >/dev/null
+run_installer v0.1.7 "$contract_install" > "${TEST_ROOT}/contract-same.out" 2>&1
+grep -F 'firma 0.1.7 already installed. Use --force to reinstall.' "${TEST_ROOT}/contract-same.out"
+if grep -F 'installing to' "${TEST_ROOT}/contract-same.out"; then
+    printf '%s\n' 'expected the same-version rerun to skip installation' >&2
     exit 1
 fi
-grep -F 'caught TERM after Homebrew installation completed' "${TEST_ROOT}/brew-published-signal.out"
-test "$(cat "$brew_active_state")" = "$brew_new_bin"
-test "$("$brew_new_bin")" = not-a-firma-version
-test "$("$brew_shim")" = fixture-shim-0.1.7
-test -x "$brew_shim"
-test ! -e "${brew_prefix}/.openfirma-installer.lock"
-test -z "$(find "$(dirname "$brew_shim")" -name '.firma-secret-shim.*' -print)"
-test ! -e "$published_signal_install"
+FIRMA_FORCE=1 run_installer v0.1.7 "$contract_install" > "${TEST_ROOT}/contract-force.out" 2>&1
+grep -F 'reinstalling firma 0.1.7 over firma 0.1.7 (--force)' "${TEST_ROOT}/contract-force.out"
+grep -F "installed: ${contract_install}/firma" "${TEST_ROOT}/contract-force.out"
+make_archive 0.1.8 x86_64-unknown-linux-musl 1 current
+MOCK_ASSET_DIR=$MOCK_ASSET_DIR PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
+    FIRMA_NO_BREW=1 FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
+    sh "${REPO_ROOT}/install.sh" --no-brew --version v0.1.8 --install-dir "$contract_install" \
+    < /dev/null > "${TEST_ROOT}/contract-replace.out" 2>&1
+grep -F 'replacing firma 0.1.7 with 0.1.8' "${TEST_ROOT}/contract-replace.out"
+test "$("${contract_install}/firma")" = 'firma 0.1.8'
+test "$("${contract_install}/firma" fixture-runtime-shim)" = fixture-shim-0.1.8
 
-printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'preinstalled-brew-resource'" > "$brew_shim"
-chmod 0755 "$brew_shim"
-printf '%s\n' "$brew_old_bin" > "$brew_active_state"
-rm -f "$brew_new_bin"
-concurrent_brew_ready="${TEST_ROOT}/brew-concurrent.ready"
-concurrent_brew_release="${TEST_ROOT}/brew-concurrent.release"
-concurrent_a_log="${TEST_ROOT}/brew-concurrent-a.log"
-concurrent_b_log="${TEST_ROOT}/brew-concurrent-b.log"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$concurrent_a_log \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_BREW_HOLD=1 \
-    MOCK_BREW_HOLD_READY=$concurrent_brew_ready MOCK_BREW_HOLD_RELEASE=$concurrent_brew_release \
-    MOCK_LATEST_VERSION=v0.1.8 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
+# A firma elsewhere on PATH, such as a `cargo install` copy, does not block a
+# non-interactive install and is left alone. When it comes before the already
+# listed install dir, the installer warns that it shadows the new one.
+cargo_bin="${TEST_ROOT}/cargo/bin"
+mkdir -p "$cargo_bin"
+printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'firma 0.0.1'" > "${cargo_bin}/firma"
+chmod 0755 "${cargo_bin}/firma"
+shadowed_install="${TEST_ROOT}/shadowed/bin"
+MOCK_ASSET_DIR=$MOCK_ASSET_DIR PATH="${cargo_bin}:${shadowed_install}:${MOCK_BIN}:${SYSTEM_PATH}" \
     FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "${TEST_ROOT}/brew-concurrent-a/bin" \
-    > "${TEST_ROOT}/brew-concurrent-a.out" 2>&1 &
-concurrent_a_pid=$!
-wait_count=0
-while [ ! -e "$concurrent_brew_ready" ] && [ "$wait_count" -lt 100 ]; do
-    sleep 0.05
-    wait_count=$((wait_count + 1))
-done
-test -e "$concurrent_brew_ready"
-brew_lock="${brew_prefix}/.openfirma-installer.lock"
-test -r "${brew_lock}/owner"
-brew_lock_owner=$(cat "${brew_lock}/owner")
-test "$brew_lock_owner" != "$concurrent_a_pid"
-kill -0 "$brew_lock_owner"
+    sh "${REPO_ROOT}/install.sh" --version v0.1.7 --install-dir "$shadowed_install" \
+    < /dev/null > "${TEST_ROOT}/shadowed.out" 2>&1
+test "$("${shadowed_install}/firma")" = 'firma 0.1.7'
+test "$("${cargo_bin}/firma")" = 'firma 0.0.1'
+grep -F "${cargo_bin}/firma comes earlier on PATH and shadows ${shadowed_install}/firma" "${TEST_ROOT}/shadowed.out"
 
-concurrent_b_install="${TEST_ROOT}/brew-concurrent-b/bin"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG=$concurrent_b_log \
-    MOCK_BREW_VERSION=0.1.7 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_shim MOCK_LATEST_VERSION=v0.1.8 \
-    PATH="${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$concurrent_b_install" \
-    > "${TEST_ROOT}/brew-concurrent-b.out" 2>&1
-test ! -e "$concurrent_b_log"
-grep -F "another firma installer (PID $brew_lock_owner) owns $brew_lock" "${TEST_ROOT}/brew-concurrent-b.out"
-grep -F 'falling back to verified tarball v0.1.8' "${TEST_ROOT}/brew-concurrent-b.out"
-test "$("${concurrent_b_install}/firma")" = 'firma 0.1.8'
-test "$("$brew_shim")" = fixture-shim-0.1.7
-
-touch "$concurrent_brew_release"
-wait "$concurrent_a_pid"
-test "$(cat "$concurrent_a_log")" = install
-test "$(cat "$brew_active_state")" = "$brew_new_bin"
-test "$("$brew_shim")" = fixture-shim-0.1.7
-test -x "$brew_shim"
-test ! -e "$brew_lock"
-
-make_archive 0.1.9 x86_64-unknown-linux-musl 1 current
-brew_new_resource="${brew_prefix}/var/openfirma/secret-shims/0.1.9/x86_64-unknown-linux-musl/firma-secret-shim"
-new_resource_install="${TEST_ROOT}/brew-new-resource-fallback/bin"
-MOCK_ASSET_DIR=$MOCK_ASSET_DIR MOCK_OS=Darwin MOCK_BREW_LOG="${TEST_ROOT}/brew-new-resource.log" \
-    MOCK_BREW_VERSION=0.1.9 MOCK_BREW_PREFIX=$brew_prefix \
-    MOCK_BREW_NEW_FIRMA_BIN=$brew_new_bin MOCK_BREW_ACTIVE_STATE=$brew_active_state \
-    MOCK_BREW_EXPECTED_SHIM=$brew_new_resource MOCK_BREW_INSTALL_FAIL=1 \
-    MOCK_LATEST_VERSION=v0.1.8 PATH="${MOCK_BIN}:${SYSTEM_PATH}" \
-    FIRMA_NO_INIT=1 FIRMA_NO_MODIFY_PATH=1 \
-    sh "${REPO_ROOT}/install.sh" --install-dir "$new_resource_install" >/dev/null
-test "$("${new_resource_install}/firma")" = 'firma 0.1.8'
-test ! -e "$brew_new_resource"
-test ! -e "${brew_prefix}/var/openfirma/secret-shims/0.1.9"
+# When the install dir is not on PATH yet, the rc block prepends it, so the
+# new firma wins in new shells and no shadow warning is printed.
+fresh_home="${TEST_ROOT}/fresh-home"
+mkdir -p "$fresh_home"
+fresh_install="${fresh_home}/.local/bin"
+MOCK_ASSET_DIR=$MOCK_ASSET_DIR HOME=$fresh_home SHELL=/bin/zsh ZDOTDIR=$fresh_home \
+    PATH="${cargo_bin}:${MOCK_BIN}:${SYSTEM_PATH}" FIRMA_NO_INIT=1 \
+    sh "${REPO_ROOT}/install.sh" --version v0.1.7 \
+    < /dev/null > "${TEST_ROOT}/fresh.out" 2>&1
+test "$("${fresh_install}/firma")" = 'firma 0.1.7'
+grep -F "export PATH=\"${fresh_install}:\$PATH\"" "${fresh_home}/.zshrc"
+if grep -F 'shadows' "${TEST_ROOT}/fresh.out"; then
+    printf '%s\n' 'expected no shadow warning when the rc block prepends the install dir' >&2
+    exit 1
+fi
 
 printf '%s\n' 'mocked install.sh smoke tests passed'

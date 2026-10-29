@@ -67,7 +67,8 @@ See [docs/security/transport.md](docs/security/transport.md) for certificate gen
 **Requirements for production:**
 
 - Use a CA-issued certificate for the Authority; keep the CA key offline
-- Distribute the CA certificate to every Sidecar host via `sidecar.authority.ca_cert_path`
+- Distribute the CA certificate to every Sidecar host via `sidecar.authority.ca_cert_paths`, several during a rotation, when the Authority uses a private CA. The configured CAs are the only ones trusted, and a configured file that is missing or holds no certificate stops startup.
+- Without a configured CA, the Sidecar trusts the platform's trusted roots unless `disable_platform_roots = true`, which is rejected in that case so the Sidecar never trusts nothing. A Sidecar of a private-CA deployment that loses the setting rejects the Authority's certificate at the handshake instead of at startup, and would accept a certificate from a public CA issued for the Authority's name
 - Set `sidecar.authority.allow_insecure_remote_authority = false` (default) for all non-loopback connections
 - V1 TLS is server-only; sidecar identity is **not** asserted (mTLS planned for v1.1)
 

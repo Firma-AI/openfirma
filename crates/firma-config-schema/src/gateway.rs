@@ -28,7 +28,10 @@ pub struct GatewayConfig {
     #[serde(default = "default_operation_timeout")]
     pub operation_timeout: NonZeroDuration,
     /// Cap on the outbound payload and inbound response line size.
-    #[serde(with = "crate::utils::byte_size", default = "default_max_buffer_size")]
+    #[serde(
+        with = "firma_config_utils::byte_size",
+        default = "default_max_buffer_size"
+    )]
     pub max_buffer_size: ByteSize,
 }
 

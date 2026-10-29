@@ -129,7 +129,7 @@ url = "http://127.0.0.1:50051"
 }
 
 /// The Authority CA is adopted from the state directory when the config names
-/// none, so a diagnostic that only says "set `authority.ca_cert_path`" never
+/// none, so a diagnostic that only says "set `authority.ca_cert_paths`" never
 /// tells the operator which file the Sidecar looked for.
 #[test]
 fn https_authority_without_ca_names_the_state_dir_default() {
@@ -140,7 +140,7 @@ mode = "http_proxy"
 listen_addr = "127.0.0.1:7474"
 
 [sidecar.authority]
-url = "https://authority.test:9443"
+url = "https://127.0.0.1:9443"
 "#,
     );
 

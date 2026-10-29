@@ -61,10 +61,13 @@ fn authority(public_key_path: Option<PathBuf>) -> ResolvedAuthority {
     ResolvedAuthority {
         url: "http://127.0.0.1:1".to_string(),
         ca_cert_path: None,
+        trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+        connect_addr: None,
         pub_key_path: public_key_path,
         credentials: None,
         credentials_config: None,
         owned: None,
+        capability_public_key: None,
     }
 }
 
@@ -74,7 +77,6 @@ fn capability(source: CapabilitySource, public_key_path: Option<PathBuf>) -> Cap
         public_key_path,
         refresh_ratio: 0.60,
         grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
 

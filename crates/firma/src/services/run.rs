@@ -9,7 +9,7 @@ use firma_run::authority::AuthorityPromptIo;
 use firma_run::runtime::{LaunchHooks, RunInput, execute_run};
 use tracing::{info, warn};
 
-use crate::args::run::RunArgs;
+use crate::args::run::{LocalRunOptions, RunArgs};
 use crate::log::ForegroundLog;
 use crate::services::config::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
 
@@ -28,6 +28,11 @@ pub fn run(
     foreground: &ForegroundLog,
     config: Option<PathBuf>,
 ) -> anyhow::Result<ExitCode> {
+    let RunArgs {
+        local: args,
+        command,
+        ..
+    } = args;
     firma_run::identity::reject_reserved_sandbox_id_environment()?;
     if args.no_autostart && args.authority.as_deref() == Some("local") {
         anyhow::bail!(
@@ -50,13 +55,9 @@ pub fn run(
     // Implicit init: if no firma.toml is discoverable for this project,
     // scaffold one before handing off to firma-run. The returned path is
     // reused below so discovery is performed once.
-    let run_config = maybe_implicit_init(config.as_deref(), &args)?;
+    let run_config = maybe_implicit_init(config.as_deref(), &args, &command)?;
 
-    let profile = resolve_profile_name(
-        args.profile.as_deref(),
-        run_config.as_deref(),
-        &args.command,
-    );
+    let profile = resolve_profile_name(args.profile.as_deref(), run_config.as_deref(), &command);
     let authority_cli = match args.authority.as_deref() {
         None => firma_run::authority::AuthorityCli::Unset,
         Some("local") => firma_run::authority::AuthorityCli::Local,
@@ -78,28 +79,53 @@ pub fn run(
         sidecar_cli,
         no_autostart: args.no_autostart,
         sidecar_startup_timeout_secs: args.sidecar_startup_timeout_secs,
-        command: args.command,
+        command,
         authority_cli,
         authority_profile: args.authority_profile,
         user_config_path: config,
         allow_non_structural: args.allow_non_structural,
     };
-    // Redirect the stderr log surface into the per-run marker dir once the
-    // wrapped agent's TUI owns the terminal, and restore it to stderr after the
-    // agent exits for teardown output. `execute_run` supplies the marker dir.
+    launch(foreground, |hooks| execute_run(&input, hooks))
+}
+
+/// Runs a `firma-run` launcher with the terminal handed to the wrapped
+/// command, and reports its result as the one line `firma` prints.
+///
+/// # Errors
+///
+/// Returns the launcher's error as the one line `firma` reports.
+fn launch(
+    foreground: &ForegroundLog,
+    launcher: impl FnOnce(&LaunchHooks<'_>) -> Result<i32, firma_run::error::RunError>,
+) -> anyhow::Result<ExitCode> {
+    match with_terminal_hooks(foreground, launcher) {
+        Ok(code) => Ok(exit_code(code)),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
+    }
+}
+
+/// Runs a `firma-run` launcher with the terminal handed to the wrapped
+/// command: the stderr log surface is redirected into the per-run marker
+/// dir once the agent's TUI owns the terminal, and restored to stderr after
+/// the agent exits for teardown output.
+pub fn with_terminal_hooks<R>(
+    foreground: &ForegroundLog,
+    launcher: impl FnOnce(&LaunchHooks<'_>) -> R,
+) -> R {
     let on_launch = |marker_dir: &std::path::Path| foreground.redirect(marker_dir);
     let on_exit = || foreground.restore();
     let hooks = LaunchHooks {
         on_agent_launch: Some(&on_launch),
         on_agent_exit: Some(&on_exit),
     };
-    match execute_run(&input, &hooks) {
-        Ok(code) => Ok(exit_code(code)),
-        Err(error) => Err(anyhow::anyhow!("{error}")),
-    }
+    launcher(&hooks)
 }
 
-fn maybe_implicit_init(config: Option<&Path>, args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
+fn maybe_implicit_init(
+    config: Option<&Path>,
+    args: &LocalRunOptions,
+    command: &[String],
+) -> anyhow::Result<Option<PathBuf>> {
     if let Some(config) = config {
         // Trust the user-supplied config path. If it does not exist we
         // let firma-run report the parse/IO error normally.
@@ -137,7 +163,7 @@ fn maybe_implicit_init(config: Option<&Path>, args: &RunArgs) -> anyhow::Result<
     let inferred_profile = args
         .profile
         .as_deref()
-        .or_else(|| profile_from_command(&args.command));
+        .or_else(|| profile_from_command(command));
 
     let plan = ScaffoldPlan {
         config_dir: resolved,
@@ -162,7 +188,7 @@ fn maybe_implicit_init(config: Option<&Path>, args: &RunArgs) -> anyhow::Result<
 /// `--authority` is a commitment that bypasses the prompt. `--no-autostart`
 /// refuses any side-effecting scaffold. Otherwise the user must answer Y
 /// to a single y/N prompt on the controlling TTY; non-TTY aborts.
-fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthorityShape> {
+fn resolve_implicit_init_authority(args: &LocalRunOptions) -> anyhow::Result<AuthorityShape> {
     if args.no_autostart {
         anyhow::bail!(
             "no firma.toml found and `--no-autostart` is set; \
@@ -174,8 +200,8 @@ fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthoritySh
             "local" => AuthorityShape::Local,
             _ => anyhow::bail!(
                 "no firma.toml found and remote `--authority <url>` cannot be scaffolded implicitly; \
-                 run `firma config --mode agent-remote` with --authority-url, \
-                 --authority-ca-cert, and --authority-pub-key"
+                 run `firma config --mode agent-remote` with --authority-url and \
+                 --authority-pub-key (and --authority-ca-cert for a private CA)"
             ),
         });
     }
@@ -202,7 +228,7 @@ fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthoritySh
     Ok(AuthorityShape::Local)
 }
 
-fn validate_sidecar_endpoint_flag(args: &RunArgs) -> anyhow::Result<()> {
+fn validate_sidecar_endpoint_flag(args: &LocalRunOptions) -> anyhow::Result<()> {
     let Some(value) = args.sidecar.as_deref() else {
         return Ok(());
     };
@@ -255,7 +281,9 @@ fn profile_to_provider(profile: Option<&str>) -> String {
         .to_string()
 }
 
-fn exit_code(code: i32) -> ExitCode {
+/// The process exit code for a wrapped command's `code`; one that does not
+/// fit an exit code becomes 1.
+pub fn exit_code(code: i32) -> ExitCode {
     if code == 0 {
         ExitCode::SUCCESS
     } else {

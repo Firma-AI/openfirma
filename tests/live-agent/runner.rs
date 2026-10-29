@@ -77,6 +77,11 @@ pub async fn run_scenario(
 
     scenario.setup(&mut ctx)?;
     let agent_args = agent.prompt_args(&scenario.prompt(&ctx));
+    let diagnostics_dir = std::env::var_os("FIRMA_LIVE_AGENT_DIAGNOSTICS_DIR").map(|root| {
+        std::path::PathBuf::from(root)
+            .join(agent.kind.as_ref())
+            .join(scenario.name())
+    });
 
     scenario.before_assert(&ctx)?;
 
@@ -86,6 +91,7 @@ pub async fn run_scenario(
         &agent_args,
         &ctx.workspace_dir,
         scenario.timeout(),
+        diagnostics_dir.as_deref(),
     )
     .await?;
 
@@ -115,16 +121,29 @@ pub async fn run_scenario(
     scenario.before_assert(&ctx)?;
 
     // Phase 2: enforcement.
-    let enforcement_agent_output =
-        run_enforcement(&firma_bin(), &ctx, &agent_args, scenario.timeout()).await?;
+    let enforcement_agent_output = run_enforcement(
+        &firma_bin(),
+        &ctx,
+        &agent_args,
+        scenario.timeout(),
+        diagnostics_dir.as_deref(),
+    )
+    .await;
+
+    let audit_path = state_dir.join("audit.jsonl");
+    if let Some(dir) = &diagnostics_dir
+        && audit_path.exists()
+        && let Err(error) = fs_err::copy(&audit_path, dir.join("audit.jsonl"))
+    {
+        eprintln!("failed to preserve enforcement audit diagnostics: {error:#}");
+    }
 
     let enforcement_phase = PhaseOutput {
-        agent: enforcement_agent_output,
+        agent: enforcement_agent_output?,
         http_requests: mock_server.received_requests().await.unwrap_or_default(),
         tcp_connections: ctx.raw_tcp.connection_count(),
     };
 
-    let audit_path = state_dir.join("audit.jsonl");
     // Drop incidental agent startup ALLOW traffic before assertions: it varies
     // by platform and agent version, so it must not reach deterministic snapshots.
     let firma_audit =
@@ -149,6 +168,7 @@ async fn run_with_timeout(
     phase: Phase,
     mut cmd: tokio::process::Command,
     timeout: Duration,
+    diagnostics_dir: Option<&Path>,
 ) -> Result<RunOutput, anyhow::Error> {
     let start = Instant::now();
     let mut child = cmd
@@ -192,6 +212,12 @@ async fn run_with_timeout(
     let stdout = stdout.await?;
     let stderr = stderr.await?;
 
+    if let Some(dir) = diagnostics_dir {
+        fs_err::create_dir_all(dir)?;
+        fs_err::write(dir.join(format!("{phase}.stdout.log")), &stdout)?;
+        fs_err::write(dir.join(format!("{phase}.stderr.log")), &stderr)?;
+    }
+
     let Some(exit_status) = exit_status else {
         return Err(RunTimeoutError {
             phase,
@@ -216,6 +242,7 @@ async fn run_agent_direct(
     agent_args: &[String],
     workspace: &Path,
     timeout: Duration,
+    diagnostics_dir: Option<&Path>,
 ) -> Result<RunOutput, anyhow::Error> {
     if !agent_available(agent_cmd) {
         bail!("[baseline] agent '{agent_cmd}' not found on PATH");
@@ -223,7 +250,7 @@ async fn run_agent_direct(
 
     let mut cmd = tokio::process::Command::new(agent_cmd);
     cmd.args(agent_args).current_dir(workspace);
-    run_with_timeout(Phase::Baseline, cmd, timeout).await
+    run_with_timeout(Phase::Baseline, cmd, timeout, diagnostics_dir).await
 }
 
 async fn run_enforcement(
@@ -231,6 +258,7 @@ async fn run_enforcement(
     ctx: &ScenarioSetup,
     agent_args: &[String],
     timeout: Duration,
+    diagnostics_dir: Option<&Path>,
 ) -> Result<RunOutput, anyhow::Error> {
     let config_path = ctx.config_dir().join("firma.toml");
     let mut cmd = tokio::process::Command::new(firma_bin);
@@ -253,7 +281,7 @@ async fn run_enforcement(
         .arg(ctx.agent.command())
         .args(agent_args)
         .current_dir(&ctx.workspace_dir);
-    run_with_timeout(Phase::Enforcement, cmd, timeout).await
+    run_with_timeout(Phase::Enforcement, cmd, timeout, diagnostics_dir).await
 }
 
 fn agent_available(name: &str) -> bool {

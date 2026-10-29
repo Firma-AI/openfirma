@@ -149,9 +149,9 @@ fn evaluate_to_outcome(path: &Path) -> Outcome {
     };
 
     let request = match Request::new(
-        Some(principal_uid),
-        Some(action_uid),
-        Some(resource_uid),
+        principal_uid,
+        action_uid,
+        resource_uid,
         cedar_context,
         Some(&schema),
     ) {

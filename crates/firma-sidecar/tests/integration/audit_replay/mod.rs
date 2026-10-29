@@ -137,7 +137,7 @@ async fn scope_mismatch_and_unscoped_legacy_queue_are_left_intact() -> TestResul
     let collector = Collector::start()?;
     let fixture = Fixture::new(&collector.url).await?;
     let bytes = fixture.seed(&[event("original", None)])?;
-    let scope = fixture.root.path().join("audit.jsonl.scope");
+    let scope = fixture.scope_path();
     let mut different: serde_json::Value = serde_json::from_slice(&std::fs::read(&scope)?)?;
     different["sidecar"][0] = "foreign-workspace".into();
     std::fs::write(&scope, serde_json::to_vec(&different)?)?;
@@ -253,14 +253,11 @@ async fn capacity_exhaustion_preserves_pending_records() -> TestResult {
     let mut collector = Collector::start()?;
     let mut fixture = Fixture::new(&collector.url).await?;
     let bytes = fixture.seed(&[event("pending", None)])?;
-    let config_path = fixture.root.path().join("sidecar.toml");
+    let config_path = fixture.config_path();
     let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     config["audit"]["wal_max_size"] = format!("{} B", bytes.len() + 1).into();
     std::fs::write(&config_path, toml::to_string(&config)?)?;
-    fixture.config = firma_sidecar::config::SidecarConfig::load_from_path(
-        &config_path,
-        &firma_runtime_state::RuntimeLayout::from_root(fixture.root.path()),
-    )?;
+    fixture.reload_config()?;
     let payload = fixture.payload().await?;
     let (tx, mut task, _) = fixture.start()?;
     tx.send(payload).await?;
@@ -344,5 +341,190 @@ async fn stalled_collector_retries_without_traffic_and_shutdown_retains_pending(
     assert_eq!(std::fs::read(&fixture.wal)?, bytes);
     assert!(!fixture.archive().exists());
     drop((first, second));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_foreign_run_scope_is_refused_but_an_empty_journal_is_reused() -> TestResult {
+    let collector = Collector::start()?;
+    let run = "run_01j0000000e008000000000001";
+    let fixture = Fixture::for_run(&collector.url, run).await?;
+    let scope = fixture.scope_path();
+    let mut stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&scope)?)?;
+    assert_eq!(stored["run"], run, "{stored}");
+    let bytes = fixture.seed(&[event("original", None)])?;
+
+    // Even at a run-qualified path, a foreign scope must be refused.
+    stored["run"] = "run_01j0000000e008000000000002".into();
+    std::fs::write(&scope, serde_json::to_vec(&stored)?)?;
+    let (tx, task, _) = fixture.start()?;
+    drop(tx);
+    let error = task.await?.expect_err("another run's records");
+    assert_eq!(
+        error.to_string(),
+        "server error: audit WAL destination does not match its stored scope"
+    );
+    assert_eq!(std::fs::read(&fixture.wal)?, bytes);
+
+    // With nothing left to deliver, the scope can be reclaimed.
+    std::fs::write(&fixture.wal, b"")?;
+    let (tx, task, _) = fixture.start()?;
+    drop(tx);
+    finish(task).await?;
+    let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(&scope)?)?;
+    assert_eq!(rewritten["run"], run, "{rewritten}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_scope_written_before_runs_existed_still_matches() -> TestResult {
+    let mut collector = Collector::start()?;
+    let fixture = Fixture::new(&collector.url).await?;
+    fixture.seed(&[event("original", None)])?;
+    let scope = fixture.scope_path();
+    let mut stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&scope)?)?;
+    stored.as_object_mut().unwrap().remove("run");
+    std::fs::write(&scope, serde_json::to_vec(&stored)?)?;
+
+    let (tx, task, cancel) = fixture.start()?;
+    let replayed = collector.next().await?;
+    cancel.cancel();
+    drop(tx);
+    replayed.persist();
+    finish(task).await?;
+    assert_eq!(
+        std::fs::read(&fixture.wal)?,
+        b"",
+        "the record was delivered"
+    );
+    Ok(())
+}
+
+/// Points `fixture` at the runtime credential of `run`, served by
+/// `sidecar` as activation names it: every run gets a fresh Sidecar
+/// identity. The credential is read from a variable cargo already sets, so
+/// no test mutates the process environment.
+fn serve_run(fixture: &mut Fixture, sidecar: &str, run: &str) -> TestResult {
+    let config_path = fixture.root.path().join("sidecar.toml");
+    let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let credentials = config["authority"]["credentials"]
+        .as_table_mut()
+        .ok_or("credentials table")?;
+    credentials.remove("pre_shared_key_path");
+    credentials.insert("runtime_credential_env".into(), "CARGO_PKG_NAME".into());
+    credentials.insert("sidecar_id".into(), sidecar.into());
+    credentials.insert("run_id".into(), run.into());
+    std::fs::write(&config_path, toml::to_string(&config)?)?;
+    fixture.config = firma_sidecar::config::SidecarConfig::load_from_path(
+        &config_path,
+        &firma_runtime_state::RuntimeLayout::from_root(fixture.root.path()),
+    )?;
+    fixture.wal = fixture.root.path().join(format!("audit.jsonl.{run}"));
+    Ok(())
+}
+
+/// Shutdown retains undelivered records, and the run that journaled
+/// them can never authenticate again once its `firma run` is gone. The next
+/// run's Sidecar must still start, and must not send those records
+/// under its own credential.
+#[tokio::test]
+async fn a_finished_run_pending_records_do_not_block_the_next_run() -> TestResult {
+    let mut collector = Collector::start()?;
+    let mut fixture = Fixture::new(&collector.url).await?;
+    serve_run(&mut fixture, "sidecar-a", "run_01j0000000e008000000000001")?;
+    let (tx, task, _) = fixture.start()?;
+    drop(tx);
+    finish(task).await?;
+    let retained = fixture.seed(&[event("run-a-record", None)])?;
+    let old_wal = fixture.wal.clone();
+
+    serve_run(&mut fixture, "sidecar-b", "run_01j0000000e008000000000002")?;
+    let payload = fixture.payload().await?;
+    let (tx, mut task, cancel) = fixture.start()?;
+    tx.send(payload).await?;
+    let received = tokio::select! {
+        received = collector.next() => received?,
+        result = &mut task => panic!("run-b's audit sink stopped: {:?}", result?),
+    };
+    assert_ne!(received.event.event_id, "run-a-record");
+    cancel.cancel();
+    drop(tx);
+    received.persist();
+    finish(task).await?;
+    assert_ne!(fixture.wal, old_wal);
+    assert_eq!(std::fs::read(old_wal)?, retained);
+    Ok(())
+}
+
+/// An empty journal holds nothing another run could deliver, so the
+/// next run's Sidecar starts with its own run-qualified sibling.
+#[tokio::test]
+async fn an_empty_journal_serves_the_next_run_sidecar() -> TestResult {
+    let collector = Collector::start()?;
+    let mut fixture = Fixture::new(&collector.url).await?;
+    serve_run(&mut fixture, "sidecar-a", "run_01j0000000e008000000000001")?;
+    let (tx, task, _) = fixture.start()?;
+    drop(tx);
+    finish(task).await?;
+    assert_eq!(std::fs::metadata(&fixture.wal)?.len(), 0);
+    let old_wal = fixture.wal.clone();
+
+    serve_run(&mut fixture, "sidecar-b", "run_01j0000000e008000000000002")?;
+    let (tx, task, _) = fixture.start()?;
+    drop(tx);
+    finish(task).await?;
+    let scope: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(format!("{}.scope", fixture.wal.display()))?)?;
+    assert_eq!(scope["run"], "run_01j0000000e008000000000002");
+    assert_ne!(old_wal, fixture.wal);
+    assert_eq!(std::fs::metadata(old_wal)?.len(), 0);
+    Ok(())
+}
+
+/// A queue whose scope does not match is refused without being touched,
+/// including a torn final record that only its own destination may repair.
+#[tokio::test]
+async fn scope_mismatch_leaves_a_torn_tail_intact() -> TestResult {
+    let collector = Collector::start()?;
+    let fixture = Fixture::new(&collector.url).await?;
+    let mut bytes = fixture.seed(&[event("original", None)])?;
+    bytes.extend_from_slice(b"{\"event_id\":\"partial");
+    std::fs::write(&fixture.wal, &bytes)?;
+    let scope = fixture.root.path().join("audit.jsonl.scope");
+    let mut different: serde_json::Value = serde_json::from_slice(&std::fs::read(&scope)?)?;
+    different["sidecar"][0] = "foreign-workspace".into();
+    std::fs::write(&scope, serde_json::to_vec(&different)?)?;
+    let (tx, task, _) = fixture.start()?;
+    drop(tx);
+    let error = task.await?.expect_err("wrong scope");
+    assert_eq!(
+        error.to_string(),
+        "server error: audit WAL destination does not match its stored scope"
+    );
+    assert_eq!(
+        String::from_utf8(std::fs::read(&fixture.wal)?)?,
+        String::from_utf8(bytes)?
+    );
+    Ok(())
+}
+
+/// A pre-shared-key Sidecar's scope file stays readable by the previous
+/// release, whose scope rejects unknown fields, so rolling the binary back
+/// does not strand its journal.
+#[tokio::test]
+async fn pre_shared_key_scope_remains_readable_by_the_previous_release() -> TestResult {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[expect(dead_code, reason = "only the accepted shape matters")]
+    struct PreviousScope {
+        version: u8,
+        endpoint: String,
+        sidecar: Option<(String, String)>,
+    }
+
+    let collector = Collector::start()?;
+    let fixture = Fixture::new(&collector.url).await?;
+    let scope = std::fs::read(fixture.root.path().join("audit.jsonl.scope"))?;
+    serde_json::from_slice::<PreviousScope>(&scope)?;
     Ok(())
 }

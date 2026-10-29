@@ -1,8 +1,10 @@
 //! Schema for `[sidecar.revocation]`.
 //!
-//! Representation only. `firma-sidecar` validates these values (capacity and
-//! LRU size must be non-zero; the false-positive rate must fall in `(0, 1)`)
-//! and builds its revocation store configuration from them.
+//! Schema value types own the non-zero capacities; `firma-sidecar` validates
+//! that the false-positive rate falls in `(0, 1)` and builds its revocation
+//! store configuration from these values.
+
+use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
 
@@ -12,13 +14,13 @@ use serde::{Deserialize, Serialize};
 pub struct RevocationConfig {
     /// Expected distinct revoked tokens the bloom is sized for.
     #[serde(default = "default_capacity")]
-    pub capacity: usize,
+    pub capacity: NonZeroUsize,
     /// Target false positive rate.
     #[serde(default = "default_fpr")]
     pub fpr: f64,
     /// Capacity of the confirmed-positive LRU cache.
     #[serde(default = "default_lru_capacity")]
-    pub lru_capacity: usize,
+    pub lru_capacity: NonZeroUsize,
 }
 
 impl Default for RevocationConfig {
@@ -31,14 +33,14 @@ impl Default for RevocationConfig {
     }
 }
 
-const fn default_capacity() -> usize {
-    1_000_000
+const fn default_capacity() -> NonZeroUsize {
+    const { NonZeroUsize::new(1_000_000).unwrap() }
 }
 
 const fn default_fpr() -> f64 {
     0.0001
 }
 
-const fn default_lru_capacity() -> usize {
-    100_000
+const fn default_lru_capacity() -> NonZeroUsize {
+    const { NonZeroUsize::new(100_000).unwrap() }
 }

@@ -34,10 +34,14 @@ impl SandboxBackend for Wsl2Backend {
         BackendKind::Wsl2
     }
 
-    fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
-        if request.profile.id == "vscode" {
+    fn structural_network(&self, _policy: &NetworkPolicy) -> bool {
+        false
+    }
+
+    fn preflight(&self, profile: &crate::config::ResolvedProfile) -> Result<(), RunError> {
+        if profile.id == "vscode" {
             return Err(RunError::UnsupportedProfileBackend {
-                profile: request.profile.id.clone(),
+                profile: profile.id.clone(),
                 backend: BackendKind::Wsl2.to_string(),
                 reason: "the managed VS Code launcher runs on the Windows host rather than inside WSL; VS Code is not currently supported by the WSL2 backend"
                     .to_string(),
@@ -58,6 +62,11 @@ impl SandboxBackend for Wsl2Backend {
             });
         }
 
+        Ok(())
+    }
+
+    fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
+        self.preflight(&request.profile)?;
         let runtime_dir =
             SandboxRuntimeLayout::in_temp_dir(&env::temp_dir(), &request.identity.sandbox_id)
                 .into_root();

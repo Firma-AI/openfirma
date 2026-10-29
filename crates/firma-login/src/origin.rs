@@ -1,13 +1,15 @@
+use firma_config_utils::http::{HttpOrigin, HttpUrlError, Https, HttpsOrLoopbackHttp};
+use firma_connection_store::{Connection, OriginMode};
 use thiserror::Error;
-use url::{Host, Url};
+use url::Url;
 
 /// A validated origin for the Firma control plane.
 ///
 /// This type accepts only a scheme, host, and optional port. It prevents an
 /// operator-supplied value from carrying a path, credentials, query, or
 /// fragment into an authorization or token endpoint URL.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ControlPlaneOrigin(Url);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneOrigin(HttpOrigin<HttpsOrLoopbackHttp>);
 
 impl ControlPlaneOrigin {
     /// Validate `url` as a control-plane origin for `validation_mode`.
@@ -20,65 +22,31 @@ impl ControlPlaneOrigin {
         url: Url,
         validation_mode: OriginValidationMode,
     ) -> Result<Self, ControlPlaneOriginError> {
-        let host = url.host().ok_or(ControlPlaneOriginError::MissingHost)?;
-        let is_loopback_host = is_loopback_host(&host);
-        validate_origin_shape(&url)?;
-        validate_scheme_policy(&url, validation_mode, is_loopback_host)?;
+        let origin = match validation_mode {
+            OriginValidationMode::Production => HttpOrigin::<Https>::new(url)?.into(),
+            OriginValidationMode::DevelopmentLoopback => HttpOrigin::new(url)?,
+        };
+        Ok(Self(origin))
+    }
 
-        Ok(Self(url))
+    /// Validate the origin a saved connection names, under the mode its login
+    /// validated it with.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the saved origin no longer passes that mode.
+    pub fn saved(connection: &Connection) -> Result<Self, ControlPlaneOriginError> {
+        let mode = match connection.origin_mode {
+            OriginMode::Production => OriginValidationMode::Production,
+            OriginMode::DevelopmentLoopback => OriginValidationMode::DevelopmentLoopback,
+        };
+        Self::new(connection.origin.clone(), mode)
     }
 
     /// Return the validated URL backing this origin.
     #[must_use]
-    pub fn as_url(&self) -> &Url {
-        &self.0
-    }
-}
-
-fn validate_origin_shape(url: &Url) -> Result<(), ControlPlaneOriginError> {
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(ControlPlaneOriginError::UserInfo);
-    }
-
-    if url.path() != "/" {
-        return Err(ControlPlaneOriginError::Path);
-    }
-
-    if url.query().is_some() {
-        return Err(ControlPlaneOriginError::Query);
-    }
-
-    if url.fragment().is_some() {
-        return Err(ControlPlaneOriginError::Fragment);
-    }
-
-    Ok(())
-}
-
-fn validate_scheme_policy(
-    url: &Url,
-    validation_mode: OriginValidationMode,
-    is_loopback_host: bool,
-) -> Result<(), ControlPlaneOriginError> {
-    match url.scheme() {
-        "https" => Ok(()),
-        "http" if validation_mode == OriginValidationMode::DevelopmentLoopback => {
-            if is_loopback_host {
-                Ok(())
-            } else {
-                Err(ControlPlaneOriginError::DevelopmentHttpRequiresLoopback)
-            }
-        }
-        "http" => Err(ControlPlaneOriginError::RequiresHttps),
-        _ => Err(ControlPlaneOriginError::UnsupportedScheme),
-    }
-}
-
-fn is_loopback_host(host: &Host<&str>) -> bool {
-    match host {
-        Host::Domain(host) => host.eq_ignore_ascii_case("localhost"),
-        Host::Ipv4(address) => address.is_loopback(),
-        Host::Ipv6(address) => address.is_loopback(),
+    pub const fn as_url(&self) -> &Url {
+        self.0.as_url()
     }
 }
 
@@ -128,4 +96,19 @@ pub enum ControlPlaneOriginError {
     /// The URL has a scheme other than HTTP or HTTPS.
     #[error("control-plane origin uses an unsupported scheme")]
     UnsupportedScheme,
+}
+
+impl From<HttpUrlError> for ControlPlaneOriginError {
+    fn from(error: HttpUrlError) -> Self {
+        match error {
+            HttpUrlError::MissingHost => Self::MissingHost,
+            HttpUrlError::Credentials => Self::UserInfo,
+            HttpUrlError::Path => Self::Path,
+            HttpUrlError::Query => Self::Query,
+            HttpUrlError::Fragment => Self::Fragment,
+            HttpUrlError::UnsupportedScheme => Self::UnsupportedScheme,
+            HttpUrlError::RequiresHttps => Self::RequiresHttps,
+            HttpUrlError::HttpRequiresLoopback => Self::DevelopmentHttpRequiresLoopback,
+        }
+    }
 }

@@ -12,7 +12,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-use firma_config_utils::NonZeroDuration;
+use firma_config_utils::{NonZeroByteSize, NonZeroDuration};
 
 const DEFAULT_DRAIN_TIMEOUT: NonZeroDuration =
     NonZeroDuration::from_static(Duration::from_secs(30));
@@ -79,19 +79,13 @@ pub struct InterceptorConfig {
     #[serde(default = "default_drain_timeout")]
     pub drain_timeout: NonZeroDuration,
     /// Maximum request body size accepted by proxy interceptors.
-    #[serde(
-        with = "crate::utils::byte_size",
-        default = "default_max_request_body_size"
-    )]
-    pub max_request_body_size: ByteSize,
+    #[serde(default = "default_max_request_body_size")]
+    pub max_request_body_size: NonZeroByteSize,
     /// Maximum size a single request or response body may expand to when
     /// decompressed for secret placeholder rehydration or masking. Bounds the
     /// memory a decompression bomb can force the Sidecar to allocate.
-    #[serde(
-        with = "crate::utils::byte_size",
-        default = "default_max_decompressed_body_size"
-    )]
-    pub max_decompressed_body_size: ByteSize,
+    #[serde(default = "default_max_decompressed_body_size")]
+    pub max_decompressed_body_size: NonZeroByteSize,
     /// CONNECT/MITM relay timeout controls.
     #[serde(default)]
     pub connect_relay: ConnectRelayConfig,
@@ -100,11 +94,8 @@ pub struct InterceptorConfig {
     pub https_mitm: HttpsMitmConfig,
     /// Global ceiling for the total bytes of request bodies buffered
     /// concurrently across all in-flight proxy connections.
-    #[serde(
-        with = "crate::utils::byte_size",
-        default = "default_total_body_budget"
-    )]
-    pub total_body_budget: ByteSize,
+    #[serde(default = "default_total_body_budget")]
+    pub total_body_budget: NonZeroByteSize,
 }
 
 impl Default for InterceptorConfig {
@@ -203,16 +194,16 @@ const fn default_drain_timeout() -> NonZeroDuration {
     DEFAULT_DRAIN_TIMEOUT
 }
 
-const fn default_max_request_body_size() -> ByteSize {
-    ByteSize::mib(4)
+const fn default_max_request_body_size() -> NonZeroByteSize {
+    const { NonZeroByteSize::from_static(ByteSize::mib(4)) }
 }
 
-const fn default_max_decompressed_body_size() -> ByteSize {
-    ByteSize::mb(16)
+const fn default_max_decompressed_body_size() -> NonZeroByteSize {
+    const { NonZeroByteSize::from_static(ByteSize::mb(16)) }
 }
 
-const fn default_total_body_budget() -> ByteSize {
-    ByteSize::mib(64)
+const fn default_total_body_budget() -> NonZeroByteSize {
+    const { NonZeroByteSize::from_static(ByteSize::mib(64)) }
 }
 
 const fn default_connect_setup_timeout() -> NonZeroDuration {

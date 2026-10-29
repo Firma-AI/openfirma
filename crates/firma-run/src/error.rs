@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use firma_secret_provider::IntegrationConfigError;
+use firma_sidecar::authority_tls::AuthorityTlsError;
 
 /// Why a required secret-shim artifact cannot be used.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -28,6 +29,11 @@ pub enum RunError {
     )]
     ReservedSandboxIdEnvironment,
 
+    #[error(
+        "FIRMA_RUN_SESSION_ID cannot override the run a managed run reports under; unset it before starting `firma run --agent`"
+    )]
+    ReservedSessionIdEnvironment,
+
     #[error("failed to parse config at {path}: {reason}")]
     ConfigParse { path: PathBuf, reason: String },
 
@@ -36,6 +42,9 @@ pub enum RunError {
 
     #[error(transparent)]
     IntegrationValidation(#[from] IntegrationConfigError),
+
+    #[error(transparent)]
+    AuthorityTls(#[from] AuthorityTlsError),
 
     #[error(
         "missing [sidecar.authority].agent_id in {path}; run `firma config --agent-id <AGENT_ID>` or add the registered agent TypeID to the configuration"
@@ -68,7 +77,7 @@ pub enum RunError {
     },
 
     #[error(
-        "cannot discover the Homebrew secret-shim resource from {firma_exe}: {reason}. Reinstall OpenFirma with Homebrew or use a complete target-qualified bundle"
+        "cannot discover the Homebrew secret-shim resource from {firma_exe}: {reason}. Reinstall OpenFirma with the curl | sh installer or use a complete target-qualified bundle"
     )]
     SecretShimDiscovery { firma_exe: PathBuf, reason: String },
 
@@ -96,6 +105,11 @@ pub enum RunError {
 
     #[error("run component stack shutdown failed: {0}")]
     RunStackShutdown(firma_process_orchestrator::OrchestratorError),
+
+    #[error(
+        "run component stack shutdown could not confirm that its processes stopped; they may still be running: {0}"
+    )]
+    RunStackTeardownUncertain(firma_process_orchestrator::OrchestratorError),
 
     #[error("{operation}; run component stack rollback failed: {rollback}")]
     RunStackPostReadyRollback {

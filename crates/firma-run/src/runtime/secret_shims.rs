@@ -409,8 +409,9 @@ fn resolve_real_binaries(
 /// Locate the `firma-secret-shim` binary for the given guest target.
 ///
 /// Looks in the private target-qualified bundle directory first, then in the
-/// repository installer's version-qualified Homebrew resource directory, and
-/// finally next to `firma_exe` (the legacy bwrap layout).
+/// version-qualified Homebrew resource directory that earlier versions of the
+/// repository installer populated, and finally next to `firma_exe` (the legacy
+/// bwrap layout).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedShimArtifact {
     path: PathBuf,
@@ -1379,7 +1380,7 @@ secret_providers = {secret_providers}
             RunError::SecretShimDiscovery { reason, .. } => reason,
             other => panic!("expected discovery error, got {other:?}"),
         };
-        insta::assert_snapshot!(error.to_string().replace(&firma.display().to_string(), "<FIRMA>").replace(reason, "<DISCOVERY ERROR>"), @"cannot discover the Homebrew secret-shim resource from <FIRMA>: <DISCOVERY ERROR>. Reinstall OpenFirma with Homebrew or use a complete target-qualified bundle");
+        insta::assert_snapshot!(error.to_string().replace(&firma.display().to_string(), "<FIRMA>").replace(reason, "<DISCOVERY ERROR>"), @"cannot discover the Homebrew secret-shim resource from <FIRMA>: <DISCOVERY ERROR>. Reinstall OpenFirma with the curl | sh installer or use a complete target-qualified bundle");
     }
 
     #[test]

@@ -4,6 +4,10 @@
 //! the returned token locally, and writes the resulting [`CapabilitySeed`] to
 //! `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`. The sidecar then
 //! loads it via `[sidecar.capability_seed]`.
+//!
+//! The request always names every action class ([`REQUESTED_ACTIONS`]); the
+//! policy set applied to the agent decides which of them are granted. An
+//! agent's capabilities therefore follow its policies with no local edit.
 
 // M-CANONICAL-DOCS: all public items carry doc comments.
 // M-ERRORS-CANONICAL-STRUCTS: errors are forwarded through RunError.
@@ -19,8 +23,9 @@ use firma_identifiers::AgentId;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_protobuf::v1::{IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision};
 use firma_sidecar::authority_client::channel::build_channel;
-use firma_sidecar::authority_credentials::ResolvedSidecarCredentials;
-use firma_sidecar::config::AuthorityEndpoint;
+use firma_sidecar::authority_credentials::SidecarCredential;
+use firma_sidecar::authority_tls::{TlsTrust, read_ca_pems};
+use firma_sidecar::config::{AuthorityEndpoint, AuthorityTrust};
 
 use crate::error::RunError;
 
@@ -31,34 +36,42 @@ pub struct IssueParams {
     pub authority_url: String,
     /// Path to the Authority's Ed25519 public key (for local verification).
     pub authority_pub_key_path: PathBuf,
-    /// Optional PEM CA cert path for an `https://` Authority.
-    pub authority_ca_cert_path: Option<PathBuf>,
+    /// What an `https://` Authority's certificate is verified against.
+    pub trust: AuthorityTrust,
+    /// The physical address dialed for `authority_url`, when the config
+    /// names one.
+    pub connect_addr: Option<std::net::SocketAddr>,
     /// Optional Sidecar credentials for the Authority request.
-    pub credentials: Option<ResolvedSidecarCredentials>,
+    pub credentials: Option<SidecarCredential>,
     /// Agent identity to bind into the request.
     pub agent_id: AgentId,
     /// Session identity to bind into the request.
     pub session_id: String,
-    /// Action classes requested.
-    pub requested_actions: Vec<String>,
     /// Resource scope requested.
     pub resource_scope: String,
     /// Requested TTL in seconds.
     pub ttl_seconds: i32,
 }
 
-/// Default action set requested when none is configured: every action class.
+/// Action set every mint requests: every action class.
 ///
-/// A run requests all action classes by default and lets the Authority narrow
-/// the grant to whatever its issuance policy authorizes (`requested ∩
-/// Cedar-permitted`). This keeps the Authority the single source of truth for
-/// what a session may do, so a run never fails closed merely because its
-/// configured request omitted an action class the mapping rules later emit.
-///
-/// Setting `[run.profiles.<name>.capability] requested_actions` in `firma.toml`
-/// narrows this request further — an opt-in extra-restriction knob for running
-/// with fewer permissions than the policy would otherwise allow.
-pub(crate) const DEFAULT_REQUESTED_ACTIONS: &[ActionClass] = ActionClass::ALL;
+/// A run always requests all action classes and lets the Authority narrow the
+/// grant to whatever its issuance policy authorizes (`requested ∩
+/// Cedar-permitted`). This makes the policy set applied to the agent the single
+/// source of truth for what a session may do: nothing local can widen the grant,
+/// and no run fails closed merely because a config omitted an action class the
+/// mapping rules later emit. There is deliberately no way to request less —
+/// simulating reduced permissions is a policy concern, not a config one.
+const REQUESTED_ACTIONS: &[ActionClass] = ActionClass::ALL;
+
+/// [`REQUESTED_ACTIONS`] in the wire representation `IssueCapabilityRequest`
+/// expects.
+fn requested_actions() -> Vec<String> {
+    REQUESTED_ACTIONS
+        .iter()
+        .map(|class| class.as_str().to_string())
+        .collect()
+}
 
 /// Default resource scope.
 #[cfg(unix)]
@@ -136,12 +149,18 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
     let verifier = PasetoV4Verifier::try_new(&pub_key)
         .map_err(|e| RunError::Capability(format!("invalid authority public key: {e}")))?;
 
-    let ca_pem = match &params.authority_ca_cert_path {
-        Some(p) => Some(std::fs::read(p).map_err(|e| {
-            RunError::Capability(format!("read authority CA cert '{}': {e}", p.display()))
-        })?),
-        None => None,
-    };
+    let endpoint =
+        AuthorityEndpoint::new(&params.authority_url, params.connect_addr).map_err(|e| {
+            RunError::AuthorityUnreachable {
+                url: params.authority_url.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+    // The CA files are read for every scheme, as the Sidecar reads them, so a
+    // broken file stops the run before a capability is written; `build_channel`
+    // applies them to an `https` endpoint only.
+    let ca_pems = read_ca_pems(&params.trust)?;
+    let trust = TlsTrust::from_pems(&ca_pems);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -152,57 +171,50 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
     // requires an active Tokio reactor; build it inside `block_on` so the call
     // site does not need to already be running on a runtime. `firma run`
     // invokes this from a synchronous code path, so this must self-host.
-    let response = runtime.block_on(async {
-        let endpoint = AuthorityEndpoint::new(&params.authority_url, None).map_err(|e| {
-            RunError::AuthorityUnreachable {
-                url: params.authority_url.clone(),
-                reason: e.to_string(),
-            }
+    let response =
+        runtime.block_on(async {
+            let channel = build_channel(&endpoint, AUTHORITY_CONNECT_TIMEOUT, trust, None)
+                .map_err(|e| RunError::AuthorityUnreachable {
+                    url: params.authority_url.clone(),
+                    reason: format!("{:#}", anyhow::Error::new(e)),
+                })?;
+            let mut client = AuthorityServiceClient::new(channel);
+            let message = IssueCapabilityRequest {
+                agent_id: params.agent_id.to_string(),
+                session_id: params.session_id.clone(),
+                requested_actions: requested_actions(),
+                resource_scope: params.resource_scope.clone(),
+                requested_ttl_seconds: params.ttl_seconds,
+                // A pre-shared key travels in the body; a runtime credential is
+                // the request's bearer.
+                credentials: params
+                    .credentials
+                    .as_ref()
+                    .and_then(SidecarCredential::body_credentials),
+                issuance_attempt_id: None,
+            };
+            let request = SidecarCredential::authenticated(params.credentials.as_ref(), message);
+            // Bound the request so a connected-but-stalled Authority cannot hang the
+            // caller indefinitely. This matters for the background refresher, whose
+            // Drop must join the mint thread before the seed-file guard deletes the
+            // file (see `capability::refresh`); an unbounded RPC would stall sandbox
+            // teardown.
+            let rpc = client.issue_capability(request);
+            tokio::time::timeout(REQUEST_TIMEOUT, rpc)
+                .await
+                .map_err(|_elapsed| RunError::AuthorityUnreachable {
+                    url: params.authority_url.clone(),
+                    reason: format!(
+                        "IssueCapability RPC timed out after {}s",
+                        REQUEST_TIMEOUT.as_secs()
+                    ),
+                })?
+                .map(tonic::Response::into_inner)
+                .map_err(|status| RunError::AuthorityUnreachable {
+                    url: params.authority_url.clone(),
+                    reason: format!("IssueCapability RPC failed: {status}"),
+                })
         })?;
-        let channel = build_channel(
-            &endpoint,
-            AUTHORITY_CONNECT_TIMEOUT,
-            ca_pem.as_deref(),
-            None,
-            None,
-        )
-        .map_err(|e| RunError::AuthorityUnreachable {
-            url: params.authority_url.clone(),
-            reason: e.to_string(),
-        })?;
-        let mut client = AuthorityServiceClient::new(channel);
-        // Bound the request so a connected-but-stalled Authority cannot hang the
-        // caller indefinitely. This matters for the background refresher, whose
-        // Drop must join the mint thread before the seed-file guard deletes the
-        // file (see `capability::refresh`); an unbounded RPC would stall sandbox
-        // teardown.
-        let rpc = client.issue_capability(IssueCapabilityRequest {
-            agent_id: params.agent_id.to_string(),
-            session_id: params.session_id.clone(),
-            requested_actions: params.requested_actions.clone(),
-            resource_scope: params.resource_scope.clone(),
-            requested_ttl_seconds: params.ttl_seconds,
-            credentials: params
-                .credentials
-                .as_ref()
-                .map(ResolvedSidecarCredentials::to_proto),
-            issuance_attempt_id: None,
-        });
-        tokio::time::timeout(REQUEST_TIMEOUT, rpc)
-            .await
-            .map_err(|_elapsed| RunError::AuthorityUnreachable {
-                url: params.authority_url.clone(),
-                reason: format!(
-                    "IssueCapability RPC timed out after {}s",
-                    REQUEST_TIMEOUT.as_secs()
-                ),
-            })?
-            .map(tonic::Response::into_inner)
-            .map_err(|status| RunError::AuthorityUnreachable {
-                url: params.authority_url.clone(),
-                reason: format!("IssueCapability RPC failed: {status}"),
-            })
-    })?;
 
     capability_seed_from_response(response, params, &verifier)
 }

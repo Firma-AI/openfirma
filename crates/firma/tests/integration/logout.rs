@@ -11,7 +11,7 @@ use wiremock::{
 #[cfg(unix)]
 const REVOKE: &str = "/api/agent-flow/v1/authorizations/revoke";
 #[cfg(unix)]
-const REFRESH_TOKEN: &str = "logout-test-refresh-token";
+pub const REFRESH_TOKEN: &str = "logout-test-refresh-token";
 
 /// A connection directory inside a fresh temporary directory; the store
 /// creates it with private permissions.
@@ -28,10 +28,27 @@ fn logout(connection_dir: &std::path::Path) -> Result<std::process::Output, std:
         .output()
 }
 
+/// Saves a development-loopback login for `origin` with [`REFRESH_TOKEN`]
+/// in the private file backend.
 #[cfg(unix)]
-fn file_backed_login(
+pub fn file_backed_login(
     dir: &std::path::Path,
     origin: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    saved_login(
+        dir,
+        origin,
+        &serde_json::json!({ "backend": "file", "value": REFRESH_TOKEN }),
+    )
+}
+
+/// Saves a development-loopback login for `origin` with `secret` as its
+/// stored secret field.
+#[cfg(unix)]
+pub fn saved_login(
+    dir: &std::path::Path,
+    origin: &str,
+    secret: &serde_json::Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -43,10 +60,7 @@ fn file_backed_login(
         "development_loopback": true,
         "workspace_id": "wsp_01j0000000e008000000000001",
         "membership_id": "mem_01j0000000e008000000000001",
-        "secret": {
-            "backend": "file",
-            "value": REFRESH_TOKEN,
-        },
+        "secret": secret,
     });
     let file = dir.join("connection.json");
     std::fs::write(&file, serde_json::to_vec_pretty(&record)?)?;

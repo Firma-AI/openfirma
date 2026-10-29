@@ -9,10 +9,8 @@ description = "Shared types, capability tokens, Cedar wrapper, and error types f
 
 [features]
 default = []
-fuzz = ["dep:arbitrary"]
 
 [dependencies]
-arbitrary = { workspace = true, optional = true }
 async-trait = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
@@ -20,6 +18,7 @@ firma-config-schema = { workspace = true }
 firma-http = { workspace = true }
 firma-identifiers = { workspace = true }
 http = { workspace = true }
+miette = { workspace = true }
 pasetors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

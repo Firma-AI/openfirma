@@ -8,14 +8,20 @@ use std::path::{Path, PathBuf};
 use crate::error::RunError;
 use firma_config_schema::sidecar::authority::AuthorityConfig as SidecarAuthorityConfig;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
+use firma_sidecar::config::PlatformRoots;
 
 /// Client-side connect coordinates lifted from `[sidecar.authority]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthorityConnectSection {
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
     pub(crate) url: Option<String>,
-    /// Path to the PEM CA certificate that signed the authority's TLS cert.
-    pub(crate) ca_cert_path: Option<PathBuf>,
+    /// Physical TCP destination for the Authority connection, when overridden.
+    pub(crate) connect_addr: Option<std::net::SocketAddr>,
+    /// PEM CA certificates the authority's TLS cert may be signed by.
+    pub(crate) ca_cert_paths: Vec<PathBuf>,
+    /// Whether the platform's roots may verify an `https://` Authority when no
+    /// CA is named.
+    pub(crate) platform_roots: PlatformRoots,
     /// Path to the authority's Ed25519 public key for PASETO token verification.
     pub(crate) public_key_path: Option<PathBuf>,
     /// Sidecar credentials presented on Authority RPCs.
@@ -131,12 +137,7 @@ pub(crate) fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, Ru
         .map(|config| config.authority)
         .map(build_connect_section)
         .transpose()?
-        .filter(|c| {
-            c.url.is_some()
-                || c.ca_cert_path.is_some()
-                || c.public_key_path.is_some()
-                || c.credentials.is_some()
-        });
+        .filter(|c| *c != AuthorityConnectSection::default());
     if !local && connect.is_none() {
         return Ok(None);
     }
@@ -157,7 +158,9 @@ fn build_connect_section(
         .map_err(|e| RunError::ConfigValidation(format!("sidecar.authority.credentials: {e}")))?;
     Ok(AuthorityConnectSection {
         url: section.url,
-        ca_cert_path: section.ca_cert_path,
+        connect_addr: section.connect_addr,
+        ca_cert_paths: section.ca_cert_paths,
+        platform_roots: PlatformRoots::from_disable_flag(section.disable_platform_roots),
         public_key_path: section.public_key_path,
         credentials,
     })

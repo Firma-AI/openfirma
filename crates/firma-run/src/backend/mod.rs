@@ -198,6 +198,17 @@ pub enum BackendKind {
 }
 
 impl BackendKind {
+    /// Whether the workload runs outside `firma`'s process group, so a signal
+    /// that reaches `firma` cannot come from the workload itself. VZ (whose
+    /// `sandbox-exec` mode shares the group) and WSL2 do not: a `kill 0` from
+    /// the workload would reach `firma` too, and recording it as an interrupt
+    /// would close a successful run as cancelled.
+    #[cfg(unix)]
+    #[must_use]
+    pub(crate) const fn isolates_workload(self) -> bool {
+        matches!(self, Self::Bwrap | Self::Firecracker)
+    }
+
     /// Default backend for current host platform.
     #[cfg_attr(
         all(target_os = "linux", not(test)),
@@ -472,6 +483,18 @@ pub struct LaunchSpec {
 pub trait SandboxBackend: Send + Sync {
     /// Returns the concrete backend kind.
     fn kind(&self) -> BackendKind;
+
+    /// Checks host support without creating sandbox state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host cannot prepare this profile.
+    fn preflight(&self, profile: &ResolvedProfile) -> Result<(), RunError>;
+
+    /// Whether this host's selected mode structurally confines the network.
+    fn structural_network(&self, policy: &NetworkPolicy) -> bool {
+        policy.enforce_network_namespace
+    }
 
     /// Prepare host/sandbox state before launching an agent.
     ///

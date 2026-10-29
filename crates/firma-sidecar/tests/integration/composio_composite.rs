@@ -31,6 +31,7 @@ use firma_sidecar::pipeline::{
 };
 use http::HeaderName as HttpHeaderName;
 use rcgen::{CertifiedKey, generate_simple_self_signed};
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -459,8 +460,10 @@ async fn start_mock_tls_upstream() -> anyhow::Result<(
     Arc<AtomicUsize>,
     CancellationToken,
 )> {
-    let CertifiedKey { cert, key_pair } =
-        generate_simple_self_signed(vec!["mock.composio.test".to_string()])?;
+    let CertifiedKey {
+        cert,
+        signing_key: key_pair,
+    } = generate_simple_self_signed(vec!["mock.composio.test".to_string()])?;
     let certificate = CertificateDer::from(cert.der().to_vec());
     let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1237,7 +1240,7 @@ async fn firma_ca_client(ca_dir: &std::path::Path) -> anyhow::Result<TlsConnecto
     }
     let mut roots = RootCertStore::empty();
     let pem = std::fs::read(&ca_path)?;
-    for certificate in rustls_pemfile::certs(&mut pem.as_slice()) {
+    for certificate in CertificateDer::pem_slice_iter(&pem) {
         roots.add(certificate?)?;
     }
     let _ = rustls::crypto::ring::default_provider().install_default();

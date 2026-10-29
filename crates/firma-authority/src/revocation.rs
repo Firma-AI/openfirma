@@ -11,6 +11,16 @@ use tokio::task::JoinHandle;
 
 use firma_identifiers::TokenId;
 
+/// How long a revocation stays in the delivered set past the point its token
+/// must have expired.
+///
+/// Stage 1 compares a token's expiry against the Sidecar's own clock with no
+/// leeway, so a Sidecar running behind the Authority still accepts a token the
+/// Authority considers expired. Without this the set would drop a revocation
+/// exactly as its token expires — zero margin for a token revoked the instant
+/// it was issued. It assumes skew stays inside the margin; nothing measures it.
+const REVOCATION_SET_SKEW_MARGIN: Duration = Duration::minutes(5);
+
 /// An event representing the revocation of a capability token.
 #[derive(Debug, Clone)]
 pub struct RevocationEntry {
@@ -31,9 +41,10 @@ pub struct RevocationEntry {
 /// them as freshly revoked rather than potentially expirable). Legacy raw UUID
 /// capability IDs are invalid and are not loaded.
 ///
-/// Entries whose `revoked_at + token_ttl < now` are considered expired: the
-/// token would fail the expiry check in Stage 1 regardless of revocation status,
-/// so they can be safely ignored and removed via [`RevocationStore::compact_file`].
+/// Entries whose `revoked_at + token_ttl + REVOCATION_SET_SKEW_MARGIN < now`
+/// are considered expired: the token would fail the expiry check in Stage 1 on
+/// every clock within the margin, regardless of revocation status, so they can
+/// be safely ignored and removed via [`RevocationStore::compact_file`].
 #[derive(Clone)]
 pub struct RevocationStore {
     /// Internal state
@@ -43,21 +54,22 @@ pub struct RevocationStore {
     /// Maximum token TTL issued by this Authority. Entries older than this
     /// are expired and can be trimmed from the file.
     token_ttl: Duration,
+    /// Clock-skew allowance added to `token_ttl` before an entry is expired.
+    skew_margin: Duration,
 }
 
 #[derive(Default)]
 struct RevocationState {
     /// Revoked token IDs mapped to their revocation entries.
     entries: HashMap<TokenId, RevocationEntry>,
-    /// Ordered log for replay (FR-6: replay events after `since`).
-    log: Vec<RevocationEntry>,
 }
 
 impl RevocationStore {
     /// Create a new revocation store, loading any existing entries from file.
     ///
     /// `token_ttl` is the maximum lifetime of tokens issued by this Authority.
-    /// Entries older than `token_ttl` are skipped on load (they are already expired).
+    /// Entries past `token_ttl` plus [`REVOCATION_SET_SKEW_MARGIN`] are skipped
+    /// on load: the tokens they name are expired on every clock in range.
     ///
     /// # Errors
     ///
@@ -67,6 +79,7 @@ impl RevocationStore {
             state: Arc::default(),
             revocation_file: revocation_file.to_path_buf(),
             token_ttl,
+            skew_margin: REVOCATION_SET_SKEW_MARGIN,
         };
 
         // Load existing revocations from file (if it exists and is non-empty).
@@ -117,9 +130,21 @@ impl RevocationStore {
     }
 
     /// Returns `true` if the revocation entry is old enough that the token
-    /// would fail the expiry check in Stage 1 regardless of revocation status.
+    /// would fail the expiry check in Stage 1 on every clock within
+    /// [`REVOCATION_SET_SKEW_MARGIN`], regardless of revocation status.
+    /// Every path that decides an entry is past use — load, reload, the
+    /// delivered set, and file compaction — asks this, so an entry cannot
+    /// leave one of them while another still expects it.
     fn is_expired(&self, entry: &RevocationEntry, now: DateTime<Utc>) -> bool {
-        entry.timestamp + self.token_ttl < now
+        entry.timestamp + self.token_ttl + self.skew_margin < now
+    }
+
+    /// Shortens the skew margin so a test can reach the expiry boundary
+    /// without waiting out the production one.
+    #[cfg(test)]
+    fn with_skew_margin(mut self, skew_margin: Duration) -> Self {
+        self.skew_margin = skew_margin;
+        self
     }
 
     /// Load revocations from file content. Skips expired entries.
@@ -149,8 +174,7 @@ impl RevocationStore {
             if state.entries.contains_key(&entry.token_id) {
                 continue;
             }
-            state.entries.insert(entry.token_id, entry.clone());
-            state.log.push(entry);
+            state.entries.insert(entry.token_id, entry);
             count += 1;
         }
 
@@ -202,22 +226,33 @@ impl RevocationStore {
         self.state.read().await.entries.contains_key(&token_id)
     }
 
-    /// Get all revocation events after the given timestamp (for stream replay).
-    pub(crate) async fn events_since(&self, since: DateTime<Utc>) -> Vec<RevocationEntry> {
-        self.state
+    /// Every revocation still worth sending, oldest-first.
+    ///
+    /// This is the whole set `WatchRevocations` sends, not a delta, bounded by
+    /// the same [`RevocationStore::is_expired`] rule that governs loading and
+    /// file compaction. The filter runs here because entries are never removed
+    /// from memory — compaction rewrites the file alone — so without it the
+    /// set would be bounded only by process lifetime, and every revocation
+    /// ever ingested would grow the message sent on every change.
+    pub(crate) async fn current_set(&self) -> Vec<RevocationEntry> {
+        let now = Utc::now();
+        let mut entries: Vec<_> = self
+            .state
             .read()
             .await
-            .log
-            .iter()
-            .filter(|e| e.timestamp > since)
+            .entries
+            .values()
+            .filter(|entry| !self.is_expired(entry, now))
             .cloned()
-            .collect()
+            .collect();
+        entries.sort_unstable_by_key(|entry| (entry.timestamp, entry.token_id));
+        entries
     }
 
     /// Reload revocations from the file on disk.
     ///
-    /// Returns the newly-added entries so that callers (e.g. [`RevocationStoreWatcher`])
-    /// can broadcast them to live subscribers.
+    /// Returns the newly-added entries so that [`RevocationStoreWatcher`] can
+    /// tell a reload that changed the set from one that did not.
     async fn reload_from_file(&self) -> Result<Vec<RevocationEntry>> {
         let content = match tokio::fs::read_to_string(&self.revocation_file).await {
             Ok(c) => c,
@@ -253,7 +288,6 @@ impl RevocationStore {
                 continue;
             }
             state.entries.insert(entry.token_id, entry.clone());
-            state.log.push(entry.clone());
             new_entries.push(entry);
         }
 
@@ -263,9 +297,10 @@ impl RevocationStore {
 
     /// Rewrite the revocation file, dropping entries that have expired.
     ///
-    /// An entry is considered expired when `revoked_at + token_ttl < now`:
-    /// the token would fail Stage 1 expiry checks regardless of its revocation
-    /// status, so the entry is no longer needed. This prevents unbounded file
+    /// An entry is considered expired when
+    /// `revoked_at + token_ttl + REVOCATION_SET_SKEW_MARGIN < now`: the token
+    /// would fail Stage 1 expiry checks on every clock within the margin,
+    /// regardless of its revocation status, so the entry is no longer needed. This prevents unbounded file
     /// growth for long-running deployments.
     ///
     /// The file watcher will detect the rewrite and trigger a reload, which is
@@ -374,15 +409,17 @@ impl RevocationStore {
         let task = tokio::spawn(async move {
             while rx_signal.recv().await.is_some() {
                 match this.reload_from_file().await {
-                    Ok(new_entries) => {
-                        for entry in new_entries {
-                            if let Ok(n) = tx_for_task.send(entry) {
-                                tracing::debug!(receivers = n, "revocation event broadcast");
-                            } else {
-                                tracing::debug!(
-                                    "no active revocation subscribers; event not broadcast"
-                                );
-                            }
+                    // One signal per reload, however many entries it added:
+                    // subscribers re-read the whole set, so a signal per entry
+                    // would resend that same set once for each.
+                    Ok(new_entries) if new_entries.is_empty() => {}
+                    Ok(_) => {
+                        if let Ok(n) = tx_for_task.send(()) {
+                            tracing::debug!(receivers = n, "revocation change signalled");
+                        } else {
+                            tracing::debug!(
+                                "no active revocation subscribers; change not signalled"
+                            );
                         }
                     }
                     Err(error) => {
@@ -407,7 +444,7 @@ pub struct RevocationStoreWatcher {
     _watcher: notify::RecommendedWatcher,
     _task: JoinHandle<()>,
     store: RevocationStore,
-    tx: broadcast::Sender<RevocationEntry>,
+    tx: broadcast::Sender<()>,
 }
 
 impl Deref for RevocationStoreWatcher {
@@ -419,15 +456,18 @@ impl Deref for RevocationStoreWatcher {
 }
 
 impl RevocationStoreWatcher {
-    /// Subscribe to new revocation events as they are ingested from the file.
+    /// Subscribe to a signal raised once for every reload that ingests at
+    /// least one new revocation from the file.
     #[must_use]
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<()> {
         self.tx.subscribe()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     fn ttl_1h() -> Duration {
@@ -594,17 +634,101 @@ mod tests {
         assert!(s.is_revoked(id).await);
     }
 
+    /// The delivered set is filtered at read time, by `token_ttl` plus the
+    /// production margin: entries stay resident, so only this filter keeps an
+    /// expired revocation off the wire. Written against literal offsets so
+    /// shrinking the margin fails here rather than passing by construction.
     #[tokio::test]
-    async fn events_since() {
+    async fn current_set_keeps_an_entry_through_the_skew_margin() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("revocations.txt");
+        let ttl = Duration::seconds(900);
+        let inside = TokenId::generate();
+        let outside = TokenId::generate();
+        let now = Utc::now();
+        // Both are past the TTL. `inside` is four minutes past it, which a
+        // five-minute margin must still cover; `outside` is six.
+        std::fs::write(
+            &file,
+            format!(
+                "{inside}\t{}\tinside the margin\n{outside}\t{}\tpast the margin\n",
+                (now - ttl - Duration::minutes(4)).to_rfc3339(),
+                (now - ttl - Duration::minutes(6)).to_rfc3339(),
+            ),
+        )
+        .unwrap();
+
+        // `try_new` loads with a blocking lock, so it cannot run on the test
+        // runtime's thread.
+        let loaded = file.clone();
+        let s =
+            tokio::task::spawn_blocking(move || RevocationStore::try_new(&loaded, ttl).unwrap())
+                .await
+                .unwrap();
+
+        let tokens: HashSet<_> = s
+            .current_set()
+            .await
+            .iter()
+            .map(|entry| entry.token_id)
+            .collect();
+        assert_eq!(
+            tokens,
+            HashSet::from([inside]),
+            "the margin must outlive the TTL, and only by itself"
+        );
+        assert!(
+            s.is_revoked(inside).await,
+            "entries stay held; only the delivered set is filtered"
+        );
+    }
+
+    /// Loading filters by the same rule, so an entry only becomes stale while
+    /// resident — which is the case only this read-time filter covers.
+    #[tokio::test]
+    async fn current_set_drops_an_entry_that_expires_while_resident() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("revocations.txt");
+        std::fs::write(&file, "").unwrap();
+        let ttl = Duration::seconds(1);
+        // An empty file skips the blocking load, so this is safe here.
+        let s = RevocationStore::try_new(&file, ttl)
+            .unwrap()
+            .with_skew_margin(Duration::seconds(1));
+        let s = s.watch().unwrap();
+        let mut rx = s.subscribe();
+
+        let id = TokenId::generate();
+        tokio::fs::write(&file, format!("{id}\n")).await.unwrap();
+        tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.current_set().await.len(), 1);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(2_400)).await;
+
+        assert!(
+            s.current_set().await.is_empty(),
+            "an entry past the TTL and the margin must leave the delivered set"
+        );
+        assert!(
+            s.is_revoked(id).await,
+            "the entry is still held: only the delivered set is filtered"
+        );
+    }
+
+    #[tokio::test]
+    async fn current_set_holds_every_ingested_revocation() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
+        assert!(s.current_set().await.is_empty());
         let s = s.watch().unwrap();
         let mut rx = s.subscribe();
 
-        let before = Utc::now() - chrono::Duration::seconds(1);
         let id1 = TokenId::generate();
         let id2 = TokenId::generate();
 
@@ -613,18 +737,15 @@ mod tests {
             .await
             .unwrap();
 
-        for _ in 0..2 {
-            tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
-                .await
-                .unwrap()
-                .unwrap();
-        }
+        tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
-        let events = s.events_since(before).await;
-        assert_eq!(events.len(), 2);
-
-        let future = Utc::now() + chrono::Duration::seconds(1);
-        assert!(s.events_since(future).await.is_empty());
+        let set = s.current_set().await;
+        assert_eq!(set.len(), 2);
+        let tokens: HashSet<_> = set.iter().map(|entry| entry.token_id).collect();
+        assert_eq!(tokens, HashSet::from([id1, id2]));
     }
 
     #[tokio::test]
@@ -678,26 +799,5 @@ mod tests {
             .unwrap();
 
         assert!(s.is_revoked(id).await);
-    }
-
-    #[tokio::test]
-    async fn watch_subscribe_receives_new_entries() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("revocations.txt");
-
-        let s = store(&file);
-        std::fs::write(&file, "").unwrap();
-        let s = s.watch().unwrap();
-        let mut rx = s.subscribe();
-
-        let id = TokenId::generate();
-        std::fs::write(&file, format!("{id}\n")).unwrap();
-
-        let entry = tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(entry.token_id, id);
     }
 }

@@ -1,5 +1,6 @@
 //! Per-service runners dispatched by `crate::main`.
 
+pub mod agent_run;
 pub mod authority;
 pub mod config;
 pub mod control;

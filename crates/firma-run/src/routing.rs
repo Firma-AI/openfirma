@@ -34,7 +34,8 @@ use crate::config::CapabilitySource;
 use crate::config::{CapabilityLeaseConfig, SidecarEndpoint};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
-use firma_sidecar::authority_credentials::{ResolvedSidecarCredentials, SidecarCredentialsConfig};
+use firma_sidecar::authority_credentials::{SidecarCredential, SidecarCredentialsConfig};
+use firma_sidecar::config::AuthorityTrust;
 
 #[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
@@ -160,6 +161,9 @@ pub struct NetworkRuntime {
     #[cfg(target_os = "linux")]
     egress_guard: Option<crate::egress_guard::EgressGuardHandle>,
     run_stack: Option<RunningStack>,
+    /// A failed [`Self::stop_after_component_exit`], reported by
+    /// [`Self::shutdown`] instead of a second teardown.
+    early_stop_error: Option<firma_process_orchestrator::ShutdownError>,
     // Stops the background re-mint thread. Declared before the guard so the
     // refresher halts (no further seed writes) before the file is deleted.
     capability_refresher: Option<crate::capability::refresh::CapabilityRefresher>,
@@ -184,6 +188,25 @@ impl NetworkRuntime {
         &self.sidecar_endpoint
     }
 
+    /// Whether a component this run started, such as its Sidecar, has exited;
+    /// if so, the components are stopped at once (see
+    /// [`RunningStack::stop_if_component_exited`]).
+    ///
+    /// Networking stays up until [`Self::shutdown`]: the egress guard keeps
+    /// confining the agent while it finishes, and a bridge drop can wait on
+    /// the agent's own connections.
+    pub(crate) fn stop_after_component_exit(&mut self, timeout: Duration) -> bool {
+        let Some(stack) = self.run_stack.as_mut() else {
+            return false;
+        };
+        stack
+            .stop_if_component_exited(timeout)
+            .unwrap_or_else(|error| {
+                self.early_stop_error = Some(error);
+                true
+            })
+    }
+
     /// Tear down networking before the owned Sidecar, then release its
     /// Authority and capability dependencies in their established safe order.
     pub(crate) fn shutdown(mut self, timeout: Duration) -> Result<(), RunError> {
@@ -196,9 +219,12 @@ impl NetworkRuntime {
         #[cfg(target_os = "linux")]
         drop(self.egress_guard.take());
 
-        if let Some(stack) = self.run_stack.as_mut()
-            && let Err(error) = stack.shutdown(timeout)
-        {
+        let stopped = match (self.early_stop_error.take(), self.run_stack.as_mut()) {
+            (Some(error), _) => Err(error),
+            (None, Some(stack)) => stack.shutdown(timeout).map(drop),
+            (None, None) => Ok(()),
+        };
+        if let Err(error) = stopped {
             let processes_stopped = error.processes_stopped();
             let error = error.into_orchestrator_error();
             if !processes_stopped {
@@ -206,7 +232,7 @@ impl NetworkRuntime {
                 // alive while process teardown remains uncertain. Dropping
                 // this owner would violate dependency order.
                 std::mem::forget(self);
-                return Err(RunError::RunStackShutdown(error));
+                return Err(RunError::RunStackTeardownUncertain(error));
             }
             // Process ownership is discharged. Release capability material but
             // retain the run marker that contains deferred orchestrator state.
@@ -271,7 +297,7 @@ pub struct AutostartFlags {
     /// into the synthesized sidecar config.
     pub authority_url: Option<String>,
     /// Path to the CA cert that signed the authority's TLS cert — injected
-    /// into `[sidecar.authority].ca_cert_path` during synthesis.
+    /// as `[sidecar.authority].ca_cert_paths = [path]` during synthesis.
     pub authority_ca_cert: Option<PathBuf>,
     /// Path to the authority's Ed25519 public key — injected into
     /// `[sidecar.authority].public_key_path` during synthesis so the sidecar
@@ -319,16 +345,28 @@ impl Default for AutostartFlags {
 /// Resolved Authority for the current run.
 pub struct ResolvedAuthority {
     pub url: String,
-    /// CA cert path from `[sidecar.authority]`, if present.
+    /// The state directory's Authority CA this run adopted or repairs for a
+    /// local Authority, written into the synthesized Sidecar config. `None`
+    /// when the config names its own CAs, which pass through the template.
     pub ca_cert_path: Option<PathBuf>,
+    /// What an `https` Authority's certificate is verified against, for the
+    /// capability mint: the same decision the Sidecar takes from the config.
+    pub trust: AuthorityTrust,
+    /// The physical address dialed for `url`, if the config names one: a
+    /// tunnel the Sidecar and the capability mint both go through.
+    pub connect_addr: Option<std::net::SocketAddr>,
     /// Effective Authority public key used to verify issued capabilities.
     pub pub_key_path: Option<PathBuf>,
     /// Resolved credentials used by `firma run` when issuing a capability.
-    pub credentials: Option<ResolvedSidecarCredentials>,
+    pub credentials: Option<SidecarCredential>,
     /// Unresolved credentials config passed to an autostarted Sidecar.
     pub credentials_config: Option<SidecarCredentialsConfig>,
     #[doc(hidden)]
     pub owned: Option<OwnedAuthorityPlan>,
+    /// A verifying key still to be written where `pub_key_path` will name
+    /// it: into the run's marker directory, just before the first mint, so
+    /// that the run's own cleanup covers the file.
+    pub capability_public_key: Option<[u8; 32]>,
 }
 
 #[doc(hidden)]
@@ -556,6 +594,7 @@ fn prepare_flat_runtime(
         #[cfg(target_os = "linux")]
         egress_guard: None,
         run_stack,
+        early_stop_error: None,
         capability_refresher,
         capability_guard,
         marker_guard: stack_marker.map(|path| RunMarkerGuard { path }),
@@ -642,6 +681,7 @@ fn prepare_structural_runtime(
         #[cfg(target_os = "linux")]
         egress_guard,
         run_stack,
+        early_stop_error: None,
         capability_refresher,
         capability_guard,
         marker_guard: stack_marker.map(|path| RunMarkerGuard { path }),
@@ -709,6 +749,18 @@ fn start_loopback_guard(
     }
 }
 
+/// Writes the verifying key where the Sidecar's `public_key_path` reads it:
+/// the run's marker directory, removed with everything else the run wrote.
+#[cfg(unix)]
+fn write_capability_public_key(marker_dir: &Path, key: &[u8; 32]) -> Result<PathBuf, RunError> {
+    firma_fs::create_private_dir_all(marker_dir)
+        .map_err(|error| RunError::Internal(format!("mkdir {}: {error}", marker_dir.display())))?;
+    let path = marker_dir.join("capability.pub");
+    firma_fs::write_private_file(&path, key)
+        .map_err(|error| RunError::Internal(format!("write {}: {error}", path.display())))?;
+    Ok(path)
+}
+
 /// Mint the per-session capability seed at `capability_seed_path` and spawn the
 /// background refresher that re-mints it before expiry.
 ///
@@ -734,11 +786,11 @@ fn mint_capability_seed(
             .pub_key_path
             .clone()
             .ok_or_else(|| RunError::Internal("authority pub key missing after gate".into()))?,
-        authority_ca_cert_path: authority.ca_cert_path.clone(),
+        trust: authority.trust.clone(),
+        connect_addr: authority.connect_addr,
         credentials: authority.credentials.clone(),
         agent_id: identity.agent_id,
         session_id: identity.session_id.clone(),
-        requested_actions: capability_lease.requested_actions.clone(),
         resource_scope: crate::capability::issue::DEFAULT_RESOURCE_SCOPE.to_string(),
         ttl_seconds: crate::capability::issue::DEFAULT_TTL_SECONDS,
     };
@@ -978,6 +1030,10 @@ fn prepare_run_components(
                             .get_or_insert_with(|| launch.pub_key_path.clone());
                         authority.ca_cert_path = None;
                     }
+                    if let Some(key) = authority.capability_public_key.take() {
+                        authority.pub_key_path =
+                            Some(write_capability_public_key(&marker_dir, &key)?);
+                    }
                     let mut component_flags = flags.clone();
                     component_flags.authority_url = Some(authority.url.clone());
                     component_flags
@@ -1030,6 +1086,7 @@ fn prepare_run_components(
                             audit_signing_key_path: Some(runtime_layout.audit_key()),
                             secret_gateway_addr: component_flags.secret_gateway_addr.as_deref(),
                             http_secret_providers: &component_flags.http_secret_providers,
+                            credential: authority.credentials.as_ref(),
                         },
                     )?;
                     let publication =
@@ -1291,16 +1348,47 @@ pub fn resolve_authority(
             .as_ref()
             .and_then(|connect| connect.url.as_deref())
             .is_some_and(is_https_scheme);
-    let ca_cert_path = section
+    // A `Local` Authority is the one `firma run` starts on loopback, so it is on
+    // this host whatever URL the file names.
+    let selected_url = match &selection {
+        crate::authority::AuthoritySelection::Remote(url) => Some(url.as_str()),
+        crate::authority::AuthoritySelection::Local => None,
+    };
+    let connect_addr = section
         .connect
         .as_ref()
-        .and_then(|c| c.ca_cert_path.as_deref())
-        .map(|path| rebase_config_relative_path(path, request.user_config_dir))
-        .or_else(|| {
-            let candidate = request.state_layout.authority_tls_ca_certificate();
-            (repairable_tls || firma_runtime_state::is_material_present(&candidate))
-                .then_some(candidate)
-        });
+        .and_then(|connect| connect.connect_addr);
+    let connect = section.connect.as_ref();
+    let user_cas = connect.map(|c| c.ca_cert_paths.clone()).unwrap_or_default();
+    // The state directory's CA is adopted, and repaired below, only when the
+    // config names no CA of its own.
+    let ca_cert_path = if !user_cas.is_empty() {
+        None
+    } else if repairable_tls {
+        Some(request.state_layout.authority_tls_ca_certificate())
+    } else {
+        firma_sidecar::config::default_authority_ca(
+            selected_url,
+            connect_addr,
+            request.state_layout,
+        )
+    };
+    // Resolved before any probe or mint, for every run: a config that trusts
+    // nothing must not reach the Authority at all. The paths are re-based only
+    // after, so a blank entry is still recognizable.
+    let trust = AuthorityTrust::resolve(
+        ca_cert_path.iter().cloned().chain(user_cas).collect(),
+        connect.map(|c| c.platform_roots).unwrap_or_default(),
+    )
+    .map_err(|error| RunError::ConfigValidation(format!("sidecar.authority: {error}")))?
+    .rebased(|path| rebase_config_relative_path(path, request.user_config_dir));
+    // Only the state directory's CA is regenerated, whether adopted or listed;
+    // any other CA is operator material.
+    let state_ca = request.state_layout.authority_tls_ca_certificate();
+    let regen_target = trust
+        .ca_cert_paths()
+        .contains(&state_ca)
+        .then_some(state_ca);
     let authority_pub_key_path = section
         .connect
         .as_ref()
@@ -1333,7 +1421,7 @@ pub fn resolve_authority(
     let config_committed_local = section.local;
 
     if local_authority {
-        maybe_regen_tls(ca_cert_path.as_deref(), request.firma_exe)?;
+        maybe_regen_tls(regen_target.as_deref(), request.firma_exe)?;
     }
 
     match selection {
@@ -1342,10 +1430,13 @@ pub fn resolve_authority(
             Ok(ResolvedAuthority {
                 url,
                 ca_cert_path,
+                trust,
+                connect_addr,
                 pub_key_path,
                 credentials,
                 credentials_config,
                 owned: None,
+                capability_public_key: None,
             })
         }
         crate::authority::AuthoritySelection::Local => {
@@ -1364,10 +1455,13 @@ pub fn resolve_authority(
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
                     ca_cert_path,
+                    trust,
+                    connect_addr: None,
                     pub_key_path,
                     credentials,
                     credentials_config,
                     owned: None,
+                    capability_public_key: None,
                 });
             }
             if request.flags.no_autostart {
@@ -1395,6 +1489,8 @@ pub fn resolve_authority(
                 // validated Authority component before Sidecar planning.
                 url: "http://[::1]:0".to_string(),
                 ca_cert_path,
+                trust,
+                connect_addr: None,
                 pub_key_path: capability_pub_key_path,
                 credentials,
                 credentials_config,
@@ -1403,19 +1499,20 @@ pub fn resolve_authority(
                     firma_exe: request.firma_exe.to_path_buf(),
                     user_config_path: launch_config_path,
                 }),
+                capability_public_key: None,
             })
         }
     }
 }
 
-/// Regenerate TLS material in-place when `ca_cert_path` is configured but
-/// absent (common after a tmpfs reboot wipe of `$XDG_RUNTIME_DIR`).
+/// Regenerate TLS material in-place when the state directory's CA is trusted
+/// but absent (common after a tmpfs reboot wipe of `$XDG_RUNTIME_DIR`).
 ///
 /// Call this only for a local Authority: it reissues the material with
 /// `firma authority init-tls`, which this host has no standing to do for a CA
 /// that signs a remote Authority's certificate.
-fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), RunError> {
-    let Some(path) = ca_cert_path else {
+fn maybe_regen_tls(state_ca: Option<&Path>, firma_exe: &Path) -> Result<(), RunError> {
+    let Some(path) = state_ca else {
         return Ok(());
     };
     // Reissue only what is provably gone. Material that exists but cannot be
@@ -1427,7 +1524,7 @@ fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), 
     }
     let out_dir = path.parent().ok_or_else(|| {
         RunError::Internal(format!(
-            "cannot resolve TLS dir from ca_cert_path {}",
+            "cannot resolve TLS dir from authority CA cert {}",
             path.display()
         ))
     })?;
@@ -1950,7 +2047,6 @@ mod non_structural_env_tests {
             public_key_path: None,
             refresh_ratio: 0.60,
             grace: Duration::from_secs(30),
-            requested_actions: CapabilityLeaseConfig::default_requested_actions(),
         }
     }
 
@@ -2056,10 +2152,13 @@ mod non_structural_env_tests {
         let authority = ResolvedAuthority {
             url: "https://authority.test".to_string(),
             ca_cert_path: None,
+            trust: super::AuthorityTrust::PlatformStore,
+            connect_addr: None,
             pub_key_path: None,
             credentials: None,
             credentials_config: None,
             owned: None,
+            capability_public_key: None,
         };
         let proof = crate::backend::EnforcementProof {
             backend: BackendKind::Vz,
@@ -2149,10 +2248,13 @@ mod non_structural_env_tests {
             let authority = ResolvedAuthority {
                 url: "https://authority.test".to_string(),
                 ca_cert_path: None,
+                trust: super::AuthorityTrust::PlatformStore,
+                connect_addr: None,
                 pub_key_path: None,
                 credentials: None,
                 credentials_config: None,
                 owned: None,
+                capability_public_key: None,
             };
             let structural_proof = crate::backend::EnforcementProof {
                 backend: BackendKind::Vz,
@@ -2220,10 +2322,13 @@ mod non_structural_env_tests {
         let authority = ResolvedAuthority {
             url: "https://authority.test".to_string(),
             ca_cert_path: None,
+            trust: super::AuthorityTrust::PlatformStore,
+            connect_addr: None,
             pub_key_path: None,
             credentials: None,
             credentials_config: None,
             owned: None,
+            capability_public_key: None,
         };
         let proof = crate::backend::EnforcementProof {
             backend: BackendKind::Bwrap,

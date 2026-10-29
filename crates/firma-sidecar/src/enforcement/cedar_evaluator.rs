@@ -42,28 +42,25 @@ pub enum CedarEvaluatorError {
     MissingSchema,
 
     #[error("failed to parse Cedar policies: {0}")]
-    PolicyParse(#[source] cedar_policy::ParseErrors),
+    PolicyParse(#[source] Box<cedar_policy::ParseErrors>),
 
     #[error("failed to parse Cedar schema: {0}")]
-    SchemaParse(#[source] Box<cedar_policy::HumanSchemaError>),
+    SchemaParse(#[source] Box<cedar_policy::CedarSchemaError>),
 
     #[error("invalid entity UID: {0}")]
-    EntityUidParse(#[source] cedar_policy::ParseErrors),
+    EntityUidParse(#[source] Box<cedar_policy::ParseErrors>),
 
     #[error("failed to build resource entity: {0}")]
     ResourceEntity(#[source] firma_core::cedar::ResourceEntityError),
 
     #[error("failed to build Cedar entity store: {0}")]
-    EntityStore(#[source] Box<cedar_policy::EntitiesError>),
+    EntityStore(#[source] Box<cedar_policy::entities_errors::EntitiesError>),
 
     #[error("failed to build Cedar context: {0}")]
     ContextBuild(#[source] Box<cedar_policy::ContextJsonError>),
 
-    /// `cedar_policy::RequestValidationError` is intentionally not re-exported
-    /// by the cedar-policy crate (it contains internal types), so we erase it
-    /// via `Box<dyn Error>` while preserving the source chain.
     #[error("failed to build Cedar request: {0}")]
-    RequestBuild(#[source] Box<dyn std::error::Error + Send + Sync>),
+    RequestBuild(#[source] Box<cedar_policy::RequestValidationError>),
 
     /// A `forbid` policy carried a remediation annotation (`@modify`,
     /// `@step_up`, `@defer`) whose value could not be interpreted. The bundle
@@ -167,7 +164,7 @@ impl CedarPolicyEvaluator {
 
         let policy_set = src
             .parse::<PolicySet>()
-            .map_err(CedarEvaluatorError::PolicyParse)?;
+            .map_err(|e| CedarEvaluatorError::PolicyParse(Box::new(e)))?;
 
         if bundle.entity_schema.is_empty() {
             return Err(CedarEvaluatorError::MissingSchema);
@@ -197,10 +194,10 @@ impl CedarPolicyEvaluator {
     ) -> Result<Response, CedarEvaluatorError> {
         let principal_uid: EntityUid = FirmaEntityUid::Agent(*principal)
             .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
+            .map_err(|e| CedarEvaluatorError::EntityUidParse(Box::new(e)))?;
         let action_uid: EntityUid = FirmaEntityUid::Action(action.to_string())
             .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
+            .map_err(|e| CedarEvaluatorError::EntityUidParse(Box::new(e)))?;
         // Build the resource as a full entity (not a bare UID) so `resource.host`,
         // `resource.path`, and `resource.id` are available to policies. A bare
         // UID with an empty entity store makes every `resource.<attr>` access
@@ -213,9 +210,9 @@ impl CedarPolicyEvaluator {
             .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
 
         let request = Request::new(
-            Some(principal_uid),
-            Some(action_uid),
-            Some(resource_uid),
+            principal_uid,
+            action_uid,
+            resource_uid,
             cedar_context,
             Some(&self.schema),
         )

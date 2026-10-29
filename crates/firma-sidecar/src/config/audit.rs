@@ -1,5 +1,6 @@
 //! Audit emitter configuration.
 
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 use firma_config_schema::sidecar::audit::{
@@ -24,28 +25,47 @@ use hyper::Uri;
 /// has to say where it buffers.
 #[derive(Debug, Clone)]
 pub struct AuditConfig {
-    /// Output sink. Default: `stdout`.
-    pub(crate) sink: SchemaAuditSink,
-    /// Resolved path for the `file` sink; `None` for every other sink.
-    pub(crate) file_path: Option<PathBuf>,
-    /// Downstream audit service URL for the `grpc` sink.
-    pub(crate) grpc_url: Option<String>,
-    /// Local buffer file backing the `grpc` sink while the stream is down.
-    pub(crate) buffer_path: Option<PathBuf>,
-    /// Maximum size of the `grpc` sink's local buffer, in bytes.
-    pub(crate) buffer_max_bytes: u64,
-    /// How long the `grpc` sink waits for a replay acknowledgment.
-    pub(crate) replay_ack_timeout: NonZeroDuration,
-    /// Journal written before delivery; never shared with a buffered gRPC sink.
-    pub(crate) wal_path: Option<PathBuf>,
-    /// Maximum pending journal bytes, without oldest-event eviction.
-    pub(crate) wal_max_bytes: u64,
-    /// Bound on each `wal` sink delivery attempt.
-    pub(crate) wal_request_timeout: NonZeroDuration,
+    /// Output sink and the settings only that sink uses. Default: `stdout`.
+    pub(crate) sink: AuditSinkConfig,
     /// Resolved source of the ECDSA key events are signed with.
     pub(crate) signing_key: AuditSigningKey,
     /// Additional query parameter names to redact in audit logs.
     pub(crate) redact_query_params: Vec<String>,
+}
+
+/// Validated settings for the selected audit sink.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditSinkConfig {
+    /// Events are written to standard output.
+    Stdout,
+    /// Events are appended to a local file.
+    File {
+        /// Resolved log path.
+        path: PathBuf,
+    },
+    /// Events stream to an audit service, buffered on disk while it is down.
+    Grpc {
+        /// Downstream audit service URL.
+        url: AuditServiceUrl,
+        /// Local buffer file backing the stream while it is down.
+        buffer_path: PathBuf,
+        /// Maximum size of the local buffer, in bytes.
+        buffer_max_bytes: NonZeroU64,
+        /// How long to wait for a replay acknowledgment.
+        replay_ack_timeout: NonZeroDuration,
+    },
+    /// Events are journaled before delivery to an audit service.
+    Wal {
+        /// Downstream audit service URL.
+        url: AuditServiceUrl,
+        /// Journal written before delivery; never shared with a buffered
+        /// gRPC sink.
+        path: PathBuf,
+        /// Maximum pending journal bytes, without oldest-event eviction.
+        max_bytes: NonZeroU64,
+        /// Bound on each delivery attempt.
+        request_timeout: NonZeroDuration,
+    },
 }
 
 /// Where the audit event-signing key comes from, after state-directory
@@ -68,6 +88,9 @@ pub enum AuditSigningKey {
 /// Error validating an [`AuditConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AuditConfigError {
+    /// Legacy buffering cannot preserve runtime execution provenance.
+    #[error("runtime credentials do not support audit.sink = grpc; use wal instead")]
+    RuntimeGrpcUnsupported,
     /// `file_path` was empty.
     #[error("audit.file_path must not be empty when sink is file")]
     EmptyFilePath,
@@ -102,18 +125,12 @@ pub enum AuditConfigError {
     /// `buffer_path` was empty.
     #[error("audit.buffer_path must not be empty when sink is grpc")]
     EmptyBufferPath,
-    /// `buffer_max_size` was zero.
-    #[error("audit.buffer_max_size must be > 0")]
-    ZeroBufferMaxBytes,
     /// `wal` was selected without a journal path.
     #[error("audit.wal_path is required when sink is wal")]
     WalPathRequired,
     /// `wal_path` was empty.
     #[error("audit.wal_path must not be empty when sink is wal")]
     EmptyWalPath,
-    /// `wal_max_size` was zero.
-    #[error("audit.wal_max_size must be > 0")]
-    ZeroWalMaxBytes,
     /// Both signing-key sources were set.
     #[error("audit.signing_key_path and audit.signing_key_env are mutually exclusive")]
     SigningKeyMutuallyExclusive,
@@ -141,42 +158,51 @@ impl AuditConfig {
         schema: SchemaAuditConfig,
         state: &firma_runtime_state::RuntimeLayout,
     ) -> Result<Self, AuditConfigError> {
-        match schema.sink {
+        let sink = match schema.sink {
+            SchemaAuditSink::Stdout => AuditSinkConfig::Stdout,
             SchemaAuditSink::File => {
                 if let Some(p) = &schema.file_path
                     && p.as_os_str().is_empty()
                 {
                     return Err(AuditConfigError::EmptyFilePath);
                 }
+                AuditSinkConfig::File {
+                    path: schema.file_path.unwrap_or_else(|| state.audit_log()),
+                }
             }
             SchemaAuditSink::Grpc => {
-                validate_grpc_url(schema.grpc_url.as_ref())?;
-                match &schema.buffer_path {
+                let url = required_grpc_url(schema.grpc_url)?;
+                let buffer_path = match schema.buffer_path {
                     Some(p) if p.as_os_str().is_empty() => {
                         return Err(AuditConfigError::EmptyBufferPath);
                     }
                     None => return Err(AuditConfigError::BufferPathRequired),
-                    _ => {}
-                }
-                if schema.buffer_max_size.as_u64() == 0 {
-                    return Err(AuditConfigError::ZeroBufferMaxBytes);
+                    Some(p) => p,
+                };
+                AuditSinkConfig::Grpc {
+                    url,
+                    buffer_path,
+                    buffer_max_bytes: schema.buffer_max_size.bytes(),
+                    replay_ack_timeout: schema.replay_ack_timeout,
                 }
             }
-            SchemaAuditSink::Stdout => {}
             SchemaAuditSink::Wal => {
-                validate_grpc_url(schema.grpc_url.as_ref())?;
-                match &schema.wal_path {
+                let url = required_grpc_url(schema.grpc_url)?;
+                let path = match schema.wal_path {
                     Some(path) if path.as_os_str().is_empty() => {
                         return Err(AuditConfigError::EmptyWalPath);
                     }
                     None => return Err(AuditConfigError::WalPathRequired),
-                    _ => {}
-                }
-                if schema.wal_max_size.as_u64() == 0 {
-                    return Err(AuditConfigError::ZeroWalMaxBytes);
+                    Some(path) => path,
+                };
+                AuditSinkConfig::Wal {
+                    url,
+                    path,
+                    max_bytes: schema.wal_max_size.bytes(),
+                    request_timeout: schema.wal_request_timeout,
                 }
             }
-        }
+        };
 
         if schema.signing_key_path.is_some() && schema.signing_key_env.is_some() {
             return Err(AuditConfigError::SigningKeyMutuallyExclusive);
@@ -197,28 +223,16 @@ impl AuditConfig {
             (None, Some(path)) => AuditSigningKey::Path(path),
             (None, None) => AuditSigningKey::StateDefault(state.audit_key()),
         };
-        let file_path = match schema.sink {
-            SchemaAuditSink::File => Some(schema.file_path.unwrap_or_else(|| state.audit_log())),
-            SchemaAuditSink::Grpc | SchemaAuditSink::Wal | SchemaAuditSink::Stdout => None,
-        };
 
         Ok(Self {
-            sink: schema.sink,
-            file_path,
-            grpc_url: schema.grpc_url,
-            buffer_path: schema.buffer_path,
-            buffer_max_bytes: schema.buffer_max_size.as_u64(),
-            replay_ack_timeout: schema.replay_ack_timeout,
-            wal_path: schema.wal_path,
-            wal_max_bytes: schema.wal_max_size.as_u64(),
-            wal_request_timeout: schema.wal_request_timeout,
+            sink,
             signing_key,
             redact_query_params: schema.redact_query_params,
         })
     }
 }
 
-/// Validates `grpc_url` as an outbound gRPC origin.
+/// A validated audit service URL.
 ///
 /// The sink no longer dials at startup — an unreachable endpoint buffers and
 /// retries — so a malformed URL has no other moment to be caught. Left to the
@@ -226,29 +240,66 @@ impl AuditConfig {
 /// starts dropping real ones. The rules match [`AuthorityEndpoint`], the other
 /// outbound gRPC origin in this crate.
 ///
+/// The configured text is kept alongside the parsed URI: the `wal` sink
+/// records it as the journal's destination scope, so it must compare equal to
+/// what an earlier run stored.
+///
 /// [`AuthorityEndpoint`]: crate::config::AuthorityEndpoint
-fn validate_grpc_url(url: Option<&String>) -> Result<(), AuditConfigError> {
-    let url = match url {
-        Some(u) if u.trim().is_empty() => return Err(AuditConfigError::EmptyGrpcUrl),
-        Some(u) => u,
-        None => return Err(AuditConfigError::GrpcUrlRequired),
-    };
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditServiceUrl {
+    text: String,
+    uri: Uri,
+}
 
-    let uri = url
-        .parse::<Uri>()
-        .map_err(|error| AuditConfigError::InvalidGrpcUrl(error.to_string()))?;
-    let scheme = uri
-        .scheme_str()
-        .ok_or_else(|| AuditConfigError::GrpcUrlMissingScheme(url.clone()))?;
-    if !matches!(scheme, "http" | "https") {
-        return Err(AuditConfigError::GrpcUrlUnsupportedScheme(
-            scheme.to_string(),
-        ));
+impl AuditServiceUrl {
+    /// The URL as configured.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.text
     }
-    if uri.host().is_none_or(str::is_empty) {
-        return Err(AuditConfigError::GrpcUrlMissingHost(url.clone()));
+
+    /// The parsed origin to dial.
+    pub(crate) const fn uri(&self) -> &Uri {
+        &self.uri
     }
-    Ok(())
+}
+
+impl std::fmt::Display for AuditServiceUrl {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+impl std::str::FromStr for AuditServiceUrl {
+    type Err = AuditConfigError;
+
+    fn from_str(url: &str) -> Result<Self, Self::Err> {
+        if url.trim().is_empty() {
+            return Err(AuditConfigError::EmptyGrpcUrl);
+        }
+        let uri = url
+            .parse::<Uri>()
+            .map_err(|error| AuditConfigError::InvalidGrpcUrl(error.to_string()))?;
+        let scheme = uri
+            .scheme_str()
+            .ok_or_else(|| AuditConfigError::GrpcUrlMissingScheme(url.to_owned()))?;
+        if !matches!(scheme, "http" | "https") {
+            return Err(AuditConfigError::GrpcUrlUnsupportedScheme(
+                scheme.to_string(),
+            ));
+        }
+        if uri.host().is_none_or(str::is_empty) {
+            return Err(AuditConfigError::GrpcUrlMissingHost(url.to_owned()));
+        }
+        Ok(Self {
+            text: url.to_owned(),
+            uri,
+        })
+    }
+}
+
+/// Validates the `grpc_url` a remote sink requires.
+fn required_grpc_url(url: Option<String>) -> Result<AuditServiceUrl, AuditConfigError> {
+    url.ok_or(AuditConfigError::GrpcUrlRequired)?.parse()
 }
 
 #[cfg(test)]
@@ -367,21 +418,6 @@ mod tests {
         ));
         assert!(AuditConfig::resolve(grpc("http://audit.example.com:50051"), &state()).is_ok());
         assert!(AuditConfig::resolve(grpc("https://audit.example.com"), &state()).is_ok());
-    }
-
-    #[test]
-    fn grpc_sink_rejects_zero_buffer_max_size() {
-        let s = SchemaAuditConfig {
-            sink: SchemaAuditSink::Grpc,
-            grpc_url: Some("https://audit.example.com".into()),
-            buffer_path: Some(PathBuf::from("/var/lib/firma/audit-buffer.jsonl")),
-            buffer_max_size: bytesize::ByteSize::b(0),
-            ..schema()
-        };
-        assert!(matches!(
-            AuditConfig::resolve(s, &state()),
-            Err(AuditConfigError::ZeroBufferMaxBytes)
-        ));
     }
 
     #[test]

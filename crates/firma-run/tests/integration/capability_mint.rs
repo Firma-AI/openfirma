@@ -22,19 +22,21 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
+use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use tokio_stream::Stream;
+use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 
 use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
-use firma_core::{CapabilityClaims, CapabilitySeed, TokenSigner, TokenVerifier};
+use firma_core::{ActionClass, CapabilityClaims, CapabilitySeed, TokenSigner, TokenVerifier};
 use firma_identifiers::TokenId;
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
     CapabilityToken, GetApprovalOutcomeRequest, GetApprovalOutcomeResponse, IssueCapabilityRequest,
-    IssueCapabilityResponse, IssueDecision, PolicyBundleUpdate, RevocationEvent,
+    IssueCapabilityResponse, IssueDecision, PolicyBundleUpdate, RevocationSet,
     WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
-use firma_sidecar::config::CapabilitySeedConfig;
+use firma_sidecar::config::{AuthorityTrust, CapabilitySeedConfig};
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
 #[cfg(unix)]
@@ -52,7 +54,7 @@ use firma_run::routing::{AutostartFlags, ResolvedAuthority, prepare_network_runt
 
 use firma_test_helpers::bounded::{self, step};
 
-use super::helper::RealAuthority;
+use super::helper::{IssuancePolicy, RealAuthority};
 
 /// Covers the Authority's request deadline plus connection setup.
 const MINT_LIMIT: Duration = Duration::from_secs(30);
@@ -177,8 +179,7 @@ impl AuthorityService for MockAuthority {
         Err(Status::unimplemented("mock authority: no policy stream"))
     }
 
-    type WatchRevocationsStream =
-        Pin<Box<dyn Stream<Item = Result<RevocationEvent, Status>> + Send>>;
+    type WatchRevocationsStream = Pin<Box<dyn Stream<Item = Result<RevocationSet, Status>> + Send>>;
     async fn watch_revocations(
         &self,
         _request: Request<WatchRevocationsRequest>,
@@ -216,16 +217,44 @@ fn start_mock_authority() -> MockServer {
 }
 
 fn start_mock_authority_with(token_kind: MockTokenKind) -> MockServer {
-    start_authority(token_kind, None)
+    start_authority(token_kind, None, None)
 }
 
 fn start_denying_authority(reason: &'static str, message: &'static str) -> MockServer {
-    start_authority(MockTokenKind::Valid, Some((reason, message)))
+    start_authority(MockTokenKind::Valid, Some((reason, message)), None)
 }
 
+fn certificate_authority(name: &str) -> (String, Issuer<'static, KeyPair>) {
+    let key = KeyPair::generate().expect("CA key");
+    let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, name);
+    let pem = params.self_signed(&key).expect("CA certificate").pem();
+    (pem, Issuer::new(params, key))
+}
+
+/// A CA's PEM and the TLS identity of a `127.0.0.1` server it issued.
+fn test_pki(ca_name: &str) -> (String, ServerTlsConfig) {
+    // The mock server builds its rustls config on its own thread, before the
+    // mint picks the process-wide provider; pick the same one here.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let (ca_pem, issuer) = certificate_authority(ca_name);
+    let server_key = KeyPair::generate().expect("server key");
+    let server_cert = CertificateParams::new(vec!["127.0.0.1".to_owned()])
+        .expect("server params")
+        .signed_by(&server_key, &issuer)
+        .expect("server certificate");
+    let identity = Identity::from_pem(server_cert.pem(), server_key.serialize_pem());
+    (ca_pem, ServerTlsConfig::new().identity(identity))
+}
+
+/// Start a mock Authority, over TLS when `tls` names a server identity.
 fn start_authority(
     token_kind: MockTokenKind,
     denial: Option<(&'static str, &'static str)>,
+    tls: Option<ServerTlsConfig>,
 ) -> MockServer {
     let dir = tempfile::tempdir().expect("tempdir");
     let kp = AsymmetricKeyPair::<V4>::generate().expect("keypair");
@@ -241,6 +270,7 @@ fn start_authority(
         .local_addr()
         .expect("local addr");
 
+    let scheme = if tls.is_some() { "https" } else { "http" };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -255,7 +285,11 @@ fn start_authority(
                 token_kind,
                 seen_agent_ids: server_seen_agent_ids,
             });
-            tonic::transport::Server::builder()
+            let mut server = tonic::transport::Server::builder();
+            if let Some(tls) = tls {
+                server = server.tls_config(tls).expect("server TLS config");
+            }
+            server
                 .add_service(svc)
                 .serve_with_shutdown(addr, async {
                     let _ = shutdown_rx.await;
@@ -273,7 +307,7 @@ fn start_authority(
     }
 
     MockServer {
-        url: format!("http://{addr}"),
+        url: format!("{scheme}://{addr}"),
         pub_key_path,
         shutdown: Some(shutdown_tx),
         handle: Some(handle),
@@ -286,11 +320,11 @@ fn params(server: &MockServer) -> IssueParams {
     IssueParams {
         authority_url: server.url.clone(),
         authority_pub_key_path: server.pub_key_path.clone(),
-        authority_ca_cert_path: None,
+        trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+        connect_addr: None,
         credentials: None,
         agent_id: *super::helper::agent_id(),
         session_id: "sess_mint".to_string(),
-        requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         ttl_seconds: 900,
     }
@@ -302,14 +336,17 @@ fn lease() -> CapabilityLeaseConfig {
         public_key_path: None,
         refresh_ratio: 0.60,
         grace: Duration::from_secs(30),
-        requested_actions: CapabilityLeaseConfig::default_requested_actions(),
     }
 }
 
+/// The run asks for every action class, so the single class in the seed can only
+/// have come from the issuance policy narrowing the request.
 #[test]
 fn real_authority_token_mints_compatible_seed() -> anyhow::Result<()> {
     bounded::run(async {
-        let authority = RealAuthority::start().await?;
+        let authority =
+            RealAuthority::start_with(IssuancePolicy::PermitOnly("communication.external.send"))
+                .await?;
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime_layout = firma_runtime_state::RuntimeLayout::from_root(dir.path());
         let capabilities_dir = runtime_layout.capabilities_dir();
@@ -318,11 +355,11 @@ fn real_authority_token_mints_compatible_seed() -> anyhow::Result<()> {
         let params = IssueParams {
             authority_url: authority.url.clone(),
             authority_pub_key_path: authority.pub_key_path.clone(),
-            authority_ca_cert_path: None,
+            trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+            connect_addr: None,
             credentials: None,
             agent_id: *super::helper::agent_id(),
             session_id: "live-session".to_string(),
-            requested_actions: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             ttl_seconds: 900,
         };
@@ -377,20 +414,22 @@ fn real_authority_token_mints_compatible_seed() -> anyhow::Result<()> {
     })
 }
 
+/// A mint requests every action class, so a policy set that authorizes none of
+/// them is how issuance comes back empty. It must fail closed.
 #[test]
-fn real_authority_rejects_empty_actions_without_writing_seed() -> anyhow::Result<()> {
+fn real_authority_rejects_unauthorized_actions_without_writing_seed() -> anyhow::Result<()> {
     bounded::run(async {
-        let authority = RealAuthority::start().await?;
+        let authority = RealAuthority::start_with(IssuancePolicy::ForbidAll).await?;
         let dir = tempfile::tempdir().expect("tempdir");
-        let seed_path = dir.path().join("empty-actions.toml");
+        let seed_path = dir.path().join("unauthorized-actions.toml");
         let params = IssueParams {
             authority_url: authority.url.clone(),
             authority_pub_key_path: authority.pub_key_path.clone(),
-            authority_ca_cert_path: None,
+            trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+            connect_addr: None,
             credentials: None,
             agent_id: *super::helper::agent_id(),
-            session_id: "empty-actions".to_string(),
-            requested_actions: Vec::new(),
+            session_id: "unauthorized-actions".to_string(),
             resource_scope: "*".to_string(),
             ttl_seconds: 900,
         };
@@ -399,12 +438,12 @@ fn real_authority_rejects_empty_actions_without_writing_seed() -> anyhow::Result
         let mint = tokio::task::spawn_blocking(move || mint_and_write(&params, &mint_path));
         let error = step("mint a capability", MINT_LIMIT, mint)
             .await??
-            .expect_err("empty action request must fail closed");
+            .expect_err("a policy set granting nothing must fail closed");
 
         assert!(matches!(
             error,
-            firma_run::error::RunError::CapabilityDenied { reason, message, .. }
-                if reason == "NO_ACTIONS" && message == "no actions requested"
+            firma_run::error::RunError::CapabilityDenied { reason, .. }
+                if reason == "NO_AUTHORIZED_ACTIONS"
         ));
         assert!(!seed_path.exists(), "denied issuance must not write a seed");
 
@@ -414,9 +453,9 @@ fn real_authority_rejects_empty_actions_without_writing_seed() -> anyhow::Result
 
 #[cfg(unix)]
 #[test]
-fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() -> anyhow::Result<()> {
+fn unauthorized_actions_abort_routing_before_sidecar_or_refresh_setup() -> anyhow::Result<()> {
     bounded::run(async {
-        let authority = RealAuthority::start().await?;
+        let authority = RealAuthority::start_with(IssuancePolicy::ForbidAll).await?;
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime_layout =
             firma_runtime_state::RuntimeLayout::from_root(dir.path().join("runtime"));
@@ -441,7 +480,7 @@ fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() -> anyhow::Resu
             backend: BackendKind::Vz,
             structural: false,
             fail_closed: true,
-            detail: "empty capability action test".to_string(),
+            detail: "unauthorized capability action test".to_string(),
             network_confinement: NetworkConfinement::ProxyOnly,
         };
         let flags = AutostartFlags {
@@ -452,17 +491,19 @@ fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() -> anyhow::Resu
         let resolved_authority = ResolvedAuthority {
             url: authority.url.clone(),
             ca_cert_path: None,
+            trust: firma_sidecar::config::AuthorityTrust::PlatformStore,
+            connect_addr: None,
             pub_key_path: Some(authority.pub_key_path.clone()),
             credentials: None,
             credentials_config: None,
             owned: None,
+            capability_public_key: None,
         };
         let capability = CapabilityLeaseConfig {
             source: CapabilitySource::Disabled,
             public_key_path: Some(authority.pub_key_path.clone()),
             refresh_ratio: 0.60,
             grace: Duration::from_secs(30),
-            requested_actions: Vec::new(),
         };
 
         let preparation = tokio::task::spawn_blocking(move || {
@@ -481,11 +522,11 @@ fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() -> anyhow::Resu
         });
         let result = step("prepare the network runtime", MINT_LIMIT, preparation).await??;
         let Err(error) = result else {
-            panic!("empty actions must abort routing preparation");
+            panic!("a policy set granting nothing must abort routing preparation");
         };
 
         assert!(
-            error.to_string().contains("NO_ACTIONS"),
+            error.to_string().contains("NO_AUTHORIZED_ACTIONS"),
             "unexpected error: {error}"
         );
         assert!(!seed_path.exists(), "denied issuance must not leave a seed");
@@ -496,6 +537,28 @@ fn empty_actions_abort_routing_before_sidecar_or_refresh_setup() -> anyhow::Resu
 
         authority.stop().await
     })
+}
+
+/// The grant is the policy set's call, which only holds if the request itself
+/// is never narrowed: a mint must name every action class, whatever the local
+/// config says. The mock echoes the request into the claims, so the seed's
+/// `action_set` is the request.
+#[test]
+fn mint_requests_every_action_class() {
+    let server = start_mock_authority();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+
+    mint_and_write(&params(&server), &seed_path).expect("mint succeeds");
+
+    let body = std::fs::read_to_string(&seed_path).expect("read seed");
+    let seed: CapabilitySeed = toml::from_str(&body).expect("parse seed");
+    let every_class: Vec<String> = ActionClass::ALL
+        .iter()
+        .map(|class| class.as_str().to_string())
+        .collect();
+
+    assert_eq!(seed.action_set, every_class);
 }
 
 #[test]
@@ -687,4 +750,36 @@ fn wait_for_reminted_token(seed_path: &Path) -> TokenId {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The mint verifies an `https` Authority against the configured CA list,
+/// whichever entry issued its certificate, here the second, and writes the
+/// seed.
+#[test]
+fn mint_over_tls_trusts_any_listed_ca() {
+    let (unrelated_ca, _) = certificate_authority("Unrelated CA");
+    let (authority_ca, tls) = test_pki("Authority CA");
+    let server = start_authority(MockTokenKind::Valid, None, Some(tls));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ca_list = [
+        ("unrelated-ca.pem", unrelated_ca),
+        ("authority-ca.pem", authority_ca),
+    ]
+    .map(|(name, pem)| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, pem).expect("write CA");
+        path
+    });
+    let seed_path = dir.path().join("seed.toml");
+
+    mint_and_write(
+        &IssueParams {
+            trust: AuthorityTrust::CustomCas(ca_list.to_vec()),
+            ..params(&server)
+        },
+        &seed_path,
+    )
+    .expect("the second listed CA must verify the Authority");
+
+    assert!(seed_path.exists(), "the seed must be written");
 }

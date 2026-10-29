@@ -108,7 +108,7 @@ impl CedarPolicyStore {
         let (policies, policy_set) = read_policies(policy_dir)?;
         let (schema_src, schema) = read_schema(schema_path.as_deref())?;
 
-        firma_core::validate_policies(&policy_set, &schema, Some(&policies))?;
+        validate_and_report(&policy_set, &schema, &policies)?;
 
         let policies_src = policies.concat();
         let mappings = mapping_paths
@@ -153,7 +153,7 @@ impl CedarPolicyStore {
         let (policies, new_policy_set) = read_policies(&self.policy_dir)?;
         let (schema_src, new_schema) = read_schema(self.schema_path.as_deref())?;
 
-        firma_core::validate_policies(&new_policy_set, &new_schema, Some(&policies))?;
+        validate_and_report(&new_policy_set, &new_schema, &policies)?;
 
         let policies_src = policies.concat();
         let mappings = self
@@ -361,6 +361,20 @@ fn read_policies(policy_dir: &Path) -> Result<(PolicyFiles, PolicySet)> {
     Ok((policies, parsed))
 }
 
+/// Strictly validate `policy_set` and log each Cedar validation warning, such
+/// as a forbid that can never apply, so operators see policies that load but
+/// have no effect.
+fn validate_and_report(
+    policy_set: &PolicySet,
+    schema: &Schema,
+    policies: &PolicyFiles,
+) -> Result<(), firma_core::cedar::ValidationError> {
+    for warning in firma_core::validate_policies(policy_set, schema, Some(policies))? {
+        tracing::warn!(%warning, "cedar policy validation warning");
+    }
+    Ok(())
+}
+
 /// Read Cedar schema using the resolution order:
 ///   1. `schema_path` if explicitly provided
 ///   2. [`DEFAULT_SCHEMA`] (embedded canonical schema)
@@ -499,6 +513,50 @@ mod tests {
         )]);
         let store = CedarPolicyStore::load(dir.path(), None, BUNDLE_TTL);
         assert!(store.is_err());
+    }
+
+    #[test]
+    fn load_warns_about_impossible_policy() {
+        #[derive(Clone, Default)]
+        struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("capture lock").extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl tracing_subscriber::fmt::MakeWriter<'_> for Capture {
+            type Writer = Self;
+            fn make_writer(&self) -> Self {
+                self.clone()
+            }
+        }
+
+        let dir = setup_policy_dir(&[(
+            "never.cedar",
+            "forbid(principal, action == Firma::Action::\"filesystem.read\", resource) when { false };",
+        )]);
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let store = tracing::subscriber::with_default(subscriber, || {
+            CedarPolicyStore::load(dir.path(), None, BUNDLE_TTL)
+        });
+
+        assert!(store.is_ok());
+        let logs = String::from_utf8(capture.0.lock().expect("capture lock").clone())
+            .expect("logs are UTF-8");
+        assert!(
+            logs.lines().any(|line| line.contains("WARN")
+                && line.contains("cedar policy validation warning")
+                && line.contains("policy is impossible")),
+            "expected an impossible-policy warning; got: {logs}"
+        );
     }
 
     #[test]
@@ -745,14 +803,8 @@ mod tests {
             let ctx = Context::from_json_value(context_json.clone(), Some((&schema, &action_uid)))
                 .unwrap_or_else(|e| panic!("context build failed for '{action}': {e}"));
 
-            let request = Request::new(
-                Some(principal),
-                Some(action_uid),
-                Some(resource),
-                ctx,
-                Some(&schema),
-            )
-            .unwrap_or_else(|e| panic!("request build failed for '{action}': {e}"));
+            let request = Request::new(principal, action_uid, resource, ctx, Some(&schema))
+                .unwrap_or_else(|e| panic!("request build failed for '{action}': {e}"));
 
             let response =
                 Authorizer::new().is_authorized(&request, &policy_set, &Entities::empty());

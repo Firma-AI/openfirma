@@ -16,6 +16,7 @@ use firma_secret_provider::{
 use firma_sidecar::{
     audit::{AuditPayload, AuditSinkError},
     authority_client::readiness::ReadinessFlag,
+    authority_tls::AuthorityTls,
     composio::ComposioCatalogs,
     config,
     connector::ConnectorRegistry,
@@ -220,6 +221,18 @@ async fn serve(
     debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
+    // A run's Sidecar lives only as long as the `firma run` that
+    // started it: when that parent is gone, so is the reason to keep the
+    // run alive on the Authority.
+    let uses_runtime_credential = config.authority.uses_runtime_credential();
+    #[cfg(not(unix))]
+    if uses_runtime_credential {
+        anyhow::bail!("a runtime credential is supported only on unix");
+    }
+    #[cfg(unix)]
+    let parent_watch = uses_runtime_credential
+        .then(|| launcher_pid().map(|parent| spawn_parent_watch(parent, exit.clone())))
+        .transpose()?;
     let health_ready = health::readiness_flag();
     let health_server = spawn_health_server(
         args.health_bind_addr,
@@ -242,8 +255,16 @@ async fn serve(
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
     let audit_event_builder =
         startup::load_audit_event_builder(&config.audit)?.with_sandbox_id(sandbox_id);
-    let audit_sink =
-        startup::spawn_audit_sink(&config, audit_payload_rx, audit_event_builder, exit.clone())?;
+    // Read once, so the audit sink and the Authority client trust the same CA
+    // and present the same client identity.
+    let authority_tls = AuthorityTls::read(&config.authority)?;
+    let audit_sink = startup::spawn_audit_sink(
+        &config,
+        &authority_tls,
+        audit_payload_rx,
+        audit_event_builder,
+        exit.clone(),
+    )?;
     // Supervision must run while startup waits for Authority hydration too.
     let audit_sink = tokio::spawn(supervise_audit_sink(audit_sink, exit.clone()));
 
@@ -264,6 +285,7 @@ async fn serve(
     }
     let authority_handle = startup::spawn_authority_client_publishing(
         &config,
+        &authority_tls,
         &pipeline_runtime,
         exit.clone(),
         args.enforcement_state.clone(),
@@ -323,6 +345,12 @@ async fn serve(
             let _ = handle.await;
         }
     };
+    let parent_watch_task = async {
+        #[cfg(unix)]
+        if let Some(handle) = parent_watch {
+            let _ = handle.await;
+        }
+    };
     let run_audit_task = async {
         #[cfg(unix)]
         if let Some(handle) = run_audit_handle {
@@ -343,6 +371,7 @@ async fn serve(
         authority_stream_tasks,
         local_exec_task,
         run_audit_task,
+        parent_watch_task,
     );
     debug!("firma sidecar exiting");
 
@@ -572,6 +601,43 @@ fn read_config(
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
     config.rebase_defaults(&resolved.config_dir());
     Ok(config)
+}
+
+/// The `firma run` that started a run's Sidecar, as it declared
+/// itself in `FIRMA_RUN_PID`; it must be this process's parent, so a stale
+/// or wrapped launch fails here rather than serving for the wrong owner.
+#[cfg(unix)]
+fn launcher_pid() -> anyhow::Result<u32> {
+    let declared: u32 = std::env::var("FIRMA_RUN_PID")
+        .map_err(|_| anyhow::anyhow!("a runtime credential requires FIRMA_RUN_PID"))?
+        .parse()
+        .map_err(|error| anyhow::anyhow!("invalid FIRMA_RUN_PID: {error}"))?;
+    let parent = std::os::unix::process::parent_id();
+    if parent != declared {
+        anyhow::bail!("FIRMA_RUN_PID names {declared} but the parent process is {parent}");
+    }
+    Ok(declared)
+}
+
+/// Cancels `exit` once this process's parent is no longer `parent`.
+#[cfg(unix)]
+fn spawn_parent_watch(parent: u32, exit: CancellationToken) -> tokio::task::JoinHandle<()> {
+    /// One syscall a second keeps a run alive at most a second past
+    /// its `firma run`.
+    const POLL: std::time::Duration = std::time::Duration::from_secs(1);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = exit.cancelled() => return,
+                () = tokio::time::sleep(POLL) => {}
+            }
+            if std::os::unix::process::parent_id() != parent {
+                tracing::info!("parent process gone; shutting down");
+                exit.cancel();
+                return;
+            }
+        }
+    })
 }
 
 #[cfg(test)]

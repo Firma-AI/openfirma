@@ -15,8 +15,8 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use cedar_policy::{PolicySet, Schema, ValidationMode, Validator};
-use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
+use cedar_policy::{PolicySet, Schema, ValidationMode, ValidationWarning, Validator};
+use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme, NamedSource};
 
 /// Parse and schema-check the Cedar policy file at `path`.
 ///
@@ -71,18 +71,18 @@ fn validate_to_outcome(path: &Path) -> (ExitCode, Option<String>) {
         }
     };
 
-    let source_name = path.display().to_string();
+    let named_source = NamedSource::new(path.display().to_string(), source.clone());
 
     let policy_set = match source.parse::<PolicySet>() {
         Ok(policy_set) => policy_set,
         Err(errors) => {
-            let report = Report::new(errors)
-                .with_source_code(NamedSource::new(&source_name, source.clone()));
             let mut rendered = format!(
                 "error: failed to parse Cedar policy '{}':\n",
                 path.display()
             );
-            rendered.push_str(&render_diagnostic(report.as_ref()));
+            for error in errors.iter() {
+                rendered.push_str(&render_diagnostic(error, &named_source));
+            }
             return (ExitCode::from(1), Some(rendered));
         }
     };
@@ -100,19 +100,22 @@ fn validate_to_outcome(path: &Path) -> (ExitCode, Option<String>) {
     };
 
     let result = Validator::new(schema).validate(&policy_set, ValidationMode::Strict);
-    if !result.validation_passed() {
+    // Cedar reports a policy whose scope matches no action as a warning since
+    // 4.13; the Authority rejects it, so validation must too.
+    let scope_matches_no_action = result
+        .validation_warnings()
+        .any(|warning| matches!(warning, ValidationWarning::InvalidActionApplication(_)));
+    if !result.validation_passed() || scope_matches_no_action {
         let mut rendered = format!(
             "error: policy '{}' failed schema validation:\n",
             path.display()
         );
-        // Validation errors and warnings carry their own source code, so the
-        // graphical handler renders `[name:line:col]` plus a caret snippet
-        // directly. Render every diagnostic, not just the first.
+        // Render every diagnostic, not just the first.
         for validation_error in result.validation_errors() {
-            rendered.push_str(&render_diagnostic(validation_error));
+            rendered.push_str(&render_diagnostic(validation_error, &named_source));
         }
         for validation_warning in result.validation_warnings() {
-            rendered.push_str(&render_diagnostic(validation_warning));
+            rendered.push_str(&render_diagnostic(validation_warning, &named_source));
         }
         return (ExitCode::from(1), Some(rendered));
     }
@@ -124,25 +127,73 @@ fn validate_to_outcome(path: &Path) -> (ExitCode, Option<String>) {
 ///
 /// Uses an ASCII, monochrome [`GraphicalReportHandler`] with links and
 /// `docs.rs` URLs disabled so the output is stable across terminals and crate
-/// versions. The handler renders the primary span — and any `related`
-/// sub-diagnostics — as a `[name:line:col]` header plus a caret snippet,
-/// provided the source code is reachable from the diagnostic (attached via
-/// [`Report::with_source_code`] for parse errors, or carried intrinsically by
-/// Cedar validation diagnostics). On the unreachable path where the handler
+/// versions. The handler renders the primary span as a `[name:line:col]`
+/// header plus a caret snippet. On the unreachable path where the handler
 /// fails to format, the diagnostic's `Display` form is used as a fail-closed
 /// fallback so a location-less message is still surfaced.
-fn render_diagnostic(diagnostic: &dyn Diagnostic) -> String {
+fn render_diagnostic(diagnostic: &dyn Diagnostic, source: &NamedSource<String>) -> String {
     let handler = GraphicalReportHandler::new_themed(GraphicalTheme::none())
         .with_links(false)
         .with_urls(false);
+    let named = WithFileSource { diagnostic, source };
     let mut rendered = String::new();
-    if handler.render_report(&mut rendered, diagnostic).is_err() {
+    if handler.render_report(&mut rendered, &named).is_err() {
         rendered = format!("{diagnostic}");
     }
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
     rendered
+}
+
+/// A Cedar diagnostic rendered against the policy file it came from.
+///
+/// Cedar diagnostics carry their own unnamed copy of the policy text, which
+/// takes precedence over [`Report::with_source_code`](miette::Report), so the
+/// handler would omit the file name and, for one-line snippets, the location.
+/// This wrapper substitutes the named file source and delegates the rest.
+#[derive(Debug)]
+struct WithFileSource<'a> {
+    diagnostic: &'a dyn Diagnostic,
+    source: &'a NamedSource<String>,
+}
+
+impl std::fmt::Display for WithFileSource<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self.diagnostic, f)
+    }
+}
+
+impl std::error::Error for WithFileSource<'_> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.diagnostic.source()
+    }
+}
+
+impl Diagnostic for WithFileSource<'_> {
+    fn code<'b>(&'b self) -> Option<Box<dyn std::fmt::Display + 'b>> {
+        self.diagnostic.code()
+    }
+
+    fn severity(&self) -> Option<miette::Severity> {
+        self.diagnostic.severity()
+    }
+
+    fn help<'b>(&'b self) -> Option<Box<dyn std::fmt::Display + 'b>> {
+        self.diagnostic.help()
+    }
+
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        Some(self.source)
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
+        self.diagnostic.labels()
+    }
+
+    fn diagnostic_source(&self) -> Option<&dyn Diagnostic> {
+        self.diagnostic.diagnostic_source()
+    }
 }
 
 #[cfg(test)]
@@ -231,6 +282,19 @@ mod tests {
     }
 
     #[test]
+    fn scope_matching_no_action_fails_schema_check() {
+        let policy = r#"permit(principal is Firma::Resource, action == Firma::Action::"filesystem.read", resource);"#;
+        let file = write_policy(policy);
+        let (code, diagnostic) = validate_to_outcome(file.path());
+        assert_eq!(code, ExitCode::from(1));
+        let rendered = diagnostic.expect("schema failure must produce a diagnostic");
+        assert!(
+            rendered.contains("unable to find an applicable action"),
+            "missing the scope diagnostic; got:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn unknown_action_uid_fails_schema_check() {
         // Syntactically valid, but `Firma::Action::"does.not.exist"` is not
         // declared in the Firma schema, so strict validation rejects it.
@@ -250,6 +314,11 @@ mod tests {
             "missing schema error header; got:\n{rendered}"
         );
         assert_has_line_and_column(&rendered);
+        let location = format!("[{}:", file.path().display());
+        assert!(
+            rendered.contains(&location),
+            "snippet location must name the policy file; got:\n{rendered}"
+        );
     }
 
     #[test]

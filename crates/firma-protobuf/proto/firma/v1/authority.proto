@@ -51,11 +51,35 @@ service AuthorityService {
   // Authority models policy sets.
   rpc WatchPolicyBundle(WatchPolicyBundleRequest) returns (stream PolicyBundleUpdate);
 
-  // WatchRevocations is a persistent server-streaming call that pushes
-  // revocation events. The Sidecar Stage 1 maintains a bloom filter and
-  // LRU cache from this stream, enabling sub-microsecond revocation checks
-  // with no network I/O.
-  rpc WatchRevocations(WatchRevocationsRequest) returns (stream RevocationEvent);
+  // WatchRevocations is a persistent server-streaming call. Immediately streams
+  // the complete current revocation set on connect, then a complete
+  // replacement whenever a revocation is added. The Sidecar Stage 1 maintains
+  // a bloom filter and LRU cache from this stream, enabling sub-microsecond
+  // revocation checks with no network I/O.
+  //
+  // Every message is self-contained, so a Sidecar reports no cursor and a
+  // reconnect needs no replay: the first set after reconnecting is as complete
+  // as the last one before it.
+  //
+  // Removals are not pushed on their own. A revocation leaves the set when the
+  // Authority purges the expired capability it names; an open stream sees that
+  // at the next addition or the next connect. Holding a revocation the
+  // Authority has dropped can only reject a token already past expiry, never
+  // admit one.
+  //
+  // The element type changed from RevocationEvent to RevocationSet, so a
+  // Sidecar and an Authority across that change cannot exchange revocations in
+  // either direction. Most mismatches fail loudly on decode, but two do not:
+  // an empty RevocationSet decodes as a RevocationEvent with an empty
+  // token_id, and an older Authority with nothing to replay sends no message
+  // at all, so a newer Sidecar sees a healthy, silent stream and learns
+  // nothing until the first revocation fails to decode. Cut both over
+  // together. A Sidecar that has never applied a set stays not-ready, so a
+  // mismatch on its first connection denies. One that already holds a set
+  // keeps enforcing it unless
+  // sidecar.authority.revocation_fail_closed_on_disconnect = true, so prefer
+  // that setting for the rollout.
+  rpc WatchRevocations(WatchRevocationsRequest) returns (stream RevocationSet);
 }
 
 // SidecarCredentials are the credentials a Sidecar presents on every Authority
@@ -249,11 +273,28 @@ message PolicySetDescriptor {
   uint64 policy_set_version = 2;
 }
 
-// WatchRevocationsRequest initiates a revocation event subscription.
+// WatchRevocationsRequest initiates a revocation set subscription.
 message WatchRevocationsRequest {
-  // Timestamp of the last revocation event the sidecar received.
-  // Authority replays any events after this timestamp on reconnect.
-  google.protobuf.Timestamp since = 1;
+  // Field 1 was `since`, the reconnect cursor of the per-event stream.
+  // WatchRevocations now sends complete sets, so a Sidecar reports nothing
+  // about what it already holds.
+  reserved 1;
+  reserved "since";
   // Credentials authenticating the connecting Sidecar.
   SidecarCredentials credentials = 2;
+}
+
+// RevocationSet is the complete set of revocations the Authority holds for a
+// workspace, not a delta. Receivers replace what they hold with it.
+//
+// Membership is bounded by capability retention, not by all-time revocation
+// history: a revocation leaves the set once the Authority purges the
+// capability record it names, which happens only after the capability has
+// expired, on a cutoff set behind the present to absorb clock skew. A token
+// that drops out of the set is therefore already expired, and the Sidecar
+// rejects it on expiry alone.
+message RevocationSet {
+  // Every revocation currently held, in no significant order. An empty set is
+  // meaningful: it says the workspace holds no revocations.
+  repeated RevocationEvent revocations = 1;
 }

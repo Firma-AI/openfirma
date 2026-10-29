@@ -13,6 +13,7 @@ use firma_protobuf::v1::{
     audit_service_server::{AuditService, AuditServiceServer},
 };
 use firma_sidecar::audit::{AuditPayload, AuditSinkError};
+use firma_sidecar::authority_tls::AuthorityTls;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::startup::{load_audit_event_builder, spawn_audit_sink};
 use tokio::sync::{mpsc, oneshot};
@@ -163,22 +164,54 @@ pub struct Fixture {
     pub config: SidecarConfig,
 }
 
+/// The variable a runtime-authenticated fixture's Sidecar reads its
+/// credential from; set once per test process, read by this crate alone.
+pub const RUNTIME_CREDENTIAL_ENV: &str = "FIRMA_TEST_AUDIT_RUNTIME_CREDENTIAL";
+
 impl Fixture {
     pub async fn new(endpoint: &str) -> TestResult<Self> {
-        Self::with_audit(endpoint, "").await
+        Self::with_options(endpoint, "", None).await
     }
 
     /// Like [`Self::new`], with `audit_settings` appended to `[audit]`.
     pub async fn with_audit(endpoint: &str, audit_settings: &str) -> TestResult<Self> {
+        Self::with_options(endpoint, audit_settings, None).await
+    }
+
+    /// A Sidecar authenticating as `run_id` with a runtime credential.
+    pub async fn for_run(endpoint: &str, run_id: &str) -> TestResult<Self> {
+        Self::with_options(endpoint, "", Some(run_id)).await
+    }
+
+    async fn with_options(
+        endpoint: &str,
+        audit_settings: &str,
+        run_id: Option<&str>,
+    ) -> TestResult<Self> {
         let root = tempfile::tempdir()?;
         let wal = root.path().join("audit.jsonl");
         let key = root.path().join("psk");
         std::fs::write(&key, "original-key")?;
         let signing = root.path().join("audit.pem");
         std::fs::write(&signing, rcgen::KeyPair::generate()?.serialize_pem())?;
-        let config_path = root.path().join("sidecar.toml");
+        let credentials = run_id.map_or_else(
+            || format!("pre_shared_key_path = '{}'", key.display()),
+            |run_id| {
+                // Each nextest test is its own process; the name is this
+                // crate's alone, so no other reader races the write.
+                #[expect(unsafe_code, reason = "test-private variable in a single-test process")]
+                // SAFETY: nothing else in this process reads or writes the
+                // environment concurrently with this single-threaded setup.
+                unsafe {
+                    std::env::set_var(RUNTIME_CREDENTIAL_ENV, "runtime-credential-value");
+                }
+                format!(
+                    "run_id = \"{run_id}\"\nruntime_credential_env = \"{RUNTIME_CREDENTIAL_ENV}\""
+                )
+            },
+        );
         std::fs::write(
-            &config_path,
+            root.path().join("sidecar.toml"),
             format!(
                 r#"
 [audit]
@@ -189,21 +222,21 @@ wal_max_size = "1 MiB"
 signing_key_path = '{}'
 {audit_settings}
 [authority]
-url = 'http://127.0.0.1:50051'
+url = '{endpoint}'
 [authority.credentials]
 workspace_id = "workspace-a"
 sidecar_id = "sidecar-a"
-pre_shared_key_path = '{}'
+{credentials}
 "#,
                 wal.display(),
                 signing.display(),
-                key.display()
             ),
         )?;
-        let config = SidecarConfig::load_from_path(
-            &config_path,
-            &firma_runtime_state::RuntimeLayout::from_root(root.path()),
-        )?;
+        let config = Self::load_config(root.path())?;
+        let wal = match run_id {
+            Some(id) => wal.with_file_name(format!("audit.jsonl.{id}")),
+            None => wal,
+        };
         let fixture = Self {
             root,
             wal,
@@ -216,11 +249,40 @@ pre_shared_key_path = '{}'
         Ok(fixture)
     }
 
+    /// The Sidecar's configuration file, for a test to edit.
+    pub fn config_path(&self) -> PathBuf {
+        self.root.path().join("sidecar.toml")
+    }
+
+    /// The journal's scope file.
+    pub fn scope_path(&self) -> PathBuf {
+        PathBuf::from(format!("{}.scope", self.wal.display()))
+    }
+
+    /// Reloads the configuration after a test edited the file.
+    pub fn reload_config(&mut self) -> TestResult {
+        self.config = Self::load_config(self.root.path())?;
+        Ok(())
+    }
+
+    fn load_config(root: &std::path::Path) -> TestResult<SidecarConfig> {
+        Ok(SidecarConfig::load_from_path(
+            &root.join("sidecar.toml"),
+            &firma_runtime_state::RuntimeLayout::from_root(root),
+        )?)
+    }
+
     pub fn start(&self) -> TestResult<(mpsc::Sender<AuditPayload>, SinkTask, CancellationToken)> {
         let builder = load_audit_event_builder(&self.config.audit)?;
         let (tx, rx) = mpsc::channel(16);
         let cancel = CancellationToken::new();
-        let task = spawn_audit_sink(&self.config, rx, builder, cancel.clone())?;
+        let task = spawn_audit_sink(
+            &self.config,
+            &AuthorityTls::read(&self.config.authority)?,
+            rx,
+            builder,
+            cancel.clone(),
+        )?;
         Ok((tx, task, cancel))
     }
 

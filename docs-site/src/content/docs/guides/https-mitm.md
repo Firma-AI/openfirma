@@ -94,6 +94,8 @@ export SSL_CERT_FILE=/tmp/firma-standalone/firma-ca/firma-ca.crt
 
 These environment variables apply only to the process that inherits them. They are by far the simplest narrow-scope trust mechanism.
 
+Export them for the agent only, not in the shell that starts `firma sidecar` or `firma run`. The Sidecar verifies an `https://` Authority with no `[sidecar.authority].ca_cert_paths` against the platform's trusted roots, and `SSL_CERT_FILE` replaces those roots: with it pointing at the MITM CA, the Sidecar trusts only that CA and cannot connect to the Authority. If the variable must stay set there, pin the Authority's CA with `ca_cert_paths`.
+
 ### Node.js
 
 ```bash

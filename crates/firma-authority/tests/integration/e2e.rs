@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
@@ -9,7 +10,6 @@ use firma_protobuf::v1::{
 };
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
-use prost_types::Timestamp;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
@@ -407,7 +407,7 @@ async fn watch_policy_bundle_pushes_on_symlink_swap() {
 }
 
 #[tokio::test]
-async fn watch_revocations_streams_new_events() {
+async fn watch_revocations_streams_the_whole_set_on_every_change() {
     let server = TestServer::start().await;
 
     let mut client = AuthorityServiceClient::connect(server.addr.clone())
@@ -415,48 +415,89 @@ async fn watch_revocations_streams_new_events() {
         .expect("failed to connect");
 
     let mut stream = client
-        .watch_revocations(WatchRevocationsRequest {
-            since: None,
-            credentials: None,
-        })
+        .watch_revocations(WatchRevocationsRequest { credentials: None })
         .await
         .expect("RPC failed")
         .into_inner();
 
-    let token_id = firma_identifiers::TokenId::generate();
-    std::fs::write(&server.revocation_file, format!("{token_id}\n"))
+    let opening = next_revocation_set(&mut stream).await;
+    assert!(
+        opening.revocations.is_empty(),
+        "an empty set is a message: the workspace holds no revocations"
+    );
+
+    let first = firma_identifiers::TokenId::generate();
+    std::fs::write(&server.revocation_file, format!("{first}\n"))
         .expect("failed to write revocation");
+    assert_eq!(
+        revoked_tokens(&next_revocation_set(&mut stream).await),
+        BTreeSet::from([first.to_string()])
+    );
 
-    let event = tokio::time::timeout(tokio::time::Duration::from_secs(5), stream.message())
-        .await
-        .expect("timed out waiting for revocation event")
-        .expect("stream error")
-        .expect("stream ended");
-
-    assert_eq!(event.token_id, token_id.to_string());
+    let second = firma_identifiers::TokenId::generate();
+    std::fs::write(&server.revocation_file, format!("{first}\n{second}\n"))
+        .expect("failed to write second revocation");
+    assert_eq!(
+        revoked_tokens(&next_revocation_set(&mut stream).await),
+        BTreeSet::from([first.to_string(), second.to_string()]),
+        "each message carries the whole set, not the delta"
+    );
 
     server.stop();
 }
 
 #[tokio::test]
-async fn watch_revocations_fails_on_invalid_timestamp() {
+async fn watch_revocations_coalesces_a_file_update_into_one_set() {
     let server = TestServer::start().await;
-
     let mut client = AuthorityServiceClient::connect(server.addr.clone())
         .await
         .expect("failed to connect");
-
-    let error = client
-        .watch_revocations(WatchRevocationsRequest {
-            since: Some(Timestamp {
-                seconds: 1_783_676_609,
-                nanos: -123,
-            }),
-            credentials: None,
-        })
+    let mut stream = client
+        .watch_revocations(WatchRevocationsRequest { credentials: None })
         .await
-        .unwrap_err();
+        .expect("RPC failed")
+        .into_inner();
+    assert_eq!(next_revocation_set(&mut stream).await.revocations, []);
 
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert_eq!(error.message(), "invalid timestamp for `since`");
+    let tokens: BTreeSet<_> = (0..32)
+        .map(|_| firma_identifiers::TokenId::generate().to_string())
+        .collect();
+    let mut content = String::new();
+    for id in &tokens {
+        content.push_str(id);
+        content.push('\n');
+    }
+    std::fs::write(&server.revocation_file, content).expect("write revocation batch");
+    assert_eq!(
+        revoked_tokens(&next_revocation_set(&mut stream).await),
+        tokens
+    );
+
+    // One file reload already ingests the entire batch. Re-sending that same
+    // complete set per row makes processing and bandwidth quadratic in the
+    // batch size, even though no further revocation has been added.
+    let redundant =
+        tokio::time::timeout(tokio::time::Duration::from_millis(250), stream.message()).await;
+    server.stop();
+    assert!(
+        redundant.is_err(),
+        "a fully delivered file update must not queue another identical complete set"
+    );
+}
+
+async fn next_revocation_set(
+    stream: &mut tonic::Streaming<firma_protobuf::v1::RevocationSet>,
+) -> firma_protobuf::v1::RevocationSet {
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), stream.message())
+        .await
+        .expect("timed out waiting for a revocation set")
+        .expect("stream error")
+        .expect("stream ended")
+}
+
+fn revoked_tokens(set: &firma_protobuf::v1::RevocationSet) -> BTreeSet<String> {
+    set.revocations
+        .iter()
+        .map(|event| event.token_id.clone())
+        .collect()
 }

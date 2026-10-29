@@ -61,12 +61,6 @@ pub enum HostConnectorConfigError {
     /// `host` was empty.
     #[error("host must not be empty")]
     EmptyHost,
-    /// `rps` was zero.
-    #[error("rps must be > 0")]
-    ZeroRps,
-    /// `burst` was zero.
-    #[error("burst must be > 0")]
-    ZeroBurst,
 }
 
 impl Default for ConnectorConfig {
@@ -85,12 +79,10 @@ impl TryFrom<SchemaHostConnectorConfig> for HostConnectorConfig {
         if schema.host.trim().is_empty() {
             return Err(HostConnectorConfigError::EmptyHost);
         }
-        let rps = NonZeroU32::new(schema.rps).ok_or(HostConnectorConfigError::ZeroRps)?;
-        let burst = NonZeroU32::new(schema.burst).ok_or(HostConnectorConfigError::ZeroBurst)?;
         Ok(Self {
             host: schema.host,
-            rps,
-            burst,
+            rps: schema.rps,
+            burst: schema.burst,
             timeout: schema.timeout,
         })
     }
@@ -133,8 +125,8 @@ mod tests {
     fn host(host: &str, rps: u32, burst: u32, timeout: Duration) -> SchemaHostConnectorConfig {
         SchemaHostConnectorConfig {
             host: host.to_string(),
-            rps,
-            burst,
+            rps: NonZeroU32::new(rps).expect("non-zero rps"),
+            burst: NonZeroU32::new(burst).expect("non-zero burst"),
             timeout: NonZeroDuration::new(timeout).expect("non-zero host timeout"),
         }
     }
@@ -156,34 +148,6 @@ mod tests {
         assert!(
             ConnectorConfig::try_from(schema(d.default_timeout.duration(), Vec::new())).is_ok()
         );
-    }
-
-    #[test]
-    fn zero_rps_rejected() {
-        assert!(matches!(
-            ConnectorConfig::try_from(schema(
-                Duration::from_secs(30),
-                vec![host("api.example.com", 0, 5, Duration::from_secs(10))]
-            )),
-            Err(ConnectorConfigError::Host {
-                source: HostConnectorConfigError::ZeroRps,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn zero_burst_rejected() {
-        assert!(matches!(
-            ConnectorConfig::try_from(schema(
-                Duration::from_secs(30),
-                vec![host("api.example.com", 10, 0, Duration::from_secs(10))]
-            )),
-            Err(ConnectorConfigError::Host {
-                source: HostConnectorConfigError::ZeroBurst,
-                ..
-            })
-        ));
     }
 
     #[test]

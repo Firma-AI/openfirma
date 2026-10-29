@@ -25,7 +25,6 @@ uuid = { workspace = true }
 [dev-dependencies]
 firma-test-helpers = { workspace = true }
 insta = { workspace = true }
-serial_test = { workspace = true }
 socket2 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

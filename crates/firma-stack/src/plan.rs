@@ -2,7 +2,7 @@
 //!
 //! This module is the sole place in `firma-stack` that knows the concrete
 //! `[authority, sidecar]` topology and depends on the component crates
-//! (`firma_authority`, `firma_sidecar`, `firma_config_loader`). It parses the
+//! (`firma_sidecar`, `firma_config_loader`). It parses the
 //! unified `firma.toml` through [`FirmaToml`] and turns it into the plain
 //! [`ComponentSpec`] data that the generic supervision machinery consumes.
 //!

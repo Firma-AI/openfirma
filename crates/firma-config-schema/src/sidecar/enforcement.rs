@@ -1,8 +1,10 @@
 //! Schema for the enforcement-engine sections of `[sidecar]`.
 //!
-//! Representation only. These sections are flattened at the top level of the
-//! sidecar config (`[sidecar.constraint_enforcement]`).
+//! These sections are flattened at the top level of the sidecar config
+//! (`[sidecar.constraint_enforcement]`). The session-state capacity is a
+//! non-zero type, so a zero fails while the config is deserialized.
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -23,9 +25,9 @@ pub struct EnforcementConfig {
 #[serde(deny_unknown_fields)]
 pub struct ConstraintEnforcementConfig {
     /// Maximum number of active sessions tracked in the session-state cache.
-    /// Default: 8192. Minimum: 1.
+    /// Default: 8192.
     #[serde(default = "default_session_state_capacity")]
-    pub session_state_capacity: usize,
+    pub session_state_capacity: NonZeroUsize,
     /// Session-state storage backend.
     #[serde(default)]
     pub session_state_backend: SessionStateBackend,
@@ -56,6 +58,6 @@ pub enum SessionStateBackend {
     Persistent,
 }
 
-const fn default_session_state_capacity() -> usize {
-    8192
+const fn default_session_state_capacity() -> NonZeroUsize {
+    const { NonZeroUsize::new(8192).unwrap() }
 }

@@ -4,25 +4,24 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use firma_core::FirmaEntityUid;
 use firma_core::token::CapabilityClaims;
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_identifiers::{AgentId, SessionId};
 use firma_protobuf::v1::PolicyBundle;
-use firma_protobuf::v1::RevocationEvent;
 use firma_protobuf::v1::authority_service_server::AuthorityService;
 use firma_protobuf::v1::{
     CapabilityToken, GetApprovalOutcomeRequest, GetApprovalOutcomeResponse, IssueCapabilityRequest,
     IssueCapabilityResponse, IssueDecision, PolicyBundleUpdate, TokenFormat,
     WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
+use firma_protobuf::v1::{RevocationEvent, RevocationSet};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tokio_stream::{Stream, StreamExt};
-use tonic::{Code, Request as TonicRequest, Response, Status};
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio_stream::Stream;
+use tonic::{Request as TonicRequest, Response, Status};
 use x509_parser::prelude::*;
 
 use crate::cedar_loader::{CedarPolicyStore, CedarPolicyStoreWatcher};
@@ -230,54 +229,48 @@ impl AuthorityService for AuthorityServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    type WatchRevocationsStream =
-        Pin<Box<dyn Stream<Item = Result<RevocationEvent, Status>> + Send>>;
+    type WatchRevocationsStream = Pin<Box<dyn Stream<Item = Result<RevocationSet, Status>> + Send>>;
 
-    /// FR-6: Stream revocation events to connected sidecars.
+    /// FR-6: Stream complete revocation sets to connected sidecars.
     async fn watch_revocations(
         &self,
         request: TonicRequest<WatchRevocationsRequest>,
     ) -> Result<Response<Self::WatchRevocationsStream>, Status> {
         let client_identity = peer_identity_from_request(&request);
-        let req = request.into_inner();
-
-        let since = match req.since {
-            Some(ts) => ts
-                .nanos
-                .try_into()
-                .ok()
-                .and_then(|nanos| chrono::DateTime::from_timestamp(ts.seconds, nanos))
-                .ok_or_else(|| {
-                    Status::new(Code::InvalidArgument, "invalid timestamp for `since`")
-                })?,
-            None => Utc::now() - Duration::days(365),
-        };
+        let _req = request.into_inner();
 
         tracing::info!(
-            ?since,
             client_identity = %client_identity.as_deref().unwrap_or("<unknown>"),
             "sidecar connected to revocation stream"
         );
 
-        // Replay events after `since` timestamp
-        let replay_events = self.revocation_watcher.events_since(since).await;
-        let broadcast_rx = self.revocation_watcher.subscribe();
+        // Subscribe before reading the set, so a revocation ingested while the
+        // opening set is being built still signals the reload that carries it.
+        let mut signals = self.revocation_watcher.subscribe();
+        let store = RevocationStore::clone(&self.revocation_watcher);
+        let opening_set = store.current_set().await;
 
         let stream = async_stream::try_stream! {
-            // First, replay historical events
-            for entry in replay_events {
-                yield entry_to_proto(&entry);
-            }
+            yield set_to_proto(&opening_set);
 
-            // Then stream new events as they arrive
-            let mut broadcast_stream = BroadcastStream::new(broadcast_rx);
-            while let Some(result) = broadcast_stream.next().await {
-                match result {
-                    Ok(entry) => yield entry_to_proto(&entry),
-                    Err(BroadcastStreamRecvError::Lagged(n)) => {
-                        tracing::warn!(missed = n, "sidecar missed revocation events due to slow consumption");
+            // Each signal is a wake-up, not a payload: the whole set is re-read
+            // and sent, so a lag marker is just another wake-up and costs
+            // nothing to skip.
+            loop {
+                match signals.recv().await {
+                    Ok(()) => {}
+                    Err(RecvError::Lagged(missed)) => {
+                        tracing::debug!(missed, "coalescing missed revocation signals into one reload");
                     }
+                    Err(RecvError::Closed) => break,
                 }
+                // The set read below covers every change signalled so far, so
+                // the signals queued behind this one would only resend it.
+                while matches!(
+                    signals.try_recv(),
+                    Ok(()) | Err(TryRecvError::Lagged(_))
+                ) {}
+                yield set_to_proto(&store.current_set().await);
             }
         };
 
@@ -498,9 +491,9 @@ pub(crate) fn evaluate_cedar_policy(
             };
 
         let request = match Request::new(
-            Some(principal.clone()),
-            Some(action_entity),
-            Some(resource_uid.clone()),
+            principal.clone(),
+            action_entity,
+            resource_uid.clone(),
             cedar_context,
             Some(schema),
         ) {
@@ -574,6 +567,16 @@ fn bundle_to_update(bundle: &PolicyBundle) -> PolicyBundleUpdate {
         updated_at: Some(to_proto_timestamp(Utc::now())),
         // The OpenFirma Authority streams one directory of policies; it has no policy set to describe.
         policy_set: None,
+    }
+}
+
+/// Maps the whole held set onto the wire message.
+///
+/// An empty set is a message, not an absence: it tells a reconnecting Sidecar
+/// to hold nothing.
+fn set_to_proto(entries: &[crate::revocation::RevocationEntry]) -> RevocationSet {
+    RevocationSet {
+        revocations: entries.iter().map(entry_to_proto).collect(),
     }
 }
 

@@ -160,6 +160,12 @@ pub struct SeccompPolicyPatch {
 }
 
 /// Capability lease settings patch.
+///
+/// These are local-layer concerns only: where a standalone run reads its static
+/// seed, which key verifies issued tokens, and how eagerly a lease is refreshed.
+/// *Which* capabilities a session may hold is not configurable here — every
+/// mint requests all action classes and the policy set applied to the agent
+/// decides the grant.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityLeasePatch {
@@ -171,8 +177,6 @@ pub struct CapabilityLeasePatch {
         default
     )]
     pub grace: Option<Duration>,
-    #[serde(default)]
-    pub requested_actions: Option<Vec<String>>,
 }
 
 /// Per-executable CLI argument policy patch.

@@ -88,7 +88,9 @@ pub struct InitArgs {
     #[arg(long)]
     pub authority_url: Option<String>,
 
-    /// Path to the authority CA certificate (PEM) for `agent-remote` mode.
+    /// Path to the authority CA certificate (PEM) for `agent-remote` mode. Only
+    /// that CA is trusted; omit it for an Authority with a publicly trusted
+    /// certificate, which the platform's trusted roots verify.
     #[arg(long)]
     pub authority_ca_cert: Option<PathBuf>,
 

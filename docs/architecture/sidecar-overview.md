@@ -388,17 +388,16 @@ tasks from `authority_client`:
   (when present) the Cedar schema bytes into a `CedarPolicyEvaluator`;
   parse failures retain the previous snapshot.
 
-- **`RevocationTask`** calls `WatchRevocations` and forwards each
-  `RevocationEvent` to `RevocationStore::add_revocation` on the shared
-  bloom+LRU store. The task records the latest event timestamp and
-  resends it as `since` on reconnect so the Authority can replay any
-  missed events. `ReadinessFlag::revocation_ready` flips on the first
-  event OR after a configurable grace period
-  (`revocation_readiness_grace`, default `"500ms"`) after the stream
-  opens — whichever comes first. When
-  `revocation_fail_closed_on_disconnect` is true, the readiness bit
-  flips back to `false` on disconnect; by default it stays set and
-  the cache continues serving from its last-known state.
+- **`RevocationTask`** calls `WatchRevocations` and receives a
+  complete `RevocationSet` on connect and again on every change, adding
+  each entry to the shared bloom+LRU `RevocationStore`. There is no
+  cursor: a reconnect gets a set as complete as the last one before it.
+  `ReadinessFlag::revocation_ready` flips on the first applied set and
+  never on a timer; `revocation_readiness_grace` (default `"500ms"`)
+  only controls when a connection that has delivered no set is warned
+  about. When `revocation_fail_closed_on_disconnect` is true, the
+  readiness bit flips back to `false` on disconnect; by default it stays
+  set and the cache continues serving from its last-known state.
 
 Both tasks share a single lazy `tonic::transport::Channel` but run
 independent reconnect loops with exponential backoff

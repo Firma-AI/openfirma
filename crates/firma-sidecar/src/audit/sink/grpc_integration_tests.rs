@@ -11,6 +11,7 @@
 
 #![cfg(test)]
 
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -27,6 +28,8 @@ use tonic::{Request, Response, Status, Streaming};
 use super::GrpcAuditSink;
 use crate::audit::AuditSink as _;
 use crate::audit::test_support::{buffered_ids, sample_event, wait_until};
+
+const TEST_BUFFER_MAX_BYTES: NonZeroU64 = NonZeroU64::new(10 * 1024 * 1024).unwrap();
 
 /// How long a single enqueue may take before the sink counts as stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -206,7 +209,7 @@ async fn buffered_events_replay_in_order_once_the_service_appears() {
     let url = reserve_endpoint().await;
 
     // Start the sink against an endpoint nothing is listening on.
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();
@@ -265,7 +268,7 @@ async fn an_unacknowledged_replay_keeps_the_buffer() {
     state.reject.store(true, Ordering::SeqCst);
     let server = start_mock_audit(&url, Arc::clone(&state));
 
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();
@@ -312,7 +315,7 @@ async fn a_restarted_sink_replays_the_buffer_left_by_its_predecessor() {
     let url = reserve_endpoint().await;
 
     // First sink runs with nothing listening and leaves its events on disk.
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();
@@ -334,7 +337,7 @@ async fn a_restarted_sink_replays_the_buffer_left_by_its_predecessor() {
 
     // A fresh sink over the same buffer path, now with the service up.
     let server = start_mock_audit(&url, Arc::new(MockAuditState::default()));
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();
@@ -373,7 +376,7 @@ async fn a_replay_the_collector_never_answers_keeps_the_buffer() {
     let state = Arc::new(MockAuditState::default());
     state.withhold_response.store(true, Ordering::SeqCst);
 
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();
@@ -440,7 +443,7 @@ async fn a_collector_that_stops_reading_does_not_stall_the_sink() {
     state.stall_reads.store(true, Ordering::SeqCst);
     let server = start_mock_audit(&url, Arc::clone(&state));
 
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();
@@ -511,7 +514,7 @@ async fn shutdown_completes_when_the_collector_never_answers_the_close() {
     state.withhold_response.store(true, Ordering::SeqCst);
     let server = start_mock_audit(&url, Arc::clone(&state));
 
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();
@@ -562,7 +565,7 @@ async fn a_partially_acknowledged_replay_keeps_the_buffer() {
     let state = Arc::new(MockAuditState::default());
     state.acknowledge_short.store(true, Ordering::SeqCst);
 
-    let sink = GrpcAuditSink::new(url.clone(), &buffer_path, 10 * 1024 * 1024);
+    let sink = GrpcAuditSink::new(url.parse().unwrap(), &buffer_path, TEST_BUFFER_MAX_BYTES);
     let (tx, rx) = mpsc::channel(16);
     let exit = CancellationToken::new();
     let sink_exit = exit.clone();

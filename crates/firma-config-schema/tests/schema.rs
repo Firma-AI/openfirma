@@ -12,6 +12,7 @@ use firma_config_schema::sidecar::infra::{
 };
 use firma_config_schema::sidecar::interceptor::{InterceptorConfig, InterceptorMode};
 use firma_config_schema::{authority, gateway, run, secret_matcher, sidecar};
+use firma_config_utils::NonZeroByteSize;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -66,9 +67,15 @@ fn interceptor_config_fills_defaults_for_missing_fields() {
     assert_eq!(config.socket_path, None);
     assert_eq!(InterceptorConfig::default().socket_path, None);
     assert_eq!(config.drain_timeout.duration(), Duration::from_secs(30));
-    assert_eq!(config.max_request_body_size, ByteSize::mib(4));
-    assert_eq!(config.max_decompressed_body_size, ByteSize::mb(16));
-    assert_eq!(config.total_body_budget, ByteSize::mib(64));
+    assert_eq!(
+        ByteSize::from(config.max_request_body_size),
+        ByteSize::mib(4)
+    );
+    assert_eq!(
+        ByteSize::from(config.max_decompressed_body_size),
+        ByteSize::mb(16)
+    );
+    assert_eq!(ByteSize::from(config.total_body_budget), ByteSize::mib(64));
     assert_eq!(
         config.connect_relay.setup_timeout.duration(),
         Duration::from_secs(10)
@@ -107,7 +114,10 @@ fn max_decompressed_body_size_accepts_human_readable_units() {
     let config: InterceptorConfig =
         serde_json::from_str(r#"{ "max_decompressed_body_size": "8 MB" }"#)
             .expect("human-readable size deserializes");
-    assert_eq!(config.max_decompressed_body_size, ByteSize::mb(8));
+    assert_eq!(
+        ByteSize::from(config.max_decompressed_body_size),
+        ByteSize::mb(8)
+    );
 }
 
 #[test]
@@ -117,6 +127,7 @@ fn byte_size_fields_require_unit_bearing_strings() {
         "[interceptor]\nmax_decompressed_body_size = 16000000\n",
         "[interceptor]\ntotal_body_budget = 67108864\n",
         "[audit]\nbuffer_max_size = 104857600\n",
+        "[audit]\nwal_max_size = 104857600\n",
         "[secret_gateway]\nmax_buffer_size = 10000000\n",
         "[interceptor]\nmax_request_body_size = \"4194304\"\n",
     ] {
@@ -335,6 +346,51 @@ fn sidecar_local_exec_retry_after_rejects_zero() {
 }
 
 #[test]
+fn sidecar_non_zero_values_reject_zero() {
+    let host = "[[connector.hosts]]\nhost = \"api.example.com\"\ntimeout = \"1s\"\n";
+    let cases = [
+        ("[revocation]\ncapacity = 0\n".to_owned(), "0"),
+        ("[revocation]\nlru_capacity = 0\n".to_owned(), "0"),
+        (
+            "[constraint_enforcement]\nsession_state_capacity = 0\n".to_owned(),
+            "0",
+        ),
+        (format!("{host}rps = 0\nburst = 5\n"), "0"),
+        (format!("{host}rps = 10\nburst = 0\n"), "0"),
+        (
+            "[local_exec]\nsocket_path = \"/run/firma/local-exec.sock\"\ntoken_ttl = \"0s\"\n"
+                .to_owned(),
+            "\"0s\"",
+        ),
+        (
+            "[interceptor]\nmax_request_body_size = \"0 B\"\n".to_owned(),
+            "\"0 B\"",
+        ),
+        (
+            "[interceptor]\nmax_decompressed_body_size = \"0 MiB\"\n".to_owned(),
+            "\"0 MiB\"",
+        ),
+        (
+            "[interceptor]\ntotal_body_budget = \"0 KB\"\n".to_owned(),
+            "\"0 KB\"",
+        ),
+        ("[audit]\nbuffer_max_size = \"0 B\"\n".to_owned(), "\"0 B\""),
+        ("[audit]\nwal_max_size = \"0 B\"\n".to_owned(), "\"0 B\""),
+    ];
+
+    for (input, zero) in cases {
+        let error = toml::from_str::<sidecar::SidecarConfig>(&input)
+            .expect_err("a zero must fail during deserialization");
+
+        let span = error.span().expect("error must identify the input span");
+        assert_eq!(
+            &input[span], zero,
+            "span must point at the zero in:\n{input}"
+        );
+    }
+}
+
+#[test]
 fn sidecar_scalar_fields_accept_human_readable_units() {
     let config: sidecar::SidecarConfig = toml::from_str(
         r#"
@@ -356,13 +412,22 @@ fn sidecar_scalar_fields_accept_human_readable_units() {
         config.interceptor.drain_timeout.duration(),
         Duration::from_millis(500)
     );
-    assert_eq!(config.interceptor.max_request_body_size, ByteSize::mib(4));
-    assert_eq!(config.interceptor.total_body_budget, ByteSize::mib(64));
+    assert_eq!(
+        ByteSize::from(config.interceptor.max_request_body_size),
+        ByteSize::mib(4)
+    );
+    assert_eq!(
+        ByteSize::from(config.interceptor.total_body_budget),
+        ByteSize::mib(64)
+    );
     assert_eq!(
         config.connector.default_timeout.duration(),
         Duration::from_secs(30)
     );
-    assert_eq!(config.audit.buffer_max_size, ByteSize::mib(100));
+    assert_eq!(
+        ByteSize::from(config.audit.buffer_max_size),
+        ByteSize::mib(100)
+    );
 }
 
 #[test]
@@ -376,7 +441,7 @@ fn wal_audit_sink_keeps_its_separate_delivery_configuration() {
         config.wal_path.as_deref(),
         Some(std::path::Path::new("audit.jsonl"))
     );
-    assert_eq!(config.wal_max_size, ByteSize::mib(8));
+    assert_eq!(ByteSize::from(config.wal_max_size), ByteSize::mib(8));
     assert_eq!(config.buffer_path, None);
 }
 
@@ -410,8 +475,9 @@ fn every_audit_sink_survives_a_serde_round_trip() {
 #[test]
 fn sidecar_byte_sizes_survive_a_toml_round_trip() {
     let mut config = sidecar::SidecarConfig::default();
-    config.interceptor.max_request_body_size = ByteSize::b(12_345);
-    config.audit.wal_max_size = ByteSize::b(67_890);
+    config.interceptor.max_request_body_size =
+        NonZeroByteSize::new(ByteSize::b(12_345)).expect("non-zero size");
+    config.audit.wal_max_size = NonZeroByteSize::new(ByteSize::b(67_890)).expect("non-zero size");
     config.secret_gateway.max_buffer_size = ByteSize::b(98_765);
 
     let encoded = toml::to_string(&config).expect("Sidecar config serializes");
@@ -419,10 +485,13 @@ fn sidecar_byte_sizes_survive_a_toml_round_trip() {
         toml::from_str(&encoded).expect("serialized Sidecar config deserializes");
 
     assert_eq!(
-        decoded.interceptor.max_request_body_size,
+        ByteSize::from(decoded.interceptor.max_request_body_size),
         ByteSize::b(12_345)
     );
-    assert_eq!(decoded.audit.wal_max_size, ByteSize::b(67_890));
+    assert_eq!(
+        ByteSize::from(decoded.audit.wal_max_size),
+        ByteSize::b(67_890)
+    );
     assert_eq!(decoded.secret_gateway.max_buffer_size, ByteSize::b(98_765));
 }
 
@@ -792,6 +861,25 @@ fn legacy_capability_source_keys_are_rejected() {
     )
     .expect("canonical tagged capability source must parse");
     assert!(config.defaults.capability.is_some());
+}
+
+/// Capabilities come from the policy set applied to the agent, so no profile
+/// layer may name an action list. Unselected profiles are rejected too: the
+/// whole file parses, so a stale key anywhere fails startup.
+#[test]
+fn removed_capability_requested_actions_key_is_rejected() {
+    for config in [
+        "[defaults.capability]\nrequested_actions = [\"filesystem.read\"]\n",
+        "[profiles.unselected.capability]\nrequested_actions = []\n",
+        "[profiles.unselected]\ncapability = { requested_actions = [\"filesystem.read\"] }\n",
+    ] {
+        let error = toml::from_str::<run::FileConfig>(config)
+            .expect_err("a removed capability action list must be rejected");
+        assert!(
+            error.to_string().contains("requested_actions"),
+            "error names the offending key: {error}"
+        );
+    }
 }
 
 #[test]

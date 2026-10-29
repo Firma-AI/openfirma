@@ -22,7 +22,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
 use crate::config::AuthorityConfig;
 
 use self::freshness::FreshnessWatcher;
@@ -47,7 +47,7 @@ pub(crate) struct AuthorityDeps {
     /// Authority client tuning.
     pub(crate) config: AuthorityConfig,
     /// Credentials presented on each Authority RPC.
-    pub(crate) credentials: Option<ResolvedSidecarCredentials>,
+    pub(crate) credentials: Option<SidecarCredential>,
     /// File where each accepted bundle is published for status readers.
     pub(crate) enforcement_state: Option<std::path::PathBuf>,
     /// Policy bundle parser implementation.
@@ -102,8 +102,8 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
         cancel: deps.cancel,
         fail_closed_on_disconnect: deps.config.revocation_fail_closed_on_disconnect,
         readiness_grace: deps.config.revocation_readiness_grace,
-        last_event_time: None,
         credentials: deps.credentials,
+        applied_a_set: false,
     };
 
     AuthorityClientHandle {

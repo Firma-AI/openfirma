@@ -43,7 +43,7 @@ pub enum BundleError {
     Parse {
         path: PathBuf,
         #[source]
-        source: cedar_policy::ParseErrors,
+        source: Box<cedar_policy::ParseErrors>,
     },
 }
 
@@ -109,7 +109,7 @@ pub fn read_policy_set(dir: &Path) -> Result<PolicySet, BundleError> {
         .parse::<PolicySet>()
         .map_err(|source| BundleError::Parse {
             path: dir.to_path_buf(),
-            source,
+            source: Box::new(source),
         })
 }
 

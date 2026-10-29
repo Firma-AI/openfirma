@@ -6,14 +6,23 @@ use std::time::Duration;
 use firma_core::RevocationStore;
 use firma_identifiers::TokenId;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
-use firma_protobuf::v1::{RevocationEvent, WatchRevocationsRequest};
-use prost_types::Timestamp;
+use firma_protobuf::v1::{RevocationEvent, RevocationSet, WatchRevocationsRequest};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
 use crate::authority_client::readiness::ReadinessFlag;
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
 use crate::backoff::ExponentialBackoff;
+
+// Every message carries the workspace's whole revocation set, so its size
+// grows with the number of live revocations rather than with what changed.
+// Tonic's 4 MiB default would turn crossing that threshold into a permanent
+// outage: the oversized message is the *opening* one, so every reconnect
+// fails the same way and the store is never populated. 64 MiB is far above
+// what either Authority's retention window can hold -- the Team set is
+// bounded by token TTL plus `expired_purge_grace` -- while still bounding the
+// allocation a Sidecar will attempt.
+const MAX_REVOCATION_SET_BYTES: usize = 64 * 1024 * 1024;
 
 /// Server-streaming task for revocation events.
 pub(crate) struct RevocationTask {
@@ -29,12 +38,14 @@ pub(crate) struct RevocationTask {
     pub(crate) cancel: CancellationToken,
     /// Whether disconnects make the revocation cache not-ready.
     pub(crate) fail_closed_on_disconnect: bool,
-    /// Delay after a successful connect before readiness flips.
+    /// How long a connection may deliver no set before the Sidecar warns.
+    /// Readiness is granted only by an applied set, never by this elapsing.
     pub(crate) readiness_grace: Duration,
-    /// Last seen revocation timestamp for replay.
-    pub(crate) last_event_time: Option<Timestamp>,
     /// Credentials presented on each stream connection.
-    pub(crate) credentials: Option<ResolvedSidecarCredentials>,
+    pub(crate) credentials: Option<SidecarCredential>,
+    /// Whether any connection has ever applied a set to the store, reported
+    /// in the missing-set warning.
+    pub(crate) applied_a_set: bool,
 }
 
 impl RevocationTask {
@@ -74,18 +85,21 @@ impl RevocationTask {
     }
 
     async fn run_once(&mut self) -> Result<(), String> {
-        let mut client = AuthorityServiceClient::new(self.channel.clone());
+        let mut client = AuthorityServiceClient::new(self.channel.clone())
+            .max_decoding_message_size(MAX_REVOCATION_SET_BYTES);
+        let message = WatchRevocationsRequest {
+            credentials: self
+                .credentials
+                .as_ref()
+                .and_then(SidecarCredential::body_credentials),
+        };
         let response = client
-            .watch_revocations(WatchRevocationsRequest {
-                since: self.last_event_time,
-                credentials: self
-                    .credentials
-                    .as_ref()
-                    .map(ResolvedSidecarCredentials::to_proto),
-            })
+            .watch_revocations(SidecarCredential::authenticated(
+                self.credentials.as_ref(),
+                message,
+            ))
             .await
             .map_err(|err| err.to_string())?;
-        self.backoff.reset();
         tracing::info!(stream = "revocations", "authority stream connected");
 
         let mut stream = response.into_inner();
@@ -93,19 +107,42 @@ impl RevocationTask {
         tokio::pin!(grace);
         let mut ready = false;
 
+        // The timer stays Ready once elapsed, so its arm is disabled by its
+        // own flag rather than by `ready`, which only a delivered set sets.
+        let mut grace_elapsed = false;
+
         loop {
             tokio::select! {
                 () = self.cancel.cancelled() => return Ok(()),
-                () = &mut grace, if !ready => {
-                    self.readiness.set_revocation_ready(true);
-                    ready = true;
+                // Readiness means "this Sidecar holds the Authority's set",
+                // never "a connection opened": the Authority sends the whole
+                // set on connect, so a connection that produces none is one
+                // whose sets this Sidecar cannot decode -- a contract
+                // mismatch or an oversized message -- which repeats on every
+                // reconnect. Going ready on the timer alone would enforce
+                // against an empty store indefinitely, so the timer only
+                // warns: readiness stays wherever the last applied set, or
+                // `fail_closed_on_disconnect`, left it.
+                () = &mut grace, if !ready && !grace_elapsed => {
+                    grace_elapsed = true;
+                    tracing::warn!(
+                        stream = "revocations",
+                        grace_ms = self.readiness_grace.as_millis(),
+                        holds_a_set = self.applied_a_set,
+                        "no revocation set received within the readiness grace"
+                    );
                 }
                 message = stream.message() => {
-                    let event = message.map_err(|err| err.to_string())?;
-                    let Some(event) = event else {
+                    let set = message.map_err(|err| err.to_string())?;
+                    let Some(set) = set else {
                         return Ok(());
                     };
-                    self.apply_event(&event)?;
+                    self.apply_set(&set)?;
+                    // Reset the backoff on a decoded set, not on connect: an
+                    // oversized opening message would otherwise reset it on
+                    // every attempt and reconnect at the floor forever.
+                    self.backoff.reset();
+                    self.applied_a_set = true;
                     if !ready {
                         self.readiness.set_revocation_ready(true);
                         ready = true;
@@ -115,16 +152,25 @@ impl RevocationTask {
         }
     }
 
-    fn apply_event(&mut self, event: &RevocationEvent) -> Result<(), String> {
-        let token_id = token_id_from_event(event)?;
-        self.store
-            .add_revocation(&token_id)
-            .map_err(|err| err.to_string())?;
-        self.last_event_time = event.timestamp;
+    /// Applies a complete revocation set to the store.
+    ///
+    /// The Authority sends the whole set, which the store is meant to replace
+    /// what it holds with. `RevocationStore` can only be added to — the bloom
+    /// filter has no removal — so entries the Authority has dropped stay
+    /// cached here. Those are exactly the revocations whose capability record
+    /// was purged, i.e. tokens already past expiry, which fail validation on
+    /// expiry alone: the difference can only reject a token, never admit one.
+    /// Replacing the store outright is the Sidecar-side slice of this change.
+    fn apply_set(&self, set: &RevocationSet) -> Result<(), String> {
+        for event in &set.revocations {
+            let token_id = token_id_from_event(event)?;
+            self.store
+                .add_revocation(&token_id)
+                .map_err(|err| err.to_string())?;
+        }
         tracing::debug!(
-            token_id = %event.token_id,
-            reason = %event.reason,
-            "revocation event applied"
+            revocations = set.revocations.len(),
+            "revocation set applied"
         );
         Ok(())
     }

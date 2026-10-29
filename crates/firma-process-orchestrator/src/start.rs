@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::LifecycleTimeouts;
 use crate::StackTopology;
@@ -50,7 +50,9 @@ use crate::readiness::{wait_for_child_published, wait_for_endpoint};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::state_lease::{StackGeneration, StateLease, StateTransaction};
 use crate::stop::StopOutcome;
-use crate::supervisor::{StopSignal, block_until_owned_exit_with, collect_in_background};
+use crate::supervisor::{
+    StopSignal, any_exited, block_until_owned_exit_with, collect_in_background,
+};
 use crate::timeouts::CHILD_COLLECTION_TIMEOUT;
 use firma_runtime_state::{UserProcessId, pidfile};
 
@@ -696,6 +698,29 @@ impl RunningStack {
     #[must_use]
     pub const fn handle(&self) -> &StackHandle {
         &self.handle
+    }
+
+    /// Stop the stack if one of its components has exited, without waiting
+    /// otherwise.
+    ///
+    /// The exited component is collected by the probe, so the stack is
+    /// stopped at once, before its freed process scope could be reused. A
+    /// probe that fails also stops the stack: whether the component still
+    /// runs is unknown. A stopped stack reports `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Self::shutdown`] error of a stack it stopped.
+    pub fn stop_if_component_exited(&mut self, timeout: Duration) -> Result<bool, ShutdownError> {
+        let RunningStackState::Owned(owned) = &mut self.state else {
+            return Ok(false);
+        };
+        match any_exited(&mut owned.components) {
+            Ok(false) => return Ok(false),
+            Ok(true) => {}
+            Err(error) => warn!(%error, "component probe failed; stopping the stack"),
+        }
+        self.shutdown(timeout).map(|_| true)
     }
 
     /// Stop the stack and collect its child processes.

@@ -233,6 +233,8 @@ async fn login_reports_success_only_after_an_authenticated_workspace_request()
         "Logged in to Workspace {WORKSPACE} as Membership {MEMBERSHIP}."
     )));
     assert!(stdout.contains(&format!("Saved this login to {}.", dir.path().display())));
+    assert!(stdout.contains("Next: firma run --agent <agent handle> -- <your agent command>"));
+    assert!(stdout.contains("Agent handles are on the Agents page at "));
     assert!(!stdout.contains(ACCESS_TOKEN) && !stderr.contains(ACCESS_TOKEN));
     assert!(
         !stdout.contains("state="),

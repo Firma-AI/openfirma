@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use firma_identifiers::AgentId;
+use firma_identifiers::{AgentId, RunId};
 use firma_run::error::RunError;
 use firma_run::identity::{RunIdentity, read_configured_agent_id};
 
@@ -27,6 +27,10 @@ fn identity_propagates_registered_id_and_profile_separately() {
     assert_eq!(
         env.get("FIRMA_RUN_PROFILE").map(String::as_str),
         Some("codex")
+    );
+    assert_eq!(
+        env.get("FIRMA_AGENT_ID").map(String::as_str),
+        Some(AGENT_ID)
     );
 
     let headers = identity.full_attribution_headers();
@@ -65,4 +69,32 @@ fn configured_agent_id_rejects_missing_profile_and_malformed_values() {
         read_configured_agent_id(&path),
         Err(RunError::InvalidAgentId { .. })
     ));
+}
+
+#[test]
+fn a_managed_identity_session_equals_its_run() {
+    let run_id: RunId = "run_01j0000000e008000000000001".parse().expect("run id");
+
+    let identity = RunIdentity::managed(
+        AGENT_ID.parse::<AgentId>().expect("agent id"),
+        "codex",
+        run_id,
+    );
+
+    let env = identity.env_pairs();
+    assert_eq!(
+        env.get("FIRMA_RUN_SESSION_ID").map(String::as_str),
+        Some("run_01j0000000e008000000000001")
+    );
+    assert_eq!(
+        env.get("FIRMA_RUN_PROFILE").map(String::as_str),
+        Some("codex")
+    );
+    assert_eq!(
+        identity
+            .full_attribution_headers()
+            .get("x-firma-session-id")
+            .map(String::as_str),
+        Some("run_01j0000000e008000000000001")
+    );
 }

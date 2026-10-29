@@ -17,13 +17,12 @@ workspace = true
 ansi-to-tui = "8"
 anyhow.workspace = true
 clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
-crossterm = "0.28"
+crossterm = "0.29"
 firma-config-loader = { workspace = true }
 firma-fs = { workspace = true }
 firma-runtime-state = { workspace = true }
 firma-stack = { workspace = true }
 ratatui = "0.30"
 serde_json.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
 tui-markdown = { version = "0.3.8", default-features = false }

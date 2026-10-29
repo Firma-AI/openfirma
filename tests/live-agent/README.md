@@ -25,6 +25,17 @@ Run a single scenario:
 cargo nextest run -p firma --test live-agent --run-ignored all --no-tests=fail -E 'test(claude::simple_prompt)'
 ```
 
+## Failure diagnostics
+
+Set `FIRMA_LIVE_AGENT_DIAGNOSTICS_DIR` to an absolute directory to retain each
+phase's stdout and stderr plus the enforcement audit JSONL, grouped by agent and
+scenario. Files are saved before assertions, so snapshot panics do not discard
+them. Process output is also saved on phase timeouts.
+
+CI uploads these files only when a job fails, with one-day retention. Treat them
+as sensitive process output; configuration, credentials, and other runtime state
+are not copied into the diagnostics directory.
+
 ## Scenarios
 
 Each scenario runs in two phases:

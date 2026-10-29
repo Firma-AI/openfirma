@@ -15,7 +15,7 @@ use tonic::transport::Channel;
 use crate::authority_client::enforcement_publisher::{self, EnforcementStateSender};
 use crate::authority_client::readiness::ReadinessFlag;
 use crate::authority_client::swappable_policy::{RuntimeSnapshot, SwappablePolicyEvaluation};
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
 use crate::backoff::ExponentialBackoff;
 use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -93,7 +93,7 @@ pub(crate) struct PolicyBundleTask {
     /// Bundle parser.
     pub(crate) bundle_parser: Arc<dyn BundleParser + Send + Sync>,
     /// Credentials presented on each stream connection.
-    pub(crate) credentials: Option<ResolvedSidecarCredentials>,
+    pub(crate) credentials: Option<SidecarCredential>,
     pub(crate) composio_coverage_warnings: Vec<String>,
     pub(crate) composio_coverage_active: bool,
 }
@@ -111,10 +111,22 @@ impl PolicyBundleTask {
                 result = self.run_once() => {
                     match result {
                         Ok(()) => {}
-                        Err(err) => {
+                        Err(status) if self.run_rejected(&status) => {
+                            // The Authority no longer accepts this run, so a
+                            // reconnect cannot succeed: stop the Sidecar, which
+                            // tells `firma run` to stop the agent.
+                            tracing::error!(
+                                stream = "policy_bundle",
+                                error = %status,
+                                "authority rejected this run; shutting the sidecar down"
+                            );
+                            self.cancel.cancel();
+                            return;
+                        }
+                        Err(status) => {
                             tracing::warn!(
                                 stream = "policy_bundle",
-                                error = %err,
+                                error = %status,
                                 "authority stream disconnected"
                             );
                         }
@@ -134,7 +146,14 @@ impl PolicyBundleTask {
         }
     }
 
-    async fn run_once(&mut self) -> Result<(), String> {
+    /// Whether `status` means the Authority rejected this run's runtime
+    /// credential. A pre-shared key, or any other code, keeps reconnecting.
+    fn run_rejected(&self, status: &tonic::Status) -> bool {
+        status.code() == tonic::Code::Unauthenticated
+            && matches!(self.credentials, Some(SidecarCredential::Runtime(_)))
+    }
+
+    async fn run_once(&mut self) -> Result<(), tonic::Status> {
         let mut client = AuthorityServiceClient::new(self.channel.clone())
             .max_decoding_message_size(MAX_MANAGED_UPDATE_BYTES);
         // The reported version is advisory: every Authority sends a complete
@@ -147,19 +166,20 @@ impl PolicyBundleTask {
                 String::new()
             }
         };
+        let message = WatchPolicyBundleRequest {
+            supported_capabilities: vec![PolicyBundleCapability::ActionMappingSnapshotV1 as i32],
+            current_version,
+            credentials: self
+                .credentials
+                .as_ref()
+                .and_then(SidecarCredential::body_credentials),
+        };
         let response = client
-            .watch_policy_bundle(WatchPolicyBundleRequest {
-                supported_capabilities: vec![
-                    PolicyBundleCapability::ActionMappingSnapshotV1 as i32,
-                ],
-                current_version,
-                credentials: self
-                    .credentials
-                    .as_ref()
-                    .map(ResolvedSidecarCredentials::to_proto),
-            })
-            .await
-            .map_err(|err| err.to_string())?;
+            .watch_policy_bundle(SidecarCredential::authenticated(
+                self.credentials.as_ref(),
+                message,
+            ))
+            .await?;
         self.backoff.reset();
         tracing::info!(stream = "policy_bundle", "authority stream connected");
 
@@ -168,7 +188,7 @@ impl PolicyBundleTask {
             tokio::select! {
                 () = self.cancel.cancelled() => return Ok(()),
                 message = stream.message() => {
-                    let update = message.map_err(|err| err.to_string())?;
+                    let update = message?;
                     let Some(update) = update else {
                         return Ok(());
                     };

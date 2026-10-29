@@ -28,6 +28,11 @@ Buffered events are cleared only once the collector acknowledges them, and the b
 
 Both network sinks attach configured sidecar credentials. They use separate file
 formats and delivery contracts; do not share a buffer path with a WAL journal.
+
+An `https://` `grpc_url` on the Authority's own origin trusts what the Authority
+connection trusts: its CA, else the platform's roots, and its mTLS identity.
+Any other collector is verified against the platform's trusted roots; for one
+with a private CA, add that CA to the bundle `SSL_CERT_FILE` names.
 Buffered `grpc` rejects records carrying run evidence, including empty evidence,
 before sending them to a legacy collector. An existing buffer containing such a
 record is retained and startup fails; it must not be silently downgraded to an
@@ -365,6 +370,15 @@ A small stack that catches most operational issues:
 The audit log's value compounds with how easily you can search it. A grep-friendly format, durable storage, and signature verification are the three things to invest in first.
 
 ## Common gotchas
+
+**Runtime credentials and durable delivery.** Runtime-authenticated Sidecars
+require a canonical `run_` RunId and reject the legacy `grpc` sink; use
+`wal` instead. The resolved WAL filename appends `.<run_id>` to the
+configured `wal_path`. Prior runs' journals are retained, not deleted or
+replayed under a new bearer; existing unqualified runtime journals are left
+untouched. PSK paths and scope-file formats are unchanged. See the
+[configuration reference](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md)
+for the credential-source contract.
 
 **`audit.jsonl` is empty after a request.** The audit worker writes asynchronously; events flush every few hundred milliseconds. If the file is _never_ written, the Sidecar probably crashed at startup with a permissions error on `signing_key_path` — check stderr. Note that a per-run sidecar autostarted by `firma run` defaults its audit sink to a file at `<state_dir>/audit.jsonl` (the path `firma monitor` tails) even when the template configures no sink, so a `firma run` decision is monitorable out of the box; an explicit `[sidecar.audit]` sink in your template still wins.
 

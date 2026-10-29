@@ -17,10 +17,13 @@ use std::time::Instant;
 #[cfg(test)]
 use std::time::Duration;
 
+#[cfg(test)]
+use firma_config_utils::NonZeroDuration;
+
 use lru::LruCache;
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, PublicKeyData as _,
     SanType,
 };
 use rustls::ServerConfig;
@@ -53,7 +56,7 @@ impl HttpsMitmRuntime {
     /// initialization fails.
     pub fn new(config: HttpsMitmConfig, ca_dir: &Path) -> Result<Self, String> {
         let ca = CaMaterial::load_or_generate(ca_dir)?;
-        let cache = LeafCertCache::new(config.cert_cache_capacity)?;
+        let cache = LeafCertCache::new(config.cert_cache_capacity);
         let intercept_hosts = normalize_patterns(&config.intercept_hosts);
         let bypass_hosts = normalize_patterns(&config.bypass_hosts);
         let strict_hosts = normalize_patterns(&config.strict_hosts);
@@ -114,7 +117,7 @@ impl HttpsMitmRuntime {
         let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
             .map_err(|e| format!("failed to generate leaf key for {host}: {e}"))?;
         let leaf_cert = params
-            .signed_by(&leaf_key, &self.ca.cert, &self.ca.key)
+            .signed_by(&leaf_key, &self.ca.issuer)
             .map_err(|e| format!("failed to sign leaf certificate for {host}: {e}"))?;
         let certs = vec![
             CertificateDer::from(leaf_cert.der().to_vec()),
@@ -127,7 +130,7 @@ impl HttpsMitmRuntime {
             .with_no_client_auth()
             .with_single_cert(certs, key)
             .map_err(|e| format!("failed to build rustls server config: {e}"))?;
-        let expires_at = Instant::now() + self.config.cert_ttl;
+        let expires_at = Instant::now() + self.config.cert_ttl.duration();
 
         Ok(CachedLeafCert {
             acceptor: TlsAcceptor::from(Arc::new(server_config)),
@@ -152,12 +155,10 @@ struct LeafCertCache {
 }
 
 impl LeafCertCache {
-    fn new(capacity: usize) -> Result<Self, String> {
-        let capacity = NonZeroUsize::new(capacity)
-            .ok_or_else(|| "MITM certificate cache capacity must be > 0".to_string())?;
-        Ok(Self {
+    fn new(capacity: NonZeroUsize) -> Self {
+        Self {
             entries: LruCache::new(capacity),
-        })
+        }
     }
 
     #[cfg(test)]
@@ -184,8 +185,7 @@ impl LeafCertCache {
 }
 
 struct CaMaterial {
-    cert: Certificate,
-    key: KeyPair,
+    issuer: Issuer<'static, KeyPair>,
     cert_der: Vec<u8>,
 }
 
@@ -240,7 +240,7 @@ impl CaMaterial {
         let ca_key =
             KeyPair::from_pem(&key_pem).map_err(|e| format!("invalid MITM CA key PEM: {e}"))?;
 
-        let (params, cert_der) = if cert_exists {
+        if cert_exists {
             let cert_pem = fs::read_to_string(&cert_path).map_err(|e| {
                 format!(
                     "failed to read existing MITM CA cert {}: {e}",
@@ -249,7 +249,7 @@ impl CaMaterial {
             })?;
             let cert_der = parse_cert_der_from_pem(&cert_pem, &cert_path)?;
             let cert_spki = parse_cert_spki_from_pem(&cert_pem, &cert_path)?;
-            let key_spki = ca_key.public_key_der();
+            let key_spki = ca_key.subject_public_key_info();
             if cert_spki != key_spki {
                 return Err(format!(
                     "MITM CA cert {} does not match private key {}",
@@ -258,33 +258,23 @@ impl CaMaterial {
                 ));
             }
 
-            let params = CertificateParams::from_ca_cert_pem(&cert_pem).map_err(|e| {
+            let issuer = Issuer::from_ca_cert_pem(&cert_pem, ca_key).map_err(|e| {
                 format!(
                     "failed to parse existing MITM CA cert {}: {e}",
                     cert_path.display()
                 )
             })?;
-            (params, cert_der)
-        } else {
-            (ca_certificate_params(), Vec::new())
-        };
+            return Ok(Self { issuer, cert_der });
+        }
 
+        let params = ca_certificate_params();
         let cert = params
             .self_signed(&ca_key)
             .map_err(|e| format!("failed to build MITM CA certificate: {e}"))?;
-
-        let cert_der = if cert_exists {
-            cert_der
-        } else {
-            let cert_der = cert.der().to_vec();
-            write_public_cert_pem(&cert_path, &cert.pem())?;
-            cert_der
-        };
-
+        write_public_cert_pem(&cert_path, &cert.pem())?;
         Ok(Self {
-            cert,
-            key: ca_key,
-            cert_der,
+            issuer: Issuer::new(params, ca_key),
+            cert_der: cert.der().to_vec(),
         })
     }
 }
@@ -542,8 +532,8 @@ mod tests {
                 enabled: true,
                 intercept_hosts: vec!["*.openai.com".to_string()],
                 bypass_hosts: vec!["api.openai.com".to_string()],
-                cert_ttl: Duration::from_mins(1),
-                cert_cache_capacity: 8,
+                cert_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+                cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
                 ..HttpsMitmConfig::default()
             },
             dir.path(),
@@ -587,8 +577,8 @@ mod tests {
                 enabled: true,
                 intercept_hosts: vec!["api.openai.com".to_string()],
                 strict_hosts: vec!["api.openai.com".to_string()],
-                cert_ttl: Duration::from_mins(1),
-                cert_cache_capacity: 8,
+                cert_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+                cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
                 ..HttpsMitmConfig::default()
             },
             dir.path(),
@@ -605,8 +595,8 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl: Duration::from_mins(1),
-            cert_cache_capacity: 8,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+            cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -622,8 +612,8 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl: Duration::from_mins(1),
-            cert_cache_capacity: 8,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+            cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
             ..HttpsMitmConfig::default()
         };
         let _ = HttpsMitmRuntime::new(cfg.clone(), dir.path()).unwrap_or_else(|e| panic!("{e}"));
@@ -651,8 +641,8 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl: Duration::from_mins(1),
-            cert_cache_capacity: 8,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+            cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -674,8 +664,8 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl: Duration::from_mins(1),
-            cert_cache_capacity: 8,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+            cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
             ..HttpsMitmConfig::default()
         };
         let _ = HttpsMitmRuntime::new(cfg, dir.path()).unwrap_or_else(|e| panic!("{e}"));
@@ -705,8 +695,8 @@ mod tests {
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
-            cert_ttl: Duration::from_mins(1),
-            cert_cache_capacity: 8,
+            cert_ttl: NonZeroDuration::from_static(Duration::from_mins(1)),
+            cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
             ..HttpsMitmConfig::default()
         };
 
@@ -726,8 +716,8 @@ mod tests {
             HttpsMitmConfig {
                 enabled: true,
                 intercept_hosts: vec!["api.openai.com".to_string()],
-                cert_ttl: Duration::from_mins(5),
-                cert_cache_capacity: 8,
+                cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+                cert_cache_capacity: NonZeroUsize::new(8).unwrap(),
                 ..HttpsMitmConfig::default()
             },
             dir.path(),

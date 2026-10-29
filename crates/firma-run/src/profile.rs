@@ -79,7 +79,6 @@ fn generic_profile(workspace: &Path) -> ProfilePatch {
             public_key_path: None,
             refresh_ratio: Some(0.60),
             grace: Some(Duration::from_secs(30)),
-            requested_actions: None,
         }),
         sidecar_local_exec: None,
         executable_policies: Some(BTreeMap::new()),

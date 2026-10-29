@@ -863,46 +863,133 @@ fn agent_remote_requires_connect_material_without_existing_defaults() {
         .arg(&config_dir)
         .args(["--authority-url", "https://authority.example.com:9443"])
         .output()
-        .expect("spawn remote firma config without CA");
-    assert!(
-        !output.status.success(),
-        "agent-remote without CA material must fail"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--authority-ca-cert"),
-        "error should name missing remote CA:\n{stderr}"
-    );
-
-    let output = firma()
-        .args([
-            "config",
-            "--yes",
-            "--dry-run",
-            "--mode",
-            "agent-remote",
-            "--agent-id",
-            REGISTERED_AGENT_ID,
-            "--output-dir",
-        ])
-        .arg(&config_dir)
-        .args([
-            "--authority-url",
-            "https://authority.example.com:9443",
-            "--authority-ca-cert",
-        ])
-        .arg(tmp.path().join("remote-ca.crt"))
-        .output()
-        .expect("spawn remote firma config without public key");
+        .expect("spawn remote firma config without CA or public key");
     assert!(
         !output.status.success(),
         "agent-remote without public key material must fail"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--authority-pub-key"),
-        "error should name missing remote public key:\n{stderr}"
+        stderr.contains("--authority-pub-key") && !stderr.contains("--authority-ca-cert"),
+        "only the public key is required; the CA is optional:\n{stderr}"
     );
+}
+
+/// Run `firma config --yes --mode agent-remote` against `config_dir` with
+/// `extra` arguments; returns stderr and the written `[sidecar.authority]`.
+fn configure_remote(config_dir: &Path, state_dir: &Path, extra: &[&str]) -> (String, toml::Value) {
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--mode",
+            "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
+            "--output-dir",
+        ])
+        .arg(config_dir)
+        .arg("--state-dir")
+        .arg(state_dir)
+        .arg("--authority-pub-key")
+        .arg(state_dir.join("remote-authority.pub"))
+        .args(extra)
+        .output()
+        .expect("spawn firma config");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "config failed: {stderr}");
+    let body = std::fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).expect("read config");
+    let config: toml::Value = toml::from_str(&body).expect("parse config");
+    (stderr, config["sidecar"]["authority"].clone())
+}
+
+/// A publicly trusted Authority needs only its URL: no CA is written, so the
+/// Sidecar verifies it against the platform's trusted roots.
+#[test]
+fn agent_remote_without_a_ca_writes_none() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+
+    let (_, authority) = configure_remote(
+        &tmp.path().join("config"),
+        &tmp.path().join("state"),
+        &["--authority-url", "https://authority.example.com:9443"],
+    );
+
+    assert_eq!(
+        authority["url"].as_str(),
+        Some("https://authority.example.com:9443")
+    );
+    assert!(authority.get("ca_cert_paths").is_none(), "got: {authority}");
+}
+
+/// A configured CA belongs to its Authority endpoint, whatever the URL
+/// spelling: a rerun for the same host and port keeps it, and one for another
+/// port neither inherits it nor drops it silently.
+#[test]
+fn agent_remote_reuses_a_ca_only_for_the_same_authority() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    let ca = state_dir.join("remote-ca.crt");
+    let ca = ca.to_str().expect("utf-8 path");
+    configure_remote(
+        &config_dir,
+        &state_dir,
+        &[
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--authority-ca-cert",
+            ca,
+        ],
+    );
+
+    let (stderr, same) = configure_remote(
+        &config_dir,
+        &state_dir,
+        &["--authority-url", "https://AUTHORITY.example.com:9443/"],
+    );
+    assert_eq!(same["ca_cert_paths"][0].as_str(), Some(ca));
+    assert!(!stderr.contains("is not reused"), "{stderr}");
+
+    // A blank flag is refused rather than read as "no CA", which would drop
+    // the pin for the same Authority without a warning.
+    let blank = firma()
+        .args(["config", "--yes", "--mode", "agent-remote", "--output-dir"])
+        .arg(&config_dir)
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .args(["--authority-ca-cert", " "])
+        .output()
+        .expect("spawn firma config");
+    assert!(!blank.status.success());
+    insta::assert_snapshot!(String::from_utf8_lossy(&blank.stderr).trim(), @"[ERR]  --authority-ca-cert must not be empty");
+
+    let (stderr, other) = configure_remote(
+        &config_dir,
+        &state_dir,
+        &["--authority-url", "https://AUTHORITY.example.com:9444/"],
+    );
+    assert!(other.get("ca_cert_paths").is_none(), "got: {other}");
+    let warning = stderr.lines().next().expect("a warning");
+    assert!(warning.contains(ca), "{stderr}");
+    insta::assert_snapshot!(warning.replace(ca, "[CA]"), @"[WARN] the existing CA certificate [CA] is not reused for https://AUTHORITY.example.com:9444/: it was configured for another Authority; set a CA certificate if this one needs it");
+
+    // Another Authority with its own CA: the new pin is written, and nothing
+    // is said about the old one.
+    let other_ca = state_dir.join("other-ca.crt");
+    let other_ca = other_ca.to_str().expect("utf-8 path");
+    let (stderr, pinned) = configure_remote(
+        &config_dir,
+        &state_dir,
+        &[
+            "--authority-url",
+            "https://authority.example.com:9445",
+            "--authority-ca-cert",
+            other_ca,
+        ],
+    );
+    assert_eq!(pinned["ca_cert_paths"][0].as_str(), Some(other_ca));
+    assert!(!stderr.contains("is not reused"), "{stderr}");
 }
 
 #[test]
@@ -1236,7 +1323,7 @@ fn init_writes_no_artifact_paths() {
         (vec!["sidecar", "ca"], "dir"),
         (vec!["sidecar", "audit"], "file_path"),
         (vec!["sidecar", "audit"], "signing_key_path"),
-        (vec!["sidecar", "authority"], "ca_cert_path"),
+        (vec!["sidecar", "authority"], "ca_cert_paths"),
         (vec!["sidecar", "authority"], "public_key_path"),
     ] {
         let mut node = Some(&value);
@@ -1385,6 +1472,18 @@ fn invalid_existing_sections_fail_without_writing() {
             "agent-local",
             "[run.defaults]\ncodex_cli = 42\n",
             "unknown field `codex_cli`",
+        ),
+        (
+            "removed capability action list in defaults",
+            "agent-local",
+            "[run.defaults.capability]\nrequested_actions = [\"filesystem.read\"]\n",
+            "unknown field `requested_actions`",
+        ),
+        (
+            "removed capability action list in inline profile",
+            "agent-local",
+            "[run.profiles]\nunselected = { capability = { requested_actions = [] } }\n",
+            "unknown field `requested_actions`",
         ),
     ];
 

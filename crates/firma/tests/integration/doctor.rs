@@ -103,7 +103,7 @@ fn doctor_accepts_an_authority_ca_that_defaults_from_the_state_dir() {
         "sidecar",
         &SidecarConfig {
             authority: AuthorityConfig {
-                url: Some("https://authority.test:9443".to_owned()),
+                url: Some("https://127.0.0.1:9443".to_owned()),
                 ..AuthorityConfig::default()
             },
             ..SidecarConfig::default()
@@ -140,7 +140,7 @@ fn doctor_reports_a_missing_authority_ca_with_the_state_dir_default() {
         "sidecar",
         &SidecarConfig {
             authority: AuthorityConfig {
-                url: Some("https://authority.test:9443".to_owned()),
+                url: Some("https://127.0.0.1:9443".to_owned()),
                 ..AuthorityConfig::default()
             },
             ..SidecarConfig::default()

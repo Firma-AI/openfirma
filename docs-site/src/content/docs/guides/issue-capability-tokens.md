@@ -167,8 +167,8 @@ firma authority --config .firma/firma.toml \
   revocations add ctok_01j0000000e008000000000001
 ```
 
-The Authority records the token ID and broadcasts a revocation event.
-Connected Sidecars update their local revocation stores, so subsequent use of
+The Authority records the token ID and sends every connected Sidecar the
+complete revocation set. Each Sidecar adds it to its local store, so subsequent use of
 the capability is denied without a hot-path Authority call.
 
 Compact expired revocations periodically:

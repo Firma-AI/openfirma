@@ -14,7 +14,11 @@ pub mod token;
 
 use std::path::PathBuf;
 
-use clap::{Command as ClapCommand, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::error::ErrorKind;
+use clap::parser::ValueSource;
+use clap::{
+    ArgMatches, Command as ClapCommand, CommandFactory, FromArgMatches, Parser, Subcommand,
+};
 
 const HELP_WIDTH: usize = 100;
 const HELP_TEMPLATE: &str = "\
@@ -31,8 +35,30 @@ const HELP_TEMPLATE: &str = "\
 pub fn parse() -> Cli {
     let mut command = Cli::command();
     configure_help(&mut command);
-    let matches = command.get_matches();
-    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    let matches = command.get_matches_mut();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    // `--agent` takes its governance from the Control Plane, so a local
+    // `--config` cannot apply; one exported in `FIRMA_CONFIG` is ignored.
+    if matches!(&cli.command, Command::Run(run) if run.agent.is_some())
+        && config_source(&matches) == Some(ValueSource::CommandLine)
+    {
+        command
+            .error(
+                ErrorKind::ArgumentConflict,
+                "the argument '--config <CONFIG>' cannot be used with '--agent <HANDLE>'",
+            )
+            .exit();
+    }
+    cli
+}
+
+/// Where `--config` came from, looked up in the subcommand that received it,
+/// since a global option is recorded where it was written.
+fn config_source(matches: &ArgMatches) -> Option<ValueSource> {
+    matches
+        .subcommand()
+        .and_then(|(_, sub)| config_source(sub))
+        .or_else(|| matches.value_source("config"))
 }
 
 /// Apply one help layout to the whole clap command tree.

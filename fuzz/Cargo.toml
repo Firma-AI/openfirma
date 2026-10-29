@@ -20,7 +20,7 @@ firma-http = { path = "../crates/firma-http", features = ["fuzz"] }
 firma-identifiers = { path = "../crates/firma-identifiers" }
 firma-sidecar = { path = "../crates/firma-sidecar" }
 libfuzzer-sys = "0.4"
-toml = "0.8"
+toml = "1"
 
 [[bin]]
 name = "normalizer"

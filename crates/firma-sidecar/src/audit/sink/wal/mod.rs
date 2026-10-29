@@ -6,16 +6,19 @@
 
 mod journal;
 
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use firma_config_utils::NonZeroDuration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tonic::transport::{ClientTlsConfig, Endpoint};
 
 use super::submission::{Submission, SubmissionClient};
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
-use crate::authority_credentials::ResolvedSidecarCredentials;
+use crate::authority_credentials::SidecarCredential;
+use crate::config::AuditServiceUrl;
 use journal::{Journal, Scope};
 
 const REPLAY_LIMIT: usize = 32;
@@ -24,28 +27,45 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// A bounded, destination-bound WAL. Capacity never evicts pending records.
 #[derive(Debug)]
 pub struct WalAuditSink {
-    endpoint: String,
+    endpoint: AuditServiceUrl,
     wal_path: PathBuf,
-    wal_max_bytes: u64,
+    wal_max_bytes: NonZeroU64,
     request_timeout: NonZeroDuration,
-    credentials: Option<ResolvedSidecarCredentials>,
+    credentials: Option<SidecarCredential>,
+    /// How `endpoint` is dialed, over TLS once [`Self::with_tls`] set it.
+    dial: Endpoint,
 }
 
 impl WalAuditSink {
     pub(crate) fn new(
-        endpoint: impl Into<String>,
+        endpoint: AuditServiceUrl,
         wal_path: impl Into<PathBuf>,
-        wal_max_bytes: u64,
+        wal_max_bytes: NonZeroU64,
         request_timeout: NonZeroDuration,
-        credentials: Option<ResolvedSidecarCredentials>,
+        credentials: Option<SidecarCredential>,
     ) -> Self {
         Self {
-            endpoint: endpoint.into(),
+            dial: Endpoint::from(endpoint.uri().clone()),
+            endpoint,
             wal_path: wal_path.into(),
             wal_max_bytes,
             request_timeout,
             credentials,
         }
+    }
+
+    /// Dials the endpoint over TLS with `tls`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the tonic error when `tls` is unusable, for instance because
+    /// no trusted roots could be loaded.
+    pub(crate) fn with_tls(
+        mut self,
+        tls: ClientTlsConfig,
+    ) -> Result<Self, tonic::transport::Error> {
+        self.dial = self.dial.tls_config(tls)?;
+        Ok(self)
     }
 }
 
@@ -55,10 +75,9 @@ impl AuditSink for WalAuditSink {
         mut rx: mpsc::Receiver<ExecutionEvent>,
         exit: CancellationToken,
     ) -> Result<(), AuditSinkError> {
-        let scope = Scope::new(&self.endpoint, self.credentials.as_ref());
+        let scope = Scope::new(self.endpoint.as_str(), self.credentials.as_ref());
         let mut journal = Journal::open(self.wal_path, self.wal_max_bytes, scope).await?;
-        let mut client =
-            SubmissionClient::new(self.endpoint, self.credentials, self.request_timeout);
+        let mut client = SubmissionClient::new(self.dial, self.credentials, self.request_timeout);
         let mut retry = tokio::time::interval(RETRY_INTERVAL);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {

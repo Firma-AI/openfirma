@@ -44,13 +44,13 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 -----END PRIVATE KEY-----
 ";
 
-struct StartupFixture {
+pub struct StartupFixture {
     authority: super::authority_fixture::LocalAuthority,
-    temp_dir: tempfile::TempDir,
-    config_path: std::path::PathBuf,
+    pub temp_dir: tempfile::TempDir,
+    pub config_path: std::path::PathBuf,
 }
 
-fn startup_fixture(configure: impl FnOnce(&mut SidecarConfig)) -> StartupFixture {
+pub fn startup_fixture(configure: impl FnOnce(&mut SidecarConfig)) -> StartupFixture {
     startup_fixture_with_authority(|_| {}, configure)
 }
 

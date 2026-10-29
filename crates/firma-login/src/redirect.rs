@@ -8,6 +8,7 @@ use axum::{
     Router,
     extract::{RawQuery, State},
     http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use axum_server::Handle;
@@ -16,7 +17,7 @@ use hyper_util::rt::TokioTimer;
 use secrecy::SecretString;
 use thiserror::Error;
 
-use crate::LoginRefusal;
+use crate::{ControlPlaneOrigin, LoginRefusal};
 use tokio::{
     sync::{Mutex, oneshot},
     time::Instant,
@@ -99,6 +100,41 @@ pub enum CallbackTimeoutError {
     Zero,
 }
 
+/// Path of the Control Plane page the browser lands on after the callback.
+///
+/// The Control Plane renders it, so its copy can change without a CLI release.
+/// It must serve this path before a CLI that redirects there ships.
+pub const LANDING_PATH: &str = "/agent-flow/authorizations/returned";
+
+/// The Control Plane pages the browser lands on once the callback is
+/// answered: one for a granted login, one for a refused one.
+///
+/// Both pages are on the validated Control Plane origin, so the listener can
+/// never redirect the browser anywhere else. The pages are cosmetic: they are
+/// reachable by anyone and prove nothing about the login.
+#[derive(Debug, Clone)]
+pub struct CallbackLanding {
+    granted: Url,
+    refused: Url,
+}
+
+impl CallbackLanding {
+    /// The outcome pages under [`LANDING_PATH`] on `origin`.
+    #[must_use]
+    pub fn on(origin: &ControlPlaneOrigin) -> Self {
+        let page = |outcome: &str| {
+            let mut page = origin.as_url().clone();
+            page.set_path(LANDING_PATH);
+            page.query_pairs_mut().append_pair("outcome", outcome);
+            page
+        };
+        Self {
+            granted: page("approved"),
+            refused: page("denied"),
+        }
+    }
+}
+
 /// An authorization attempt with its callback listener bound.
 pub struct PendingAuthorizationAttempt {
     state: AuthorizationState,
@@ -140,7 +176,8 @@ impl PendingAuthorizationAttempt {
         &self.challenge
     }
 
-    /// Receive the first valid callback before the overall deadline.
+    /// Receive the first valid callback before the overall deadline, then
+    /// send the browser on to `landing`.
     ///
     /// Invalid requests leave the attempt pending. Once a valid callback or a
     /// matching OAuth error arrives, the listener stops accepting requests.
@@ -157,6 +194,7 @@ impl PendingAuthorizationAttempt {
     pub async fn receive(
         self,
         timeout: CallbackWaitTimeout,
+        landing: CallbackLanding,
     ) -> Result<CompletedAuthorizationAttempt, LoopbackCallbackError> {
         let deadline = Instant::now()
             .checked_add(timeout.0.duration())
@@ -178,6 +216,7 @@ impl PendingAuthorizationAttempt {
         let callback_state = Arc::new(CallbackServerState {
             expected_host: redirect_uri.host_header(),
             expected_state: state,
+            landing,
             deadline,
             terminal_sender: Mutex::new(Some(terminal_sender)),
         });
@@ -343,6 +382,8 @@ pub enum LoopbackCallbackListenerError {
 struct CallbackServerState {
     expected_host: String,
     expected_state: AuthorizationState,
+    /// Where to send the browser after a terminal callback.
+    landing: CallbackLanding,
     deadline: Instant,
     terminal_sender: Mutex<Option<oneshot::Sender<ParsedCallback>>>,
 }
@@ -356,44 +397,52 @@ async fn receive_callback(
     State(state): State<Arc<CallbackServerState>>,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
-) -> (StatusCode, &'static str) {
+) -> Response {
     if !has_expected_host(&headers, &state.expected_host) {
-        return (StatusCode::BAD_REQUEST, "Invalid callback host");
+        return (StatusCode::BAD_REQUEST, "Invalid callback host").into_response();
     }
 
     let Some(query) = query else {
-        return (StatusCode::BAD_REQUEST, "Invalid callback");
+        return (StatusCode::BAD_REQUEST, "Invalid callback").into_response();
     };
     let Ok(callback) = parse_query(&query, &state.expected_state) else {
-        return (StatusCode::BAD_REQUEST, "Invalid callback");
+        return (StatusCode::BAD_REQUEST, "Invalid callback").into_response();
     };
 
     let sender = {
         let mut terminal_sender = state.terminal_sender.lock().await;
         if Instant::now() >= state.deadline {
-            return (StatusCode::REQUEST_TIMEOUT, "Callback deadline elapsed");
+            return (StatusCode::REQUEST_TIMEOUT, "Callback deadline elapsed").into_response();
         }
         terminal_sender.take()
     };
     let Some(sender) = sender else {
-        return (StatusCode::CONFLICT, "Callback already handled");
+        return (StatusCode::CONFLICT, "Callback already handled").into_response();
     };
 
-    let response = match &callback {
-        ParsedCallback::Code(_) => (
-            StatusCode::OK,
-            "Authorization received. You can close this window and return to the terminal.",
-        ),
-        ParsedCallback::AuthorizationRejected(_) => (
-            StatusCode::BAD_REQUEST,
-            "Authorization was not granted. You can close this window and return to the terminal.",
-        ),
-    };
+    let response = land(match &callback {
+        ParsedCallback::Code(_) => &state.landing.granted,
+        ParsedCallback::AuthorizationRejected(_) => &state.landing.refused,
+    });
     if sender.send(callback).is_err() {
-        return (StatusCode::GONE, "Callback no longer accepted");
+        return (StatusCode::GONE, "Callback no longer accepted").into_response();
     }
 
     response
+}
+
+/// Sends the browser on to a Control Plane page. The callback URL carries the
+/// one-time code, so it must not follow as the referrer.
+fn land(page: &Url) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, page.as_str()),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+    )
+        .into_response()
 }
 
 fn has_expected_host(headers: &HeaderMap, expected_host: &str) -> bool {

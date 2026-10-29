@@ -1,8 +1,8 @@
 use std::assert_matches;
 
 use firma_identifiers::{
-    AgentId, ApprovalTokenId, AuditEventId, MembershipId, SandboxId, SessionId, TokenId,
-    WorkspaceId,
+    AgentHandle, AgentId, ApprovalTokenId, AuditEventId, MembershipId, RunId, RunIdParseError,
+    SandboxId, SessionId, SidecarId, SidecarIdParseError, TokenId, WorkspaceId,
 };
 
 #[test]
@@ -15,6 +15,7 @@ fn generated_type_ids_have_their_canonical_prefixes_and_round_trip() {
         ApprovalTokenId::generate().to_string(),
         WorkspaceId::generate().to_string(),
         MembershipId::generate().to_string(),
+        RunId::generate().to_string(),
     ];
 
     assert!(ids[0].starts_with("agt_"));
@@ -31,6 +32,8 @@ fn generated_type_ids_have_their_canonical_prefixes_and_round_trip() {
     assert!(ids[5].parse::<WorkspaceId>().is_ok());
     assert!(ids[6].starts_with("mem_"));
     assert!(ids[6].parse::<MembershipId>().is_ok());
+    assert!(ids[7].starts_with("run_"));
+    assert!(ids[7].parse::<RunId>().is_ok());
 }
 
 #[test]
@@ -67,6 +70,16 @@ fn type_id_rejects_malformed_suffix() {
 
 #[test]
 fn type_id_rejects_incorrect_uuid_version() {
+    let error: RunIdParseError = "run_2n1t201rmv88eb2sj4cn248g00"
+        .parse::<RunId>()
+        .expect_err("run TypeID must use UUID v7");
+    insta::assert_snapshot!(error.to_string(), @"run id must be backed by a UUID v7: `run_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4");
+
+    let error: SidecarIdParseError = "sc_2n1t201rmv88eb2sj4cn248g00"
+        .parse::<SidecarId>()
+        .expect_err("Sidecar TypeID must use UUID v7");
+    insta::assert_snapshot!(error.to_string(), @"sidecar id must be backed by a UUID v7: `sc_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4");
+
     let error = "sbx_2n1t201rmv88eb2sj4cn248g00"
         .parse::<SandboxId>()
         .expect_err("UUID v4 TypeID must be rejected");
@@ -98,6 +111,19 @@ fn type_id_deserialization_runs_validation() {
 }
 
 #[test]
+fn run_id_rejects_session_prefix_and_malformed_suffix() {
+    let error = "ses_01j0000000e008000000000001"
+        .parse::<RunId>()
+        .expect_err("standalone session prefix is not a run");
+    insta::assert_snapshot!(error.to_string(), @"run id must start with `run` as prefix: `ses_01j0000000e008000000000001` does not");
+
+    let error = "run_invalid"
+        .parse::<RunId>()
+        .expect_err("run suffix must be a valid UUID");
+    insta::assert_snapshot!(error.to_string(), @"run id must be a valid TypeID: `run_invalid` has an invalid suffix");
+}
+
+#[test]
 fn generated_session_id_is_valid() {
     let generated = SessionId::generate();
 
@@ -121,4 +147,27 @@ fn session_id_accepts_boundaries_and_rejects_invalid_values() {
     );
     assert!("s".parse::<SessionId>().is_ok());
     assert!("s".repeat(128).parse::<SessionId>().is_ok());
+}
+
+#[test]
+fn agent_handle_accepts_only_the_canonical_grammar() {
+    for valid in ["a", "build-bot", "b2", &"a".repeat(63)] {
+        assert_eq!(
+            valid.parse::<AgentHandle>().expect("canonical").as_str(),
+            valid
+        );
+    }
+    for invalid in [
+        "",
+        "-bot",
+        "bot-",
+        "build--bot",
+        "Build",
+        "bot_1",
+        "bot/x",
+        "bót",
+        &"a".repeat(64),
+    ] {
+        assert!(invalid.parse::<AgentHandle>().is_err(), "{invalid:?}");
+    }
 }
