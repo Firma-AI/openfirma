@@ -365,6 +365,7 @@ impl Fixture {
             payload_rx,
             builder,
             exit.clone(),
+            crate::test_rejection(exit.clone()),
         )
         .expect("spawn sink");
         (sink, exit)

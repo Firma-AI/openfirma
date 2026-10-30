@@ -9,7 +9,7 @@
 #![cfg(test)]
 
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -59,6 +59,30 @@ struct MockAuthorityState {
     initial_bundle: Mutex<Option<PolicyBundleUpdate>>,
     policy_credentials: Mutex<Option<SidecarCredentials>>,
     revocation_credentials: Mutex<Option<SidecarCredentials>>,
+    /// Ends every open policy stream with the status sent.
+    policy_reject_tx: broadcast::Sender<Status>,
+    /// Ends every open revocation stream with the status sent.
+    revocation_reject_tx: broadcast::Sender<Status>,
+    policy_connections: AtomicUsize,
+    revocation_connections: AtomicUsize,
+}
+
+impl MockAuthorityState {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            bundle_tx: broadcast::channel(16).0,
+            revoc_tx: broadcast::channel(64).0,
+            revoc_disconnect_tx: broadcast::channel(16).0,
+            withhold_revocation_sets: AtomicBool::new(false),
+            initial_bundle: Mutex::new(None),
+            policy_credentials: Mutex::new(None),
+            revocation_credentials: Mutex::new(None),
+            policy_reject_tx: broadcast::channel(4).0,
+            revocation_reject_tx: broadcast::channel(4).0,
+            policy_connections: AtomicUsize::new(0),
+            revocation_connections: AtomicUsize::new(0),
+        })
+    }
 }
 
 struct MockAuthorityHandle {
@@ -89,6 +113,25 @@ impl MockAuthorityHandle {
         self.state
             .withhold_revocation_sets
             .store(true, Ordering::SeqCst);
+    }
+
+    /// Ends the open policy streams with `status`, as the Authority does when
+    /// it rejects a credential mid-stream.
+    fn end_policy_streams(&self, status: Status) {
+        let _ = self.state.policy_reject_tx.send(status);
+    }
+
+    /// Ends the open revocation streams with `status`.
+    fn end_revocation_streams(&self, status: Status) {
+        let _ = self.state.revocation_reject_tx.send(status);
+    }
+
+    fn policy_connections(&self) -> usize {
+        self.state.policy_connections.load(Ordering::SeqCst)
+    }
+
+    fn revocation_connections(&self) -> usize {
+        self.state.revocation_connections.load(Ordering::SeqCst)
     }
 
     fn disconnect_revocation_streams(&self) {
@@ -145,6 +188,8 @@ impl AuthorityService for MockAuthority {
         if let Ok(mut guard) = self.state.policy_credentials.lock() {
             *guard = request.into_inner().credentials;
         }
+        self.state.policy_connections.fetch_add(1, Ordering::SeqCst);
+        let mut reject_rx = self.state.policy_reject_tx.subscribe();
         let (tx, rx) = mpsc::channel::<Result<PolicyBundleUpdate, Status>>(16);
         let initial = self
             .state
@@ -157,9 +202,22 @@ impl AuthorityService for MockAuthority {
         }
         let mut broadcast_rx = self.state.bundle_tx.subscribe();
         tokio::spawn(async move {
-            while let Ok(msg) = broadcast_rx.recv().await {
-                if tx.send(Ok(msg)).await.is_err() {
-                    break;
+            loop {
+                tokio::select! {
+                    msg = broadcast_rx.recv() => {
+                        let Ok(msg) = msg else {
+                            break;
+                        };
+                        if tx.send(Ok(msg)).await.is_err() {
+                            break;
+                        }
+                    }
+                    status = reject_rx.recv() => {
+                        if let Ok(status) = status {
+                            let _ = tx.send(Err(status)).await;
+                        }
+                        break;
+                    }
                 }
             }
         });
@@ -175,6 +233,10 @@ impl AuthorityService for MockAuthority {
         if let Ok(mut guard) = self.state.revocation_credentials.lock() {
             *guard = request.into_inner().credentials;
         }
+        self.state
+            .revocation_connections
+            .fetch_add(1, Ordering::SeqCst);
+        let mut reject_rx = self.state.revocation_reject_tx.subscribe();
         let (tx, rx) = mpsc::channel::<Result<RevocationSet, Status>>(16);
         let mut broadcast_rx = self.state.revoc_tx.subscribe();
         let mut disconnect_rx = self.state.revoc_disconnect_tx.subscribe();
@@ -196,6 +258,12 @@ impl AuthorityService for MockAuthority {
                         }
                     }
                     _ = disconnect_rx.recv() => break,
+                    status = reject_rx.recv() => {
+                        if let Ok(status) = status {
+                            let _ = tx.send(Err(status)).await;
+                        }
+                        break;
+                    }
                 }
             }
         });
@@ -231,18 +299,7 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
     };
     let url = format!("http://{addr}");
 
-    let (bundle_tx, _) = broadcast::channel(16);
-    let (revoc_tx, _) = broadcast::channel(64);
-    let (revoc_disconnect_tx, _) = broadcast::channel(16);
-    let state = Arc::new(MockAuthorityState {
-        bundle_tx,
-        revoc_tx,
-        revoc_disconnect_tx,
-        initial_bundle: Mutex::new(None),
-        policy_credentials: Mutex::new(None),
-        revocation_credentials: Mutex::new(None),
-        withhold_revocation_sets: AtomicBool::new(false),
-    });
+    let state = MockAuthorityState::new();
     let service = MockAuthority {
         state: Arc::clone(&state),
     };
@@ -284,18 +341,7 @@ async fn spawn_mock_authority_tls(
     let port = addr.port();
     let url = format!("https://localhost:{port}");
 
-    let (bundle_tx, _) = broadcast::channel(16);
-    let (revoc_tx, _) = broadcast::channel(64);
-    let (revoc_disconnect_tx, _) = broadcast::channel(16);
-    let state = Arc::new(MockAuthorityState {
-        bundle_tx,
-        revoc_tx,
-        revoc_disconnect_tx,
-        initial_bundle: Mutex::new(None),
-        policy_credentials: Mutex::new(None),
-        revocation_credentials: Mutex::new(None),
-        withhold_revocation_sets: AtomicBool::new(false),
-    });
+    let state = MockAuthorityState::new();
     let service = MockAuthority {
         state: Arc::clone(&state),
     };
@@ -1198,5 +1244,140 @@ async fn tls_handshake_fails_with_wrong_ca_cert_stays_not_ready() -> anyhow::Res
 
     harness.shutdown().await;
     server.stop().await;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Run rejection
+// -----------------------------------------------------------------------------
+
+fn runtime_credential() -> anyhow::Result<SidecarCredential> {
+    let config = crate::authority_credentials::SidecarCredentialsConfig::try_from(
+        firma_config_schema::sidecar::authority::SidecarCredentials {
+            workspace_id: "ws".to_string(),
+            sidecar_id: "sc".to_string(),
+            pre_shared_key_env: None,
+            pre_shared_key_path: None,
+            run_id: Some("run_01j0000000e008000000000001".to_string()),
+            runtime_credential_env: Some("FIRMA_RUNTIME_CREDENTIAL".to_string()),
+        },
+    )?;
+    config
+        .runtime_credential("runtime-bearer")
+        .map_err(anyhow::Error::msg)
+}
+
+fn pre_shared_key() -> SidecarCredential {
+    SidecarCredential::PreSharedKey(ResolvedSidecarCredentials {
+        workspace_id: "ws".to_string(),
+        sidecar_id: "sc".to_string(),
+        pre_shared_key: RedactedPreSharedKey::new("psk-secret".to_string()),
+        source: SidecarCredentialSource::Env("FIRMA_SIDECAR_PSK".to_string()),
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Stream {
+    Policy,
+    Revocations,
+}
+
+impl MockAuthorityHandle {
+    fn end_stream(&self, stream: Stream, status: Status) {
+        match stream {
+            Stream::Policy => self.end_policy_streams(status),
+            Stream::Revocations => self.end_revocation_streams(status),
+        }
+    }
+
+    fn connections(&self, stream: Stream) -> usize {
+        match stream {
+            Stream::Policy => self.policy_connections(),
+            Stream::Revocations => self.revocation_connections(),
+        }
+    }
+}
+
+/// A hydrated Sidecar presenting `credentials`.
+async fn hydrated(
+    server: &MockAuthorityServer,
+    credentials: SidecarCredential,
+) -> anyhow::Result<SidecarHarness> {
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v1", 60));
+    let harness = spawn_sidecar_with_credentials(
+        &server.url,
+        test_config(),
+        None,
+        None,
+        None,
+        Some(credentials),
+    )?;
+    let ready = wait_for(Duration::from_secs(2), || {
+        harness.readiness_view.snapshot().fully_ready()
+    })
+    .await;
+    anyhow::ensure!(ready, "sidecar never hydrated");
+    Ok(harness)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rejected_run_on_either_stream_denies_traffic_then_stops() -> anyhow::Result<()> {
+    for stream in [Stream::Policy, Stream::Revocations] {
+        let server = spawn_mock_authority().await?;
+        let harness = hydrated(&server, runtime_credential()?).await?;
+
+        server
+            .handle
+            .end_stream(stream, Status::unauthenticated("authentication failed"));
+
+        let stopped = wait_for(Duration::from_secs(2), || harness.cancel.is_cancelled()).await;
+        assert!(stopped, "{stream:?}: the sidecar kept running");
+        let state = harness.readiness_view.snapshot();
+        assert!(state.run_rejected, "{stream:?}: {state:?}");
+        assert!(!state.policy_bundle_ready, "{stream:?}: {state:?}");
+        assert_eq!(
+            server.handle.connections(stream),
+            1,
+            "{stream:?} reconnected"
+        );
+        harness.shutdown().await;
+        server.stop().await;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_stream_failures_keep_reconnecting() -> anyhow::Result<()> {
+    for stream in [Stream::Policy, Stream::Revocations] {
+        for (credentials, status) in [
+            (runtime_credential()?, Status::unavailable("down")),
+            (
+                runtime_credential()?,
+                Status::permission_denied("outside the run"),
+            ),
+            (
+                pre_shared_key(),
+                Status::unauthenticated("authentication failed"),
+            ),
+        ] {
+            let code = status.code();
+            let server = spawn_mock_authority().await?;
+            let harness = hydrated(&server, credentials).await?;
+
+            server.handle.end_stream(stream, status);
+
+            let reconnected = wait_for(Duration::from_secs(2), || {
+                server.handle.connections(stream) >= 2
+            })
+            .await;
+            assert!(reconnected, "{stream:?} {code:?}: never reconnected");
+            assert!(!harness.cancel.is_cancelled(), "{stream:?} {code:?}");
+            assert!(!harness.readiness_view.snapshot().run_rejected);
+            harness.shutdown().await;
+            server.stop().await;
+        }
+    }
     Ok(())
 }

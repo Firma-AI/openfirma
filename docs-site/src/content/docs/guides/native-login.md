@@ -3,7 +3,9 @@ title: Log in to Firma Team
 description: Authorize the firma CLI for a Firma Team Workspace in the browser.
 ---
 
-Run `firma login --control-plane-origin https://your-team-control-plane`.
+Run `firma login`. It connects to the Firma SaaS Control Plane at
+`https://app.firma.ai`; to use another Control Plane, such as an on-premise
+deployment, add `--control-plane-origin https://your-team-control-plane`.
 The browser opens the Control Plane: sign in, choose a Workspace, and approve.
 The browser hands a one-time code to the CLI's local listener; you can then
 close the window. The CLI exchanges the code and confirms the login with one
@@ -16,8 +18,9 @@ add `--terminal-code`. The browser then shows the code: paste it into the
 hidden prompt. Never put the code on the command line or share it. It works
 once and expires ten minutes after you approve.
 
-For a local development Control Plane, add `--development-loopback` and use a
-loopback HTTP origin. The CLI never prints its access token.
+For a local development Control Plane, add `--development-loopback` and pass a
+loopback HTTP origin with `--control-plane-origin`.
+The CLI never prints its access token.
 
 A successful login is saved on this machine: the Control Plane origin, the
 Workspace and the Membership, in `connection.json` under the `firma` folder of
@@ -40,7 +43,8 @@ then removes the local connection even if reading or revoking the credential
 failed. If remote revocation is not confirmed, the CLI warns that the remote
 family may remain valid until expiry; a local removal failure is an error.
 If login or process termination leaves credential state uncertain, run
-`firma logout`, then a fresh `firma login`.
+`firma logout`, then a fresh `firma login` with the same
+`--control-plane-origin`; the CLI's error message prints that command.
 
 Refresh retries reuse one memory-only UUID within the running process;
 they do not provide recovery after a crash.
@@ -72,11 +76,21 @@ saved login without the browser.
 When the command ends, `firma run` stops the Sidecar and closes the run
 on the Control Plane: `completed` when the command exits 0, `failed` when it
 exits with another code or the run fails before it starts, and `cancelled` when
-`firma run` is interrupted while the command runs. On macOS, and when `firma`
+`firma run` is interrupted while the command runs, unless the workspace had
+already stopped it. On macOS, and when `firma`
 itself runs inside a WSL Linux distribution, `firma run` cannot tell an
 interrupt from a signal the command sends itself, so there the outcome comes
 from the exit code alone. `firma run` exits with the command's code; on
 Linux and macOS, a command killed by a signal gives 128 plus the signal number.
+
+The workspace can end a run while its command runs: the Agent is deleted, the
+key that started the run expires, or the run loses contact with the Control
+Plane for too long. The Sidecar learns of it at its next heartbeat, sent every
+quarter of the run's inactivity window (75 seconds with the default 300), and
+stops. `firma run` then sends the command SIGTERM, and SIGKILL if it still runs
+60 seconds later; a Ctrl-C in between kills it at once. It restores the
+terminal the command started from, prints why the run was stopped, closes it
+as `failed` and exits 1 if the command exited 0.
 The `Closed:` line on stderr shows the outcome the Control Plane recorded. The
 close first renews the access token if it is about to expire. It makes at
 most three attempts for transport failures or HTTP 408, 429, 500, 502, 503 and
@@ -109,7 +123,8 @@ Authority's retiring-key grace period does not refresh running Sidecars.
 The Control Plane supplies the Agent's profile and governance, so `--agent`
 cannot be combined with any other `firma run` option or a `--config` on the command line; a
 `FIRMA_CONFIG` in the environment is ignored. If the Control Plane no longer
-renews the login, run `firma logout`, then `firma login`.
+renews the login, run `firma logout`, then the `firma login` command the
+error message prints, which names the saved Control Plane.
 
 With the Linux bubblewrap backend, `firma run` hides the host connection
 directory from the sandboxed command, including a custom location or one

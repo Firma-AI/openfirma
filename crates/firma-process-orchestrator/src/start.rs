@@ -700,27 +700,21 @@ impl RunningStack {
         &self.handle
     }
 
-    /// Stop the stack if one of its components has exited, without waiting
+    /// Whether one of the stack's components has exited, without waiting
     /// otherwise.
     ///
-    /// The exited component is collected by the probe, so the stack is
-    /// stopped at once, before its freed process scope could be reused. A
-    /// probe that fails also stops the stack: whether the component still
-    /// runs is unknown. A stopped stack reports `false`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the [`Self::shutdown`] error of a stack it stopped.
-    pub fn stop_if_component_exited(&mut self, timeout: Duration) -> Result<bool, ShutdownError> {
+    /// The exited component is collected by the probe, so the caller must
+    /// [`Self::shutdown`] the stack at once, before its freed process scope
+    /// could be reused. A probe that fails also reports `true`: whether the
+    /// component still runs is unknown. A stopped stack reports `false`.
+    pub fn component_exited(&mut self) -> bool {
         let RunningStackState::Owned(owned) = &mut self.state else {
-            return Ok(false);
+            return false;
         };
-        match any_exited(&mut owned.components) {
-            Ok(false) => return Ok(false),
-            Ok(true) => {}
-            Err(error) => warn!(%error, "component probe failed; stopping the stack"),
-        }
-        self.shutdown(timeout).map(|_| true)
+        any_exited(&mut owned.components).unwrap_or_else(|error| {
+            warn!(%error, "component probe failed; stopping the stack");
+            true
+        })
     }
 
     /// Stop the stack and collect its child processes.

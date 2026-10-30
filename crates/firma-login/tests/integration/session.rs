@@ -84,10 +84,11 @@ async fn transient_retries_reuse_one_key_and_publish_before_returning()
     assert!(matches!(
         error,
         SessionError::RefreshFailed {
-            source: firma_login::NativeTokenError::Refused(firma_login::LoginRefusal::ServerError)
+            source: firma_login::NativeTokenError::Refused(firma_login::LoginRefusal::ServerError),
+            ..
         }
     ));
-    insta::assert_snapshot!(error, @"the renewal outcome may be unknown; run `firma logout`, then `firma login` before retrying in a new process");
+    insta::assert_snapshot!(error.to_string().replace(&server.uri(), "[origin]"), @"the renewal outcome may be unknown; run `firma logout`, then `firma login --control-plane-origin [origin] --development-loopback` before retrying in a new process");
     assert_eq!(
         session.access_token().await?.token().expose_secret(),
         "access-one"
@@ -226,10 +227,11 @@ async fn a_refusal_no_retry_can_change_requires_a_new_login()
     assert!(matches!(
         error,
         SessionError::RenewalRefused {
-            source: firma_login::NativeTokenError::Refused(firma_login::LoginRefusal::Other)
+            source: firma_login::NativeTokenError::Refused(firma_login::LoginRefusal::Other),
+            ..
         }
     ));
-    insta::assert_snapshot!(error, @"the saved login could not be renewed; run `firma logout`, then `firma login`");
+    insta::assert_snapshot!(error.to_string().replace(&server.uri(), "[origin]"), @"the saved login could not be renewed; run `firma logout`, then `firma login --control-plane-origin [origin] --development-loopback`");
     server.verify().await;
     Ok(())
 }

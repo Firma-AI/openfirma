@@ -6,7 +6,7 @@
 //! and after the launch: the launcher is synchronous and mints capabilities on
 //! a runtime of its own.
 
-use std::io::{IsTerminal as _, Write as _};
+use std::io::IsTerminal as _;
 use std::process::ExitCode;
 
 use anyhow::Context as _;
@@ -51,18 +51,28 @@ pub fn run(
         execute_managed_run(input, hooks)
     });
     if completion.sidecar_stopped {
-        crate::services::terminal_mode::restore_or_warn(terminal.as_ref());
-        reset_screen_modes();
+        reset_terminal(terminal.as_ref());
     }
     report_local_errors(&completion);
     let outcome = closing_outcome(&completion);
-    let exit = exit_status(&completion);
     let closed = close(client, run_id, outcome);
-    if completion.sidecar_stopped {
-        eprintln!("{}", stopped_reason(&agent, closed.as_ref().ok().copied()));
+    let recorded = closed.as_ref().ok().copied();
+    // The agent can exit on its own while its Sidecar, refused by the
+    // workspace, is still shutting down; the close then reports the stop.
+    let stopped = completion.sidecar_stopped
+        || matches!(
+            recorded,
+            Some(
+                RecordedOutcome::AgentDeleted
+                    | RecordedOutcome::KeyExpired
+                    | RecordedOutcome::Expired
+            )
+        );
+    if stopped {
+        eprintln!("{}", stopped_reason(&agent, recorded));
     }
     eprintln!("{}", close_line(outcome, closed));
-    Ok(exit)
+    Ok(exit_status(&completion, stopped))
 }
 
 /// Resolves the Agent and starts a run of it. The client goes on to
@@ -106,19 +116,37 @@ async fn start(
     Ok((client, input, agent_label))
 }
 
-/// Turns off the screen modes a full-screen agent may have left on when it
-/// was stopped: keyboard enhancement, mouse and focus reporting, bracketed
-/// paste and the alternate screen, and shows the cursor again.
-fn reset_screen_modes() {
+/// Puts back the terminal settings an agent stopped with its Sidecar started
+/// from, and turns off the screen modes it may have left on: keyboard
+/// enhancement, mouse and focus reporting, bracketed paste and the alternate
+/// screen, and shows the cursor again.
+///
+/// The modes are written to the controlling terminal, the one the agent drew
+/// on, wherever stderr goes. Nothing is changed while `firma` runs in the
+/// background: the terminal would stop it with SIGTTOU before the close.
+#[cfg(unix)]
+fn reset_terminal(saved: Option<&crate::services::terminal_mode::Saved>) {
+    use std::io::Write as _;
+
+    use nix::unistd::{getpgrp, tcgetpgrp};
+
     const RESET: &str = "\x1b[<99u\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\
                          \x1b[?2004l\x1b[?1049l\x1b[?25h";
-    let mut stderr = std::io::stderr();
-    if stderr.is_terminal() {
-        // Nothing more can be done for a terminal that cannot be written.
-        let _ = stderr
-            .write_all(RESET.as_bytes())
-            .and_then(|()| stderr.flush());
+    let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") else {
+        return;
+    };
+    if tcgetpgrp(&tty) != Ok(getpgrp()) {
+        return;
     }
+    crate::services::terminal_mode::restore_or_warn(saved);
+    // Nothing more can be done for a terminal that cannot be written.
+    let _ = tty.write_all(RESET.as_bytes()).and_then(|()| tty.flush());
+}
+
+/// Puts back the console mode the agent started from.
+#[cfg(windows)]
+fn reset_terminal(saved: Option<&crate::services::terminal_mode::Saved>) {
+    crate::services::terminal_mode::restore_or_warn(saved);
 }
 
 /// Why the agent was stopped, from the outcome the Control Plane recorded.
@@ -147,10 +175,13 @@ fn stopped_reason(agent: &str, recorded: Option<RecordedOutcome>) -> String {
 /// The outcome the CLI asks the Control Plane to record for a run that
 /// reached the launch. An agent stopped with its Sidecar did not finish,
 /// whatever it exited with.
+/// An interrupt after that stop does not make it a cancel.
 const fn closing_outcome(completion: &RunCompletion) -> CloseOutcome {
-    if completion.interrupted {
+    if completion.sidecar_stopped {
+        CloseOutcome::Failed
+    } else if completion.interrupted {
         CloseOutcome::Cancelled
-    } else if !completion.sidecar_stopped && matches!(completion.command, Ok(0)) {
+    } else if matches!(completion.command, Ok(0)) {
         CloseOutcome::Completed
     } else {
         CloseOutcome::Failed
@@ -158,10 +189,10 @@ const fn closing_outcome(completion: &RunCompletion) -> CloseOutcome {
 }
 
 /// The command's own exit code when it ran; 1 otherwise, with the cause
-/// already printed, and 1 for an agent stopped with its Sidecar that exited 0.
-fn exit_status(completion: &RunCompletion) -> ExitCode {
+/// already printed, and 1 for a `stopped` agent that exited 0.
+fn exit_status(completion: &RunCompletion, stopped: bool) -> ExitCode {
     match completion.command {
-        Ok(0) if completion.sidecar_stopped => ExitCode::from(1),
+        Ok(0) if stopped => ExitCode::from(1),
         Ok(code) => crate::services::run::exit_code(code),
         Err(_) => ExitCode::from(1),
     }

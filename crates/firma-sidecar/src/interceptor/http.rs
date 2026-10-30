@@ -674,7 +674,8 @@ fn spawn_connect_relay(
     match (mitm_candidate, prepared_acceptor) {
         (None, _) => {
             tokio::spawn(async move {
-                match relay_connect_tunnel(on_upgrade, &target, limits).await {
+                let run_rejected = handler.run_rejected();
+                match relay_connect_tunnel(on_upgrade, &target, limits, run_rejected).await {
                     Err(e) => {
                         let failure_class = classify_connect_relay_failure(&e);
                         tracing::warn!(
@@ -785,47 +786,69 @@ fn connect_target_info(authority: &Authority) -> anyhow::Result<ConnectTargetInf
     })
 }
 
+/// Why a relay closed when the Authority rejected this Sidecar's run.
+const RUN_REJECTED_RELAY: &str = "run rejected by the Authority; relay closed";
+
+/// Runs a whole relay, from upstream setup to the last copied byte, unless
+/// the Authority rejects the run first. An earlier rejection wins before the
+/// relay is polled, so no setup or prefetched byte reaches the upstream.
+async fn unless_run_rejected<T>(
+    run_rejected: impl Future<Output = ()>,
+    relay: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::select! {
+        biased;
+        () = run_rejected => Err(RUN_REJECTED_RELAY.to_owned()),
+        relayed = relay => relayed,
+    }
+}
+
 async fn relay_connect_tunnel(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: &str,
     limits: ConnectRelayLimits,
+    run_rejected: impl Future<Output = ()>,
 ) -> Result<TunnelRelayStats, String> {
-    let upgraded = tokio::time::timeout(limits.setup_timeout.duration(), on_upgrade)
-        .await
-        .map_err(|_| {
-            format!(
-                "upgrade timed out after {:?}",
-                limits.setup_timeout.duration()
-            )
-        })?
-        .map_err(|e| format!("upgrade failed: {e}"))?;
-    let mut downstream = TokioIo::new(upgraded);
-    let mut upstream =
-        tokio::time::timeout(limits.setup_timeout.duration(), TcpStream::connect(target))
+    let tunnel = async {
+        let upgraded = tokio::time::timeout(limits.setup_timeout.duration(), on_upgrade)
             .await
             .map_err(|_| {
                 format!(
-                    "upstream connect timed out after {:?} for {target}",
+                    "upgrade timed out after {:?}",
                     limits.setup_timeout.duration()
                 )
             })?
-            .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
-    let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
-        limits.session_max.duration(),
-        copy_bidirectional(&mut downstream, &mut upstream),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "CONNECT tunnel exceeded {:?} session cap",
-            limits.session_max.duration()
-        )
-    })?
-    .map_err(|e| format!("tunnel relay failed: {e}"))?;
-    Ok(TunnelRelayStats {
-        downstream_to_upstream_bytes,
-        upstream_to_downstream_bytes,
-    })
+            .map_err(|e| format!("upgrade failed: {e}"))?;
+        let mut downstream = TokioIo::new(upgraded);
+        let mut upstream =
+            tokio::time::timeout(limits.setup_timeout.duration(), TcpStream::connect(target))
+                .await
+                .map_err(|_| {
+                    format!(
+                        "upstream connect timed out after {:?} for {target}",
+                        limits.setup_timeout.duration()
+                    )
+                })?
+                .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+        let relay = tokio::time::timeout(
+            limits.session_max.duration(),
+            copy_bidirectional(&mut downstream, &mut upstream),
+        );
+        let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = relay
+            .await
+            .map_err(|_| {
+                format!(
+                    "CONNECT tunnel exceeded {:?} session cap",
+                    limits.session_max.duration()
+                )
+            })?
+            .map_err(|e| format!("tunnel relay failed: {e}"))?;
+        Ok::<_, String>(TunnelRelayStats {
+            downstream_to_upstream_bytes,
+            upstream_to_downstream_bytes,
+        })
+    };
+    unless_run_rejected(run_rejected, tunnel).await
 }
 
 /// Audits a strict host's refusal of a tunnel that is not carrying TLS.
@@ -931,6 +954,7 @@ async fn relay_connect_mitm(
             &target.authority,
             limits,
             &preface[..preface_len],
+            handler.run_rejected(),
         )
         .await?;
         return Ok(());
@@ -1117,49 +1141,54 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
     target: &Authority,
     limits: ConnectRelayLimits,
     prefetched: &[u8],
+    run_rejected: impl Future<Output = ()>,
 ) -> Result<TunnelRelayStats, String> {
-    let mut upstream = tokio::time::timeout(
-        limits.setup_timeout.duration(),
-        TcpStream::connect(target.as_str()),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "upstream connect timed out after {:?} for {target}",
-            limits.setup_timeout.duration()
-        )
-    })?
-    .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
-    if !prefetched.is_empty() {
-        tokio::time::timeout(
+    let tunnel = async {
+        let mut upstream = tokio::time::timeout(
             limits.setup_timeout.duration(),
-            upstream.write_all(prefetched),
+            TcpStream::connect(target.as_str()),
         )
         .await
         .map_err(|_| {
             format!(
-                "upstream prefetch write timed out after {:?} for {target}",
+                "upstream connect timed out after {:?} for {target}",
                 limits.setup_timeout.duration()
             )
         })?
-        .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
-    }
-    let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
-        limits.session_max.duration(),
-        copy_bidirectional(&mut downstream, &mut upstream),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "CONNECT tunnel exceeded {:?} session cap",
-            limits.session_max.duration()
-        )
-    })?
-    .map_err(|e| format!("tunnel relay failed: {e}"))?;
-    Ok(TunnelRelayStats {
-        downstream_to_upstream_bytes,
-        upstream_to_downstream_bytes,
-    })
+        .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+        if !prefetched.is_empty() {
+            tokio::time::timeout(
+                limits.setup_timeout.duration(),
+                upstream.write_all(prefetched),
+            )
+            .await
+            .map_err(|_| {
+                format!(
+                    "upstream prefetch write timed out after {:?} for {target}",
+                    limits.setup_timeout.duration()
+                )
+            })?
+            .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
+        }
+        let relay = tokio::time::timeout(
+            limits.session_max.duration(),
+            copy_bidirectional(&mut downstream, &mut upstream),
+        );
+        let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = relay
+            .await
+            .map_err(|_| {
+                format!(
+                    "CONNECT tunnel exceeded {:?} session cap",
+                    limits.session_max.duration()
+                )
+            })?
+            .map_err(|e| format!("tunnel relay failed: {e}"))?;
+        Ok::<_, String>(TunnelRelayStats {
+            downstream_to_upstream_bytes,
+            upstream_to_downstream_bytes,
+        })
+    };
+    unless_run_rejected(run_rejected, tunnel).await
 }
 
 #[derive(Clone)]
@@ -1483,6 +1512,7 @@ async fn handle_mitm_websocket_upgrade_request(
     }
 
     let on_upgrade = hyper::upgrade::on(req);
+    let run_rejected = handler.run_rejected();
     tokio::spawn(async move {
         let upgraded = match on_upgrade.await {
             Ok(upgraded) => upgraded,
@@ -1498,7 +1528,15 @@ async fn handle_mitm_websocket_upgrade_request(
             tracing::warn!("websocket downstream prefetch write failed: {e}");
             return;
         }
-        if let Err(e) = copy_bidirectional(&mut downstream, &mut upstream).await {
+        let relayed = tokio::select! {
+            biased;
+            () = run_rejected => {
+                tracing::warn!("{RUN_REJECTED_RELAY}");
+                return;
+            }
+            relayed = copy_bidirectional(&mut downstream, &mut upstream) => relayed,
+        };
+        if let Err(e) = relayed {
             if is_expected_tls_close_error(&e) {
                 tracing::debug!("websocket MITM relay closed by peer (expected shutdown): {e}");
             } else {
@@ -2050,6 +2088,7 @@ mod tests {
 
     use super::*;
 
+    use crate::authority_client::readiness::{ReadinessFlag, ReadinessState};
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -2830,6 +2869,168 @@ mod tests {
             "opaque agent header values must survive the upstream handshake"
         );
         Ok(())
+    }
+
+    // ── run rejection closes established relays ─────────────────────────
+
+    /// A CONNECT target that holds each tunnel open and records every byte
+    /// that reaches it.
+    async fn recording_connect_target() -> (SocketAddr, Arc<std::sync::Mutex<Vec<u8>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&received);
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut chunk = [0_u8; 64];
+            while let Ok(read) = stream.read(&mut chunk).await {
+                if read == 0 {
+                    break;
+                }
+                sink.lock().unwrap().extend_from_slice(&chunk[..read]);
+            }
+        });
+        (addr, received)
+    }
+
+    /// An allowing CONNECT pipeline whose readiness the test controls.
+    fn ready_connect_handler() -> (Arc<RequestHandler>, Arc<ReadinessFlag>) {
+        let (flag, view) = ReadinessFlag::new(ReadinessState::default());
+        flag.mark_policy_bundle_swapped();
+        flag.set_revocation_ready(true);
+        let pipeline = Arc::into_inner(test_pipeline_allow_connect())
+            .unwrap()
+            .with_readiness(view);
+        (test_handler(Arc::new(pipeline)), Arc::new(flag))
+    }
+
+    /// Opens a tunnel through `proxy_addr`, rejects the run once bytes flow,
+    /// and asserts the relay closes and forwards nothing more.
+    async fn assert_rejection_closes_tunnel(
+        proxy_addr: SocketAddr,
+        host: &str,
+        readiness: &ReadinessFlag,
+        received: &std::sync::Mutex<Vec<u8>>,
+    ) {
+        let connect_req = format!(
+            "CONNECT {host} HTTP/1.1\r\nHost: {host}\r\nx-firma-session-id: _test_\r\n\r\n"
+        );
+        let (mut stream, response) = send_connect_request(proxy_addr, &connect_req)
+            .await
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
+        assert!(response.starts_with("HTTP/1.1 200"), "{response:?}");
+        stream.write_all(b"before").await.unwrap();
+        // Generous: a `localhost` upstream may first be dialed on `::1`,
+        // which Windows refuses only after about two seconds.
+        let delivered = tokio::time::timeout(Duration::from_secs(10), async {
+            while received.lock().unwrap().as_slice() != b"before" {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(delivered.is_ok(), "the tunnel never carried bytes");
+
+        readiness.reject_run();
+
+        let mut buf = [0_u8; 16];
+        let closed = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
+        assert!(
+            matches!(closed, Ok(Ok(0) | Err(_))),
+            "the relay stayed open after rejection: {closed:?}"
+        );
+        let _ = stream.write_all(b"after").await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(received.lock().unwrap().as_slice(), b"before");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_run_closes_an_open_connect_tunnel() {
+        let (target_addr, received) = recording_connect_target().await;
+        let proxy_addr = free_addr();
+        let (handler, readiness) = ready_connect_handler();
+        let cancel = CancellationToken::new();
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
+
+        let host = format!("127.0.0.1:{}", target_addr.port());
+        assert_rejection_closes_tunnel(proxy_addr, &host, &readiness, &received).await;
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn a_rejected_run_closes_a_non_tls_mitm_fallback_tunnel() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let (target_addr, received) = recording_connect_target().await;
+        let (handler, readiness) = ready_connect_handler();
+        let cancel = CancellationToken::new();
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
+            handler,
+            cancel.clone(),
+            HttpsMitmConfig {
+                enabled: true,
+                intercept_hosts: vec!["localhost".to_string()],
+                strict_hosts: vec![],
+                cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+                cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
+                ..HttpsMitmConfig::default()
+            },
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let host = format!("localhost:{}", target_addr.port());
+        assert_rejection_closes_tunnel(proxy_addr, &host, &readiness, &received).await;
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn a_run_rejected_before_the_first_tunnel_byte_forwards_nothing() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let (target_addr, received) = recording_connect_target().await;
+        let (handler, readiness) = ready_connect_handler();
+        let cancel = CancellationToken::new();
+        let (proxy_addr, server_handle) = start_proxy_with_mitm(
+            handler,
+            cancel.clone(),
+            HttpsMitmConfig {
+                enabled: true,
+                intercept_hosts: vec!["localhost".to_string()],
+                strict_hosts: vec![],
+                cert_ttl: NonZeroDuration::from_static(Duration::from_mins(5)),
+                cert_cache_capacity: NonZeroUsize::new(16).unwrap(),
+                ..HttpsMitmConfig::default()
+            },
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+        let host = format!("localhost:{}", target_addr.port());
+        let connect_req = format!(
+            "CONNECT {host} HTTP/1.1\r\nHost: {host}\r\nx-firma-session-id: _test_\r\n\r\n"
+        );
+        let (mut stream, response) = send_connect_request(proxy_addr, &connect_req)
+            .await
+            .unwrap_or_else(|e| panic!("failed to send CONNECT request: {e}"));
+        assert!(response.starts_with("HTTP/1.1 200"), "{response:?}");
+
+        readiness.reject_run();
+        let _ = stream.write_all(b"late preface").await;
+
+        let mut buf = [0_u8; 16];
+        let closed = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
+        assert!(
+            matches!(closed, Ok(Ok(0) | Err(_))),
+            "the relay stayed open after rejection: {closed:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(received.lock().unwrap().is_empty());
+
+        cancel.cancel();
+        let _ = server_handle.await;
     }
 
     // ── extract_path unit tests ─────────────────────────────────────────

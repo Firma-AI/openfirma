@@ -13,6 +13,8 @@ use firma_protobuf::v1::{
     audit_service_server::{AuditService, AuditServiceServer},
 };
 use firma_sidecar::audit::{AuditPayload, AuditSinkError};
+use firma_sidecar::authority_client::RunRejection;
+use firma_sidecar::authority_client::readiness::{ReadinessFlag, ReadinessState};
 use firma_sidecar::authority_tls::AuthorityTls;
 use firma_sidecar::config::SidecarConfig;
 use firma_sidecar::startup::{load_audit_event_builder, spawn_audit_sink};
@@ -273,17 +275,33 @@ sidecar_id = "sidecar-a"
     }
 
     pub fn start(&self) -> TestResult<(mpsc::Sender<AuditPayload>, SinkTask, CancellationToken)> {
+        let (tx, task, cancel, _readiness) = self.start_with_readiness()?;
+        Ok((tx, task, cancel))
+    }
+
+    /// Like [`Self::start`], also returning the readiness a run rejection
+    /// marks.
+    pub fn start_with_readiness(
+        &self,
+    ) -> TestResult<(
+        mpsc::Sender<AuditPayload>,
+        SinkTask,
+        CancellationToken,
+        Arc<ReadinessFlag>,
+    )> {
         let builder = load_audit_event_builder(&self.config.audit)?;
         let (tx, rx) = mpsc::channel(16);
         let cancel = CancellationToken::new();
+        let readiness = Arc::new(ReadinessFlag::new(ReadinessState::default()).0);
         let task = spawn_audit_sink(
             &self.config,
             &AuthorityTls::read(&self.config.authority)?,
             rx,
             builder,
             cancel.clone(),
+            RunRejection::new(Arc::clone(&readiness), cancel.clone()),
         )?;
-        Ok((tx, task, cancel))
+        Ok((tx, task, cancel, readiness))
     }
 
     pub fn seed(&self, events: &[ExecutionEvent]) -> TestResult<Vec<u8>> {

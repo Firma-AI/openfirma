@@ -156,6 +156,11 @@ impl EnforcementPipeline {
         self
     }
 
+    /// Readiness of the Authority-backed runtime state.
+    pub(crate) const fn readiness(&self) -> &ReadinessView {
+        &self.readiness
+    }
+
     /// Install a readiness view for Authority-backed runtime state.
     #[must_use]
     pub(crate) fn with_readiness(mut self, readiness: ReadinessView) -> Self {
@@ -633,6 +638,17 @@ impl EnforcementPipeline {
     )]
     fn check_readiness(&self) -> Result<(), EnforcementDecision> {
         let readiness = self.readiness.snapshot();
+        if readiness.run_rejected {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::PolicyBundleNotReady,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    crate::enforcement::decision::ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: crate::authority_client::readiness::RUN_REJECTED_DETAIL.to_string(),
+                envelope: None,
+                identity: None,
+            });
+        }
         if !readiness.policy_bundle_ready {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleNotReady,
@@ -1394,6 +1410,21 @@ mod tests {
         assert_eq!(
             decision.deny_reason(),
             Some(DenyReason::RevocationCacheNotReady)
+        );
+
+        flag.set_revocation_ready(true);
+        flag.reject_run();
+        let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
+        assert_eq!(
+            decision.deny_reason(),
+            Some(DenyReason::PolicyBundleNotReady)
+        );
+        assert!(
+            payload
+                .deny_reason
+                .contains(crate::authority_client::readiness::RUN_REJECTED_DETAIL),
+            "{}",
+            payload.deny_reason
         );
     }
 

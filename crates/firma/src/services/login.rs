@@ -111,7 +111,7 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
 
 /// No code was pasted before the attempt expired.
 #[derive(Debug, thiserror::Error)]
-#[error("the login expired; run firma login again")]
+#[error("the login expired; run the same `firma login` command again")]
 struct PromptExpired;
 
 async fn authenticate(args: Args) -> anyhow::Result<AuthenticatedLogin> {

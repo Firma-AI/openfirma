@@ -138,6 +138,7 @@ async fn a_defaulted_audit_log_is_opened_before_the_state_dir_exists() {
         payload_rx,
         builder,
         exit.clone(),
+        crate::test_rejection(exit.clone()),
     )
     .expect("spawn the audit sink");
 
@@ -183,6 +184,7 @@ async fn an_unopenable_audit_log_fails_the_spawn() {
         payload_rx,
         builder,
         tokio_util::sync::CancellationToken::new(),
+        crate::test_rejection(tokio_util::sync::CancellationToken::new()),
     )
     .expect_err("an unopenable log must fail startup");
 

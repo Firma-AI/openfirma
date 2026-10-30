@@ -29,6 +29,31 @@ jobs:
           private-key: ${{ secrets.OPENFIRMA_TAG_PUBLISHER_PRIVATE_KEY }}
           permission-contents: write
 
+      # The Release workflow uploads artifacts to this draft and publishes it,
+      # so create it before pushing the tag that triggers that workflow.
+      - name: Create draft release with install notes
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+          # Do not leave a draft behind for a SHA the tag step will reject.
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA" || {
+            echo "event SHA is no longer origin/main" >&2
+            exit 1
+          }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          title="$(python3 scripts/release/release_notes.py --version "$VERSION" \
+            --repository "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md")"
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" "${prerelease[@]}" \
+            --title "$title" --notes-file "$RUNNER_TEMP/notes.md"
+
       - name: Create tag at the exact main SHA
         env:
           APP_ID: ${{ secrets.OPENFIRMA_TAG_PUBLISHER_APP_ID }}

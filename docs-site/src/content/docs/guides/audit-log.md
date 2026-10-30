@@ -376,7 +376,10 @@ require a canonical `run_` RunId and reject the legacy `grpc` sink; use
 `wal` instead. The resolved WAL filename appends `.<run_id>` to the
 configured `wal_path`. Prior runs' journals are retained, not deleted or
 replayed under a new bearer; existing unqualified runtime journals are left
-untouched. PSK paths and scope-file formats are unchanged. See the
+untouched. PSK paths and scope-file formats are unchanged. Once the Authority
+rejects the run's credential as `Unauthenticated` — for example after its key
+expires — the Sidecar denies all agent traffic, closes open tunnels, keeps the
+undelivered events in the WAL, and stops, which ends `firma run`. See the
 [configuration reference](https://github.com/Firma-AI/openfirma/blob/main/docs/configuration.md)
 for the credential-source contract.
 

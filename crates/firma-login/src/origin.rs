@@ -1,3 +1,5 @@
+use std::fmt;
+
 use firma_config_utils::http::{HttpOrigin, HttpUrlError, Https, HttpsOrLoopbackHttp};
 use firma_connection_store::{Connection, OriginMode};
 use thiserror::Error;
@@ -47,6 +49,40 @@ impl ControlPlaneOrigin {
     #[must_use]
     pub const fn as_url(&self) -> &Url {
         self.0.as_url()
+    }
+}
+
+/// The `firma login` command that logs in again to a saved connection's
+/// Control Plane. A bare `firma login` targets the hosted one, so the origin
+/// is always named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginCommand {
+    origin: String,
+    development_loopback: bool,
+}
+
+impl LoginCommand {
+    /// The command for the Control Plane and mode `connection` was saved with.
+    #[must_use]
+    pub(crate) fn saved(connection: &Connection) -> Self {
+        Self {
+            origin: connection.origin.origin().ascii_serialization(),
+            development_loopback: connection.origin_mode == OriginMode::DevelopmentLoopback,
+        }
+    }
+}
+
+impl fmt::Display for LoginCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "firma login --control-plane-origin {}",
+            self.origin
+        )?;
+        if self.development_loopback {
+            formatter.write_str(" --development-loopback")?;
+        }
+        Ok(())
     }
 }
 

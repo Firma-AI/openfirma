@@ -567,7 +567,7 @@ fn an_access_only_login_cannot_run_an_agent() -> Result<(), Box<dyn std::error::
     let output = firma(&["run", "--agent", "build-bot", "--", "true"], &dir)?;
 
     assert_eq!(output.status.code(), Some(1));
-    insta::assert_snapshot!(String::from_utf8(output.stderr)?, @"[ERR]  this saved login cannot be renewed; managed runs need a renewable login, so run `firma logout`, then `firma login` (not yet available on Windows)");
+    insta::assert_snapshot!(String::from_utf8(output.stderr)?, @"[ERR]  this saved login cannot be renewed; managed runs need a renewable login, so run `firma logout`, then `firma login --control-plane-origin http://127.0.0.1:9 --development-loopback` (not yet available on Windows)");
     Ok(())
 }
 

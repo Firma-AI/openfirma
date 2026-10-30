@@ -60,7 +60,7 @@ deny:
 release-tools-test:
   ruff format --check scripts/release
   ruff check scripts/release
-  python3 scripts/release/test_validate_metadata.py
+  python3 -m unittest discover -s scripts/release -p "test_*.py"
 
 check: fmt lint test build audit deny release-tools-test
 

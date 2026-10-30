@@ -29,3 +29,12 @@ mod sandbox_identity;
 mod secret_gateway_regressions;
 mod state_defaults;
 mod state_layout;
+
+/// A run rejection for a Sidecar under test that stops through `exit`.
+fn test_rejection(
+    exit: tokio_util::sync::CancellationToken,
+) -> firma_sidecar::authority_client::RunRejection {
+    use firma_sidecar::authority_client::readiness::{ReadinessFlag, ReadinessState};
+    let (readiness, _view) = ReadinessFlag::new(ReadinessState::default());
+    firma_sidecar::authority_client::RunRejection::new(std::sync::Arc::new(readiness), exit)
+}

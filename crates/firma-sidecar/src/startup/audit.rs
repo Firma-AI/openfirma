@@ -22,6 +22,7 @@ use crate::config::{AuditServiceUrl, AuditSinkConfig};
 use crate::audit;
 use crate::audit::AuditSink as _;
 use crate::audit::sink as audit_sink;
+use crate::authority_client::RunRejection;
 use crate::config;
 
 /// Spawns the audit sink pipeline. A network sink to the Authority's own
@@ -30,6 +31,8 @@ use crate::config;
 /// The pipeline is a signing adapter that receives [`AuditPayload`](audit::AuditPayload)s,
 /// signs them into [`ExecutionEvent`](audit::ExecutionEvent)s, and forwards to the
 /// concrete [`AuditSink`](audit::AuditSink).
+///
+/// A WAL sink whose run the Authority rejects ends it through `rejection`.
 ///
 /// Returns a [`tokio::task::JoinHandle`] that resolves when the sink
 /// shuts down.
@@ -45,6 +48,7 @@ pub fn spawn_audit_sink(
     payload_rx: mpsc::Receiver<audit::AuditPayload>,
     event_builder: audit::builder::EventBuilder,
     exit: CancellationToken,
+    rejection: RunRejection,
 ) -> anyhow::Result<tokio::task::JoinHandle<Result<(), audit::AuditSinkError>>> {
     let (event_tx, event_rx) = mpsc::channel::<audit::ExecutionEvent>(100);
     let audit_config = &config.audit;
@@ -93,6 +97,7 @@ pub fn spawn_audit_sink(
                 *max_bytes,
                 *request_timeout,
                 audit_credentials(config, destination)?,
+                rejection,
             );
             if let Some(tls) = audit_tls(authority_tls, destination, url) {
                 sink = sink.with_tls(tls).context(INVALID_AUDIT_TLS)?;

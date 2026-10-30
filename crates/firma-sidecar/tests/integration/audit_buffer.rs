@@ -196,7 +196,8 @@ fn start_buffer_sink(
         &AuthorityTls::read(&config.authority).expect("authority TLS"),
         payload_rx,
         builder,
-        exit,
+        exit.clone(),
+        crate::test_rejection(exit),
     )
     .expect("spawn sink");
     (payload_tx, sink)

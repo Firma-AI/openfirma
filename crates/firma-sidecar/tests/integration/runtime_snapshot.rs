@@ -220,6 +220,7 @@ async fn emitted(payloads: Vec<AuditPayload>) -> anyhow::Result<Vec<ExecutionEve
         receiver,
         builder,
         exit.clone(),
+        crate::test_rejection(exit.clone()),
     )?;
     for payload in payloads {
         sender.send(payload).await?;

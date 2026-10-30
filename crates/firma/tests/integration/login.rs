@@ -163,30 +163,25 @@ async fn start_loopback_login(
     .await
 }
 
+/// Starts `firma login` with `args` and reads the authorization URL it prints
+/// first, without opening a browser.
 #[cfg(unix)]
-async fn start_loopback_login_with(
-    provider: &MockServer,
+async fn spawn_login(
+    args: &[&str],
     connection_dir: &std::path::Path,
-    response: (&str, &str),
-    extra_args: &[&str],
 ) -> Result<
     (
         tokio::process::Child,
         tokio::io::BufReader<tokio::process::ChildStderr>,
+        url::Url,
     ),
     Box<dyn std::error::Error>,
 > {
     use tokio::io::AsyncBufReadExt as _;
 
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_firma"))
-        .args([
-            "login",
-            "--control-plane-origin",
-            &provider.uri(),
-            "--development-loopback",
-        ])
-        .args(extra_args)
+        .arg("login")
+        .args(args)
         .env("FIRMA_LOGIN_NO_BROWSER", "1")
         .env("FIRMA_CONNECTION_DIR", connection_dir)
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/dev/null")
@@ -204,6 +199,31 @@ async fn start_loopback_login_with(
     )
     .await??;
     let url = url::Url::parse(authorization_url.trim())?;
+    Ok((child, reader, url))
+}
+
+#[cfg(unix)]
+async fn start_loopback_login_with(
+    provider: &MockServer,
+    connection_dir: &std::path::Path,
+    response: (&str, &str),
+    extra_args: &[&str],
+) -> Result<
+    (
+        tokio::process::Child,
+        tokio::io::BufReader<tokio::process::ChildStderr>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let origin = provider.uri();
+    let mut args = vec![
+        "--control-plane-origin",
+        origin.as_str(),
+        "--development-loopback",
+    ];
+    args.extend_from_slice(extra_args);
+    let (child, reader, url) = spawn_login(&args, connection_dir).await?;
     let fields: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(
         fields.get("scope").map(String::as_str),
@@ -553,6 +573,33 @@ fn login_rejects_plain_http_without_the_development_switch()
         String::from_utf8(output.stderr)?,
         "[ERR]  invalid control plane origin: control-plane origin must use HTTPS\n"
     );
+    Ok(())
+}
+
+#[test]
+fn login_requires_an_explicit_origin_for_the_development_switch()
+-> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["login", "--development-loopback"])
+        .output()?;
+    // The usage error's wording belongs to clap; only the missing flag is ours.
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("--control-plane-origin"), "{stderr}");
+    Ok(())
+}
+
+/// Without `--control-plane-origin`, login authorizes against the hosted
+/// control plane. The test stops at the printed URL, so it never contacts it.
+#[cfg(unix)]
+#[tokio::test]
+async fn login_defaults_to_the_saas_control_plane() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = connection_dir()?;
+    let (mut child, _stderr, url) = spawn_login(&[], dir.path()).await?;
+
+    assert_eq!(url.origin().ascii_serialization(), "https://app.firma.ai");
+    assert_eq!(url.path(), "/agent-flow/authorizations/authorize");
+    assert!(child.try_wait()?.is_none(), "login waits for the browser");
     Ok(())
 }
 

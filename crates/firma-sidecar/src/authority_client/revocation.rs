@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
 use crate::authority_client::readiness::ReadinessFlag;
+use crate::authority_client::{RunRejection, rejects_run};
 use crate::authority_credentials::SidecarCredential;
 use crate::backoff::ExponentialBackoff;
 
@@ -46,6 +47,19 @@ pub(crate) struct RevocationTask {
     /// Whether any connection has ever applied a set to the store, reported
     /// in the missing-set warning.
     pub(crate) applied_a_set: bool,
+    /// Ends the run when the Authority rejects it.
+    pub(crate) rejection: RunRejection,
+}
+
+/// Why a revocation stream connection ended.
+#[derive(Debug, thiserror::Error)]
+enum StreamError {
+    /// The Authority ended the call; its status may reject the run.
+    #[error(transparent)]
+    Authority(#[from] tonic::Status),
+    /// This Sidecar could not apply what the Authority sent.
+    #[error("{0}")]
+    Local(String),
 }
 
 impl RevocationTask {
@@ -59,6 +73,19 @@ impl RevocationTask {
                     return;
                 }
                 result = self.run_once() => {
+                    if let Err(StreamError::Authority(status)) = &result
+                        && rejects_run(status, self.credentials.as_ref())
+                    {
+                        // The Authority no longer accepts this run, so a
+                        // reconnect cannot succeed.
+                        tracing::error!(
+                            stream = "revocations",
+                            error = %status,
+                            "authority rejected this run; shutting the sidecar down"
+                        );
+                        self.rejection.reject();
+                        return;
+                    }
                     if let Err(err) = result {
                         tracing::warn!(
                             stream = "revocations",
@@ -84,7 +111,7 @@ impl RevocationTask {
         }
     }
 
-    async fn run_once(&mut self) -> Result<(), String> {
+    async fn run_once(&mut self) -> Result<(), StreamError> {
         let mut client = AuthorityServiceClient::new(self.channel.clone())
             .max_decoding_message_size(MAX_REVOCATION_SET_BYTES);
         let message = WatchRevocationsRequest {
@@ -98,8 +125,7 @@ impl RevocationTask {
                 self.credentials.as_ref(),
                 message,
             ))
-            .await
-            .map_err(|err| err.to_string())?;
+            .await?;
         tracing::info!(stream = "revocations", "authority stream connected");
 
         let mut stream = response.into_inner();
@@ -133,11 +159,11 @@ impl RevocationTask {
                     );
                 }
                 message = stream.message() => {
-                    let set = message.map_err(|err| err.to_string())?;
+                    let set = message?;
                     let Some(set) = set else {
                         return Ok(());
                     };
-                    self.apply_set(&set)?;
+                    self.apply_set(&set).map_err(StreamError::Local)?;
                     // Reset the backoff on a decoded set, not on connect: an
                     // oversized opening message would otherwise reset it on
                     // every attempt and reconnect at the floor forever.

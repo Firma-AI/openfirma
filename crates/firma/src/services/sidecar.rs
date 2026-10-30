@@ -15,6 +15,7 @@ use firma_secret_provider::{
 };
 use firma_sidecar::{
     audit::{AuditPayload, AuditSinkError},
+    authority_client::RunRejection,
     authority_client::readiness::ReadinessFlag,
     authority_tls::AuthorityTls,
     composio::ComposioCatalogs,
@@ -252,6 +253,7 @@ async fn serve(
         })
     };
 
+    let pipeline_runtime = startup::build_pipeline_runtime(&runtime_layout, &config)?;
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
     let audit_event_builder =
         startup::load_audit_event_builder(&config.audit)?.with_sandbox_id(sandbox_id);
@@ -264,6 +266,7 @@ async fn serve(
         audit_payload_rx,
         audit_event_builder,
         exit.clone(),
+        RunRejection::new(Arc::clone(&pipeline_runtime.readiness), exit.clone()),
     )?;
     // Supervision must run while startup waits for Authority hydration too.
     let audit_sink = tokio::spawn(supervise_audit_sink(audit_sink, exit.clone()));
@@ -275,7 +278,6 @@ async fn serve(
     #[cfg(unix)]
     let run_audit_handle = spawn_run_audit_listener(&audit_payload_tx, &exit);
 
-    let pipeline_runtime = startup::build_pipeline_runtime(&runtime_layout, &config)?;
     // A restarted Sidecar must not report its predecessor's bundle as
     // enforced before it hydrates.
     if let Some(path) = &args.enforcement_state
@@ -304,7 +306,12 @@ async fn serve(
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&runtime_layout, &config, handler, exit.clone())?;
 
-    let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
+    let local_exec_handle = startup::spawn_local_exec_endpoint(
+        &config,
+        sandbox_id,
+        pipeline_runtime.readiness.view(),
+        exit.clone(),
+    )?;
 
     let report = build_startup_report(resolved.config_file(), &config, &interceptor.listen_addr);
     startup::log_pre_ready_sequence(&report);
@@ -741,6 +748,7 @@ mod tests {
             policy_bundle_ready: true,
             policy_bundle_fresh: true,
             revocation_ready: true,
+            ..ReadinessState::default()
         });
         let readiness = Arc::new(readiness);
         let cancel = CancellationToken::new();

@@ -2,8 +2,15 @@
 
 use tokio::sync::watch;
 
+/// Why traffic is denied once the Authority rejects this Sidecar's run.
+pub(crate) const RUN_REJECTED_DETAIL: &str = "the Authority rejected this run";
+
 /// Initial stream readiness.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent stream flags read together on the request hot path"
+)]
 pub struct ReadinessState {
     /// A policy bundle has been applied successfully.
     pub policy_bundle_ready: bool,
@@ -11,13 +18,17 @@ pub struct ReadinessState {
     pub policy_bundle_fresh: bool,
     /// The revocation stream has connected and passed its initial barrier.
     pub revocation_ready: bool,
+    /// The Authority rejected this Sidecar's run. Terminal: the bundle never
+    /// becomes ready again, so every request is denied until the process
+    /// exits.
+    pub run_rejected: bool,
 }
 
 impl ReadinessState {
     /// Both streams have hydrated and the sidecar can serve traffic.
     #[must_use]
     pub fn fully_ready(self) -> bool {
-        self.policy_bundle_ready && self.revocation_ready
+        !self.run_rejected && self.policy_bundle_ready && self.revocation_ready
     }
 
     /// Both streams have hydrated and the enforced bundle is still fresh, so
@@ -53,10 +64,36 @@ impl ReadinessFlag {
     /// [`refresh_policy_bundle_freshness`](Self::refresh_policy_bundle_freshness)
     /// that runs afterwards observes the new generation.
     pub(crate) fn mark_policy_bundle_swapped(&self) {
-        self.tx.send_modify(|state| {
+        self.tx.send_if_modified(|state| {
+            if state.run_rejected {
+                return false;
+            }
             state.policy_bundle_ready = true;
             state.policy_bundle_fresh = true;
+            true
         });
+    }
+
+    /// Records that the Authority rejected this Sidecar's run.
+    ///
+    /// The policy bundle stops being ready, so the pipeline denies every
+    /// request, on existing connections too, and no later bundle can make it
+    /// ready again. Relays that bypass per-request checks close on
+    /// [`ReadinessView::run_rejected`].
+    pub(crate) fn reject_run(&self) {
+        self.tx.send_modify(|state| {
+            state.run_rejected = true;
+            state.policy_bundle_ready = false;
+            state.policy_bundle_fresh = false;
+        });
+    }
+
+    /// A read-only view for request handling.
+    #[must_use]
+    pub fn view(&self) -> ReadinessView {
+        ReadinessView {
+            rx: self.tx.subscribe(),
+        }
     }
 
     /// Recompute bundle freshness under the readiness lock.
@@ -70,7 +107,7 @@ impl ReadinessFlag {
     ) -> Option<bool> {
         let mut changed = None;
         self.tx.send_if_modified(|state| {
-            let fresh = is_fresh();
+            let fresh = !state.run_rejected && is_fresh();
             if state.policy_bundle_fresh == fresh {
                 return false;
             }
@@ -124,6 +161,21 @@ impl ReadinessView {
         *self.rx.borrow()
     }
 
+    /// Whether the Authority rejected this Sidecar's run.
+    #[must_use]
+    pub(crate) fn is_run_rejected(&self) -> bool {
+        self.rx.borrow().run_rejected
+    }
+
+    /// Completes once the Authority rejects this Sidecar's run; never when
+    /// the readiness writer is gone without rejecting it.
+    pub(crate) async fn run_rejected(&self) {
+        let mut rx = self.rx.clone();
+        if rx.wait_for(|state| state.run_rejected).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+
     /// Construct a view that is already fully ready.
     #[must_use]
     pub(crate) fn all_ready() -> Self {
@@ -131,6 +183,7 @@ impl ReadinessView {
             policy_bundle_ready: true,
             policy_bundle_fresh: true,
             revocation_ready: true,
+            ..ReadinessState::default()
         });
         view
     }
@@ -165,12 +218,32 @@ mod tests {
         assert!(flag.snapshot().fully_ready());
     }
 
+    #[test]
+    fn a_rejected_run_never_becomes_ready_again() {
+        let (flag, view) = ReadinessFlag::new(ReadinessState::default());
+        flag.mark_policy_bundle_swapped();
+        flag.set_revocation_ready(true);
+        assert!(view.snapshot().fully_ready());
+
+        flag.reject_run();
+        flag.mark_policy_bundle_swapped();
+        let _changed = flag.refresh_policy_bundle_freshness(|| true);
+
+        let state = view.snapshot();
+        assert!(state.run_rejected);
+        assert!(!state.policy_bundle_ready);
+        assert!(!state.policy_bundle_fresh);
+        assert!(!state.fully_ready());
+        assert!(view.is_run_rejected());
+    }
+
     #[tokio::test]
     async fn wait_until_fully_ready_returns_immediately_when_already_ready() {
         let (flag, _view) = ReadinessFlag::new(ReadinessState {
             policy_bundle_ready: true,
             policy_bundle_fresh: true,
             revocation_ready: true,
+            ..ReadinessState::default()
         });
         tokio::time::timeout(Duration::from_millis(50), flag.wait_until_fully_ready())
             .await

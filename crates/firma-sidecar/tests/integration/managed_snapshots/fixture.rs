@@ -255,6 +255,7 @@ signing_key_path = "audit.pem"
             receiver,
             builder,
             exit.clone(),
+            crate::test_rejection(exit.clone()),
         )?;
         for payload in payloads {
             sender.send(payload).await?;

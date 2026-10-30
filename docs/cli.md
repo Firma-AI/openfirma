@@ -6,11 +6,12 @@ PATH or invoked via `cargo run -p firma --`.
 ## `firma login`
 
 Logs in to a Firma Team Control Plane through the browser (OAuth 2.0
-Authorization Code with PKCE). The Control Plane origin is explicit; the
-command does not infer it from `firma.toml` or the Sidecar's Authority URL.
+Authorization Code with PKCE). By default it connects to the Firma SaaS
+Control Plane at `https://app.firma.ai`; it does not infer the origin from
+`firma.toml` or the Sidecar's Authority URL.
 
 ```bash
-firma login --control-plane-origin https://team.example.com
+firma login
 ```
 
 The command prints the authorization URL to stderr and opens the browser. Sign in,
@@ -21,11 +22,13 @@ succeeds. It prints the Workspace and Membership, never the access token, and
 the next command to run: `firma run --agent <agent handle> -- <your agent command>`,
 with the Control Plane origin where the Agents page lists each handle.
 
+- `--control-plane-origin <url>`: connects to another Control Plane, such as
+  an on-premise deployment, instead of `https://app.firma.ai`.
 - `--terminal-code`: when a loopback callback cannot reach this machine, the
   browser shows the code instead; paste it into the hidden prompt.
 - `--development-loopback`: allows a plain-HTTP loopback origin, such as
-  `http://127.0.0.1:8080`, for a local Control Plane. Plain HTTP to any other
-  host is rejected.
+  `http://127.0.0.1:8080`, for a local Control Plane. It requires an explicit
+  `--control-plane-origin`. Plain HTTP to any other host is rejected.
 - `--allow-plaintext-refresh-token`: on Unix, permits a private `0600` file
   when the operating system credential store is unavailable. Without this
   explicit option, renewable login fails closed.
@@ -52,7 +55,7 @@ revocation of the renewable credential, then attempts local removal even if
 reading or revoking that credential failed. Unconfirmed remote revocation
 produces a warning after successful local removal; a local removal failure
 is an error. If an interrupted credential flow is uncertain, run `firma logout`
-before a fresh `firma login`.
+before a fresh `firma login` with the same `--control-plane-origin`.
 
 ## `firma config`
 

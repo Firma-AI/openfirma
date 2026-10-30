@@ -7,12 +7,15 @@ use tonic::{Code, Status};
 
 use super::{execution_event_to_proto, metadata::stream_events_request};
 use crate::audit::{AuditSinkError, ExecutionEvent};
+use crate::authority_client::rejects_run;
 use crate::authority_credentials::SidecarCredential;
 
 pub(super) enum Submission {
     Persisted,
     Rejected(Status),
     Retry(Status),
+    /// The Authority no longer accepts this Sidecar's run.
+    RunRejected(Status),
 }
 
 pub(super) struct SubmissionClient {
@@ -90,6 +93,9 @@ impl SubmissionClient {
                 }
             }
             Err(status) if status.code() == Code::InvalidArgument => Submission::Rejected(status),
+            Err(status) if rejects_run(&status, self.credentials.as_ref()) => {
+                Submission::RunRejected(status)
+            }
             Err(status) => {
                 self.client = None;
                 Submission::Retry(status)

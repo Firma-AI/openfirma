@@ -2,6 +2,17 @@
 
 User-facing changes are listed first. Internal improvements are grouped at the end.
 
+## [0.2.0-rc4](https://github.com/Firma-AI/openfirma/compare/v0.2.0-rc3...v0.2.0-rc4) - 2026-10-30
+
+### Added
+
+- **sidecar:** Deny traffic and stop once the Authority rejects the run
+- **cli:** Default firma login to the hosted control plane
+
+### Fixed
+
+- **run:** Let Ctrl-C kill a stopped agent and close the review gaps
+
 ## [0.2.0-rc3](https://github.com/Firma-AI/openfirma/compare/v0.2.0-rc2...v0.2.0-rc3) - 2026-10-29
 
 ### Added

@@ -29,6 +29,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     audit::{AuditPayload, Decision},
+    authority_client::readiness::RUN_REJECTED_DETAIL,
     body_encoding::{self, SupportedEncoding},
     composio::{ComposioAction, ComposioCatalogs, DecodeResult, decode, is_protected_host},
     connector::ConnectorRegistry,
@@ -294,18 +295,30 @@ fn defer_response(retry_after_ms: u64, envelope: Option<&NormalizedEnvelope>) ->
     }
 }
 
-/// Checks the two conditions that must block dispatch even though
-/// enforcement itself allowed the request: unresolved secret placeholders
-/// ([`rehydrate_fail_closed_response`]) and a `Blocked` HTTP secret provider
-/// path ([`http_secret_blocked_response`]). Returns `None` when neither
-/// applies and the caller may proceed to dispatch.
+/// Checks the conditions that must block dispatch even though enforcement
+/// itself allowed the request: a run the Authority rejected while the request
+/// awaited rehydration, unresolved secret placeholders
+/// ([`rehydrate_fail_closed_response`]), and a `Blocked` HTTP secret provider
+/// path ([`http_secret_blocked_response`]). Returns `None` when none applies
+/// and the caller may proceed to dispatch.
 #[must_use]
 fn pre_dispatch_gate(
+    run_rejected: bool,
     rehydrate_result: &Result<Option<SidecarSecretStore>, String>,
     blocked_provider: Option<&str>,
     context: DenialContext,
     audit_payload: &mut AuditPayload,
 ) -> Option<HandledResponse> {
+    if run_rejected {
+        let reason = DenyReason::PolicyBundleNotReady;
+        audit_payload.decision = Decision::Deny;
+        audit_payload.deny_reason = format!("{reason}: {RUN_REJECTED_DETAIL}");
+        return Some(HandledResponse::Deny {
+            reason,
+            detail: RUN_REJECTED_DETAIL.to_owned(),
+            context,
+        });
+    }
     if let Err(detail) = rehydrate_result {
         return Some(rehydrate_fail_closed_response(
             audit_payload,
@@ -716,6 +729,13 @@ pub struct RequestHandler {
 }
 
 impl RequestHandler {
+    /// Completes once the Authority rejects this Sidecar's run, so relays
+    /// that bypass per-request enforcement can close.
+    pub(crate) fn run_rejected(&self) -> impl Future<Output = ()> + Send + 'static {
+        let readiness = self.pipeline.readiness().clone();
+        async move { readiness.run_rejected().await }
+    }
+
     /// Constructs a request handler from the enforcement pipeline, the
     /// connector registry, and the audit payload channel.
     #[must_use]
@@ -1025,6 +1045,7 @@ impl RequestHandler {
                 credentials,
                 ..
             } => match pre_dispatch_gate(
+                self.pipeline.readiness().is_run_rejected(),
                 rehydrate_result,
                 blocked_provider,
                 denial_context_from_params(&envelope.intent.params),
@@ -1042,6 +1063,7 @@ impl RequestHandler {
                 modifications,
                 ..
             } => match pre_dispatch_gate(
+                self.pipeline.readiness().is_run_rejected(),
                 rehydrate_result,
                 blocked_provider,
                 denial_context_from_params(&envelope.intent.params),

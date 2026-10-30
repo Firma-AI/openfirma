@@ -12,6 +12,8 @@ cargo-dist-version = "0.32.0"
 # - Remove swatinem/rust-cache so release artifacts never use a persistent build cache.
 # - Assert every binary archive contains its platform's firma-secret-shim member.
 # - Reject publishing a release tag present in the installer's legacy CLI-only allowlist.
+# - Pass the release tag to the GitHub Release step through an environment variable.
+# - Upload release artifacts with --clobber so a failed host job can be rerun.
 # Reapply these changes and run zizmor after regenerating CI during cargo-dist upgrades.
 allow-dirty = ["ci"]
 # CI backends to support
@@ -45,6 +47,9 @@ publish-jobs = ["homebrew"]
 publish-prereleases = false
 # Create the GitHub release in the only job granted repository write access.
 github-release = "host"
+# publish.yml creates the draft release with OpenFirma's own notes before it
+# pushes the tag; dist uploads the artifacts and undrafts it.
+create-release = false
 # Build and upload artifacts for snapshot candidates without publishing them.
 pr-run-mode = "upload"
 github-build-setup = "../build-setup.yml"

@@ -19,7 +19,7 @@ pub use control_plane::{
     CloseOutcome, ControlPlaneClient, ControlPlaneError, RecordedOutcome, ResolvedAgent, StartedRun,
 };
 pub use entropy::EntropyError;
-pub use origin::{ControlPlaneOrigin, ControlPlaneOriginError, OriginValidationMode};
+pub use origin::{ControlPlaneOrigin, ControlPlaneOriginError, LoginCommand, OriginValidationMode};
 pub use pkce::{AuthorizationAttempt, AuthorizationState, PkceChallenge, PkceVerifier};
 pub use protocol::{
     AuthenticatedConnection, AuthorizationRequest, AuthorizationScope, AuthorizedTokenExchange,

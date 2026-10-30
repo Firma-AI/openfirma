@@ -9,6 +9,7 @@ mod freshness;
 pub mod policy_bundle;
 pub mod readiness;
 pub mod revocation;
+mod run_rejection;
 pub mod swappable_policy;
 
 #[cfg(test)]
@@ -29,6 +30,8 @@ use self::freshness::FreshnessWatcher;
 use self::policy_bundle::{BundleParser, PolicyBundleTask};
 use self::readiness::ReadinessFlag;
 use self::revocation::RevocationTask;
+pub use self::run_rejection::RunRejection;
+pub(crate) use self::run_rejection::rejects_run;
 use self::swappable_policy::SwappablePolicyEvaluation;
 use crate::backoff::ExponentialBackoff;
 
@@ -81,6 +84,7 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
         swapped: Arc::clone(&swapped),
         cancel: deps.cancel.clone(),
     };
+    let rejection = RunRejection::new(Arc::clone(&deps.readiness), deps.cancel.clone());
     let policy_task = PolicyBundleTask {
         channel: deps.channel.clone(),
         swappable: deps.swappable_policy,
@@ -93,6 +97,7 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
         credentials: deps.credentials.clone(),
         composio_coverage_warnings: deps.composio_coverage_warnings,
         composio_coverage_active: false,
+        rejection: rejection.clone(),
     };
     let revocation_task = RevocationTask {
         channel: deps.channel,
@@ -104,6 +109,7 @@ pub(crate) fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHand
         readiness_grace: deps.config.revocation_readiness_grace,
         credentials: deps.credentials,
         applied_a_set: false,
+        rejection,
     };
 
     AuthorityClientHandle {

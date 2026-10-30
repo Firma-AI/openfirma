@@ -8,10 +8,12 @@ use tokio_util::sync::CancellationToken;
 
 use firma_identifiers::SandboxId;
 
+use crate::authority_client::readiness::ReadinessView;
 use crate::config::{LocalExecConfig, SidecarConfig};
 use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerConfig};
 
-/// Build and spawn the local-exec governance endpoint if configured.
+/// Build and spawn the local-exec governance endpoint if configured. Every
+/// execution is denied once `readiness` records a rejected run.
 ///
 /// Returns a [`JoinHandle`](tokio::task::JoinHandle) for the endpoint task,
 /// or `None` when `[sidecar.local_exec]` is absent from the config.
@@ -22,13 +24,14 @@ use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerCon
 pub fn spawn_local_exec_endpoint(
     config: &SidecarConfig,
     sandbox_id: Option<SandboxId>,
+    readiness: ReadinessView,
     cancel: CancellationToken,
 ) -> anyhow::Result<Option<tokio::task::JoinHandle<()>>> {
     let Some(le_config) = &config.local_exec else {
         return Ok(None);
     };
 
-    let handler = build_handler(le_config, sandbox_id);
+    let handler = build_handler(le_config, sandbox_id).with_readiness(readiness);
     let endpoint = LocalExecEndpoint::new(le_config.socket_path.clone(), handler);
     let socket_path = le_config.socket_path.display().to_string();
 

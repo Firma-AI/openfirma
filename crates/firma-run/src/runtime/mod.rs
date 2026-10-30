@@ -14,9 +14,11 @@ use crate::config::{CapabilitySource, ResolvedProfile};
 use crate::env::ExecutionEnv;
 use crate::error::RunError;
 use crate::mediator::enforce_local_command_governance;
-use crate::routing::{AutostartFlags, ResolveAuthorityRequest, prepare_network_runtime};
+use crate::routing::{
+    AutostartFlags, NetworkRuntime, ResolveAuthorityRequest, prepare_network_runtime,
+};
 use crate::seccomp::resolve_effective_seccomp;
-use crate::supervisor::{AgentStop, SignalForwarding, Supervised};
+use crate::supervisor::{AgentStop, RunStack, SignalForwarding, Supervised};
 use crate::trust::SidecarTrustAnchor;
 
 const DEFAULT_SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -98,6 +100,16 @@ const AGENT_STOP_GRACE: Duration = Duration::from_mins(1);
 
 /// How long the run's components get to stop, early or at the end.
 const RUN_STACK_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl RunStack for NetworkRuntime {
+    fn component_exited(&mut self) -> bool {
+        self.any_component_exited()
+    }
+
+    fn stop(&mut self) {
+        self.stop_components(RUN_STACK_STOP_TIMEOUT);
+    }
+}
 
 /// Execute `firma run`.
 ///
@@ -412,10 +424,8 @@ fn execute(
             if let Some(hook) = hooks.on_agent_launch {
                 hook(&marker_dir);
             }
-            let mut sidecar_exited =
-                || network_runtime.stop_after_component_exit(RUN_STACK_STOP_TIMEOUT);
             let stop = stops_with_sidecar.then_some(AgentStop {
-                sidecar_exited: &mut sidecar_exited,
+                stack: &mut network_runtime,
                 grace: AGENT_STOP_GRACE,
             });
             let supervised = signals.wait(child, backend.kind(), stop);

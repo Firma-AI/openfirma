@@ -191,6 +191,7 @@ impl Fixture {
             audit_rx,
             load_audit_event_builder(&config.audit)?,
             cancel.clone(),
+            crate::test_rejection(cancel.clone()),
         )?;
         let sink = tokio::spawn(async move {
             let _ = sink.await;

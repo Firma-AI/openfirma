@@ -528,3 +528,54 @@ async fn pre_shared_key_scope_remains_readable_by_the_previous_release() -> Test
     serde_json::from_slice::<PreviousScope>(&scope)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn a_rejected_run_stops_the_sidecar_and_journals_what_it_holds() -> TestResult {
+    let mut collector = Collector::start()?;
+    let fixture = Fixture::for_run(&collector.url, "run_01j0000000e008000000000001").await?;
+    let bytes = fixture.seed(&[event("before-rejection", None)])?;
+    let (tx, task, cancel, readiness) = fixture.start_with_readiness()?;
+    let submitted = collector.next().await?;
+    // Decided while the submission was in flight, so still buffered.
+    tx.send(fixture.payload().await?).await?;
+
+    submitted.respond(Err(Status::unauthenticated("authentication failed")));
+    drop(tx);
+
+    finish(task).await?;
+    assert!(cancel.is_cancelled(), "the sidecar kept running");
+    assert!(readiness.snapshot().run_rejected);
+    let journal = std::fs::read(&fixture.wal)?;
+    assert!(
+        journal.starts_with(&bytes),
+        "the rejected record was dropped"
+    );
+    assert_eq!(
+        std::str::from_utf8(&journal)?.lines().count(),
+        2,
+        "the buffered decision was not journaled"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_pre_shared_key_keeps_retrying_an_unauthenticated_submission() -> TestResult {
+    let mut collector = Collector::start()?;
+    let fixture = Fixture::new(&collector.url).await?;
+    let bytes = fixture.seed(&[event("retried", None)])?;
+    let (tx, task, cancel, readiness) = fixture.start_with_readiness()?;
+
+    collector
+        .next()
+        .await?
+        .respond(Err(Status::unauthenticated("authentication failed")));
+    let retried = collector.next().await?;
+
+    assert!(!cancel.is_cancelled());
+    assert!(!readiness.snapshot().run_rejected);
+    assert_eq!(std::fs::read(&fixture.wal)?, bytes);
+    cancel.cancel();
+    drop(tx);
+    retried.persist();
+    finish(task).await
+}

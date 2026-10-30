@@ -13,10 +13,12 @@ pub enum LoginRefusal {
     #[error("the Control Plane has too many logins in progress; try again shortly")]
     TemporarilyUnavailable,
     /// The code expired, was already used, or does not belong to this login.
-    #[error("the login code expired, was already used, or does not match; run firma login again")]
+    #[error(
+        "the login code expired, was already used, or does not match; run the same `firma login` command again"
+    )]
     InvalidGrant,
     /// The access token was rejected, for example because it expired.
-    #[error("the Control Plane rejected the access token; run firma login again")]
+    #[error("the Control Plane rejected the access token")]
     InvalidToken,
     /// The Control Plane failed.
     #[error("the Control Plane failed to complete the login; try again")]

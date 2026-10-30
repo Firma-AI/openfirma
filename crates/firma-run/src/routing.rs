@@ -161,7 +161,7 @@ pub struct NetworkRuntime {
     #[cfg(target_os = "linux")]
     egress_guard: Option<crate::egress_guard::EgressGuardHandle>,
     run_stack: Option<RunningStack>,
-    /// A failed [`Self::stop_after_component_exit`], reported by
+    /// A failed [`Self::stop_components`], reported by
     /// [`Self::shutdown`] instead of a second teardown.
     early_stop_error: Option<firma_process_orchestrator::ShutdownError>,
     // Stops the background re-mint thread. Declared before the guard so the
@@ -188,23 +188,25 @@ impl NetworkRuntime {
         &self.sidecar_endpoint
     }
 
-    /// Whether a component this run started, such as its Sidecar, has exited;
-    /// if so, the components are stopped at once (see
-    /// [`RunningStack::stop_if_component_exited`]).
+    /// Whether a component this run started, such as its Sidecar, has exited
+    /// (see [`RunningStack::component_exited`]).
+    pub(crate) fn any_component_exited(&mut self) -> bool {
+        self.run_stack
+            .as_mut()
+            .is_some_and(RunningStack::component_exited)
+    }
+
+    /// Stops the components this run started, ahead of [`Self::shutdown`].
     ///
     /// Networking stays up until [`Self::shutdown`]: the egress guard keeps
     /// confining the agent while it finishes, and a bridge drop can wait on
     /// the agent's own connections.
-    pub(crate) fn stop_after_component_exit(&mut self, timeout: Duration) -> bool {
-        let Some(stack) = self.run_stack.as_mut() else {
-            return false;
-        };
-        stack
-            .stop_if_component_exited(timeout)
-            .unwrap_or_else(|error| {
-                self.early_stop_error = Some(error);
-                true
-            })
+    pub(crate) fn stop_components(&mut self, timeout: Duration) {
+        if let Some(stack) = self.run_stack.as_mut()
+            && let Err(error) = stack.shutdown(timeout)
+        {
+            self.early_stop_error = Some(error);
+        }
     }
 
     /// Tear down networking before the owned Sidecar, then release its

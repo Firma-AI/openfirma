@@ -20,6 +20,23 @@ pub struct Supervised {
     pub sidecar_stopped: bool,
 }
 
+/// The components a run started alongside the workload, its Sidecar among
+/// them.
+#[cfg_attr(
+    windows,
+    expect(dead_code, reason = "a managed run's Sidecar runs only on Unix")
+)]
+pub trait RunStack {
+    /// Whether a component, such as the Sidecar, has exited. Once it returns
+    /// `true`, [`Self::stop`] must follow at once: the exited component was
+    /// collected, and its process scope must not be reused while the stack
+    /// still owns it.
+    fn component_exited(&mut self) -> bool;
+
+    /// Stops the remaining components.
+    fn stop(&mut self);
+}
+
 /// Stops the workload once the run's Sidecar is gone: SIGTERM, then SIGKILL
 /// after `grace`.
 #[cfg_attr(
@@ -27,8 +44,9 @@ pub struct Supervised {
     expect(dead_code, reason = "a managed run's Sidecar runs only on Unix")
 )]
 pub struct AgentStop<'a> {
-    /// Polled while the workload runs; `true` once the Sidecar has exited.
-    pub sidecar_exited: &'a mut dyn FnMut() -> bool,
+    /// Polled while the workload runs, and stopped right after the workload
+    /// is sent SIGTERM.
+    pub stack: &'a mut dyn RunStack,
     /// How long the workload may take to finish after SIGTERM.
     pub grace: std::time::Duration,
 }
@@ -114,7 +132,8 @@ impl SignalForwarding {
     /// thread.
     ///
     /// With `stop`, the child is polled instead, alongside the Sidecar, and
-    /// stopped when the Sidecar exits.
+    /// stopped when the Sidecar exits. That stop counts as the first
+    /// termination request, so a later SIGINT or SIGTERM escalates to SIGKILL.
     ///
     /// The exit is an error when the child wait operation fails.
     pub fn wait(
@@ -124,7 +143,7 @@ impl SignalForwarding {
         stop: Option<AgentStop<'_>>,
     ) -> Supervised {
         use std::sync::Arc;
-        use std::sync::atomic::Ordering;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let Self {
             mut signals,
@@ -134,9 +153,10 @@ impl SignalForwarding {
         let child_pid = child.id();
         let handle = signals.handle();
         let counted = Arc::clone(&interrupted);
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let escalates = Arc::clone(&termination_requested);
 
         let forwarder = std::thread::spawn(move || {
-            let mut termination_requested = false;
             for raw in &mut signals {
                 let Ok(signal) = Signal::try_from(raw) else {
                     continue;
@@ -145,10 +165,9 @@ impl SignalForwarding {
                     Signal::SIGWINCH => forward_signal(child_pid, backend, Signal::SIGWINCH),
                     Signal::SIGINT | Signal::SIGTERM => {
                         counted.store(true, Ordering::SeqCst);
-                        let forwarded = if termination_requested {
+                        let forwarded = if escalates.swap(true, Ordering::SeqCst) {
                             Signal::SIGKILL
                         } else {
-                            termination_requested = true;
                             signal
                         };
                         forward_signal(child_pid, backend, forwarded);
@@ -166,7 +185,7 @@ impl SignalForwarding {
                     .map_err(|error| RunError::Wait(error.to_string())),
                 false,
             ),
-            Some(stop) => wait_or_stop(&mut child, backend, stop),
+            Some(stop) => wait_or_stop(&mut child, backend, stop, &termination_requested),
         };
 
         // Break the forwarder's blocking iterator and reclaim the thread.
@@ -180,17 +199,22 @@ impl SignalForwarding {
     }
 }
 
-/// Polls `child` until it exits, stopping it once the Sidecar has exited.
+/// Waits for `child` until it exits, stopping it once the Sidecar has exited.
 ///
-/// Each signal is sent only after `try_wait` on this thread found the child
-/// still running, so none can reach a reused PID.
+/// Each signal is sent only after a wait on this thread found the child
+/// still running, so none can reach a reused PID. Sending the stop's SIGTERM
+/// sets `termination_requested`, shared with the signal forwarder.
 #[cfg(unix)]
 fn wait_or_stop(
     child: &mut Child,
     backend: BackendKind,
     stop: AgentStop<'_>,
+    termination_requested: &std::sync::atomic::AtomicBool,
 ) -> (Result<i32, RunError>, bool) {
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
+
+    use wait_timeout::ChildExt as _;
 
     const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -200,26 +224,34 @@ fn wait_or_stop(
         Killed,
     }
 
-    let AgentStop {
-        sidecar_exited,
-        grace,
-    } = stop;
+    let AgentStop { stack, grace } = stop;
     let mut phase = Phase::Watching;
     loop {
-        let stopped = !matches!(phase, Phase::Watching);
-        match child.try_wait() {
-            // An agent can fail on its own as soon as its Sidecar is gone, so
-            // the Sidecar is checked once more before the exit is reported.
-            Ok(Some(status)) => return (Ok(exit_code(status)), stopped || sidecar_exited()),
+        match child.wait_timeout(POLL_INTERVAL) {
+            Ok(Some(status)) => {
+                // An agent can fail on its own as soon as its Sidecar is gone,
+                // so the Sidecar is checked once more before the exit is
+                // reported.
+                let stopped = !matches!(phase, Phase::Watching) || stop_if_exited(stack);
+                return (Ok(exit_code(status)), stopped);
+            }
             Ok(None) => {}
-            Err(error) => return (Err(RunError::Wait(error.to_string())), stopped),
+            Err(error) => {
+                return (
+                    Err(RunError::Wait(error.to_string())),
+                    !matches!(phase, Phase::Watching),
+                );
+            }
         }
         match phase {
-            Phase::Watching if sidecar_exited() => {
+            Phase::Watching if stack.component_exited() => {
+                termination_requested.store(true, Ordering::SeqCst);
                 forward_signal(child.id(), backend, Signal::SIGTERM);
                 phase = Phase::Terminating {
                     kill_at: Instant::now() + grace,
                 };
+                // After the SIGTERM, so stopping the stack does not delay it.
+                stack.stop();
             }
             Phase::Terminating { kill_at } if Instant::now() >= kill_at => {
                 forward_signal(child.id(), backend, Signal::SIGKILL);
@@ -227,8 +259,17 @@ fn wait_or_stop(
             }
             _ => {}
         }
-        std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// Stops `stack` if a component has exited; returns whether it had.
+#[cfg(unix)]
+fn stop_if_exited(stack: &mut dyn RunStack) -> bool {
+    let exited = stack.component_exited();
+    if exited {
+        stack.stop();
+    }
+    exited
 }
 
 /// Map an exit status to a process exit code.
@@ -399,14 +440,14 @@ fn parse_first_pid(content: &str) -> Option<u32> {
 mod tests {
     use std::process::Command;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
     use crate::backend::BackendKind;
     use crate::error::RunError;
-    use crate::supervisor::SignalForwarding;
+    use crate::supervisor::{AgentStop, RunStack, SignalForwarding, Supervised};
 
     #[cfg(target_os = "linux")]
     use crate::supervisor::{forward_signal, parse_first_pid, sandbox_child_pid};
@@ -415,6 +456,32 @@ mod tests {
     fn supervise(child: std::process::Child) -> Result<i32, RunError> {
         SignalForwarding::install()
             .and_then(|signals| signals.wait(child, BackendKind::Vz, None).exit)
+    }
+
+    /// A run stack whose Sidecar has exited once `exited` says so.
+    struct FakeStack<F> {
+        exited: F,
+        stopped: bool,
+    }
+
+    impl<F: FnMut() -> bool> RunStack for FakeStack<F> {
+        fn component_exited(&mut self) -> bool {
+            (self.exited)()
+        }
+
+        fn stop(&mut self) {
+            self.stopped = true;
+        }
+    }
+
+    /// The child's exit as supervised with `stack` and a stop `grace`.
+    fn supervise_with_stop(
+        child: std::process::Child,
+        stack: &mut dyn RunStack,
+        grace: Duration,
+    ) -> Result<Supervised, RunError> {
+        let stop = AgentStop { stack, grace };
+        SignalForwarding::install().map(|signals| signals.wait(child, BackendKind::Vz, Some(stop)))
     }
 
     /// Send `signal` to this test process after `delay`.
@@ -521,6 +588,72 @@ mod tests {
         raise_self_after(Duration::from_millis(700), Signal::SIGTERM);
         let code = supervise(child).expect("wait succeeds");
         assert_eq!(code, 137);
+    }
+
+    #[test]
+    fn interrupt_after_a_sidecar_stop_escalates_to_sigkill() {
+        // The Sidecar is gone, so the agent has already been sent SIGTERM; it
+        // ignores it. The user's Ctrl-C is then a second termination request
+        // and must kill the agent now, not after the stop's grace.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let ready = dir.path().join("ready");
+        let child = Command::new("sh")
+            .args(["-c", "trap '' TERM INT; touch \"$READY\"; exec sleep 30"])
+            .env("READY", &ready)
+            .spawn()
+            .expect("spawn sh");
+        // The Sidecar exits once the agent can no longer die of SIGTERM.
+        let mut stack = FakeStack {
+            exited: || ready.exists(),
+            stopped: false,
+        };
+        raise_self_after(Duration::from_millis(1000), Signal::SIGINT);
+        let started = Instant::now();
+        let supervised = supervise_with_stop(child, &mut stack, Duration::from_secs(10))
+            .expect("install signal forwarding");
+        let elapsed = started.elapsed();
+        assert_eq!(supervised.exit.expect("wait succeeds"), 137);
+        assert!(supervised.sidecar_stopped);
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "the agent was killed only after {elapsed:?}, at the end of the stop grace"
+        );
+    }
+
+    #[test]
+    fn a_stopped_agent_that_outlives_the_grace_is_killed() {
+        let child = Command::new("sh")
+            .args(["-c", "trap '' TERM; exec sleep 30"])
+            .spawn()
+            .expect("spawn sh");
+        let mut stack = FakeStack {
+            exited: || true,
+            stopped: false,
+        };
+        let supervised = supervise_with_stop(child, &mut stack, Duration::from_millis(300))
+            .expect("install signal forwarding");
+        assert_eq!(supervised.exit.expect("wait succeeds"), 137);
+        assert!(supervised.sidecar_stopped);
+        assert!(stack.stopped);
+    }
+
+    #[test]
+    fn an_agent_that_exits_after_its_sidecar_counts_as_stopped() {
+        // The agent exits before its Sidecar is ever polled; the Sidecar is
+        // already gone, as when the agent fails on the refused connection.
+        let child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn sh");
+        let mut stack = FakeStack {
+            exited: || true,
+            stopped: false,
+        };
+        let supervised = supervise_with_stop(child, &mut stack, Duration::from_secs(10))
+            .expect("install signal forwarding");
+        assert_eq!(supervised.exit.expect("wait succeeds"), 0);
+        assert!(supervised.sidecar_stopped);
+        assert!(stack.stopped);
     }
 
     #[cfg(target_os = "linux")]

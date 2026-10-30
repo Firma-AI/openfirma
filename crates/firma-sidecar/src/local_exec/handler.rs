@@ -34,6 +34,7 @@ use sha2::Digest as _;
 use super::token_store::{
     ApproveResult, InMemoryTokenStore, RevokeResult, TokenStore, TokenValidationResult,
 };
+use crate::authority_client::readiness::ReadinessView;
 
 // ---------------------------------------------------------------------------
 // Governance wire types
@@ -150,6 +151,8 @@ pub struct LocalExecHandlerConfig {
 pub struct LocalExecHandler {
     config: LocalExecHandlerConfig,
     token_store: Arc<dyn TokenStore>,
+    /// Authority readiness; a rejected run denies every execution.
+    readiness: Option<ReadinessView>,
 }
 
 impl LocalExecHandler {
@@ -160,7 +163,15 @@ impl LocalExecHandler {
         Self {
             config,
             token_store: Arc::new(store),
+            readiness: None,
         }
+    }
+
+    /// Denies every execution once the Authority rejects this Sidecar's run.
+    #[must_use]
+    pub(crate) fn with_readiness(mut self, readiness: ReadinessView) -> Self {
+        self.readiness = Some(readiness);
+        self
     }
 
     /// Return a shared reference to the token store.
@@ -178,6 +189,17 @@ impl LocalExecHandler {
 
     /// Produce a governance decision for one local-exec request.
     pub fn decide(&self, request: &LocalExecRequest) -> LocalExecResponse {
+        if self
+            .readiness
+            .as_ref()
+            .is_some_and(ReadinessView::is_run_rejected)
+        {
+            tracing::warn!(
+                session_id = %request.session_id,
+                "local-exec denied: the Authority rejected this run"
+            );
+            return deny(crate::authority_client::readiness::RUN_REJECTED_DETAIL);
+        }
         if let Some(expected) = self.config.expected_sandbox_id
             && request.sandbox_id != expected
         {
@@ -474,6 +496,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::authority_client::readiness::{ReadinessFlag, ReadinessState};
 
     fn config(action: DefaultAction) -> LocalExecHandlerConfig {
         LocalExecHandlerConfig {
@@ -506,6 +529,22 @@ mod tests {
         let h = LocalExecHandler::new(config(DefaultAction::Allow));
         let resp = h.decide(&request());
         assert_eq!(resp.decision, LocalExecDecision::Allow);
+    }
+
+    #[test]
+    fn a_rejected_run_denies_even_an_approved_token() {
+        let (flag, view) = ReadinessFlag::new(ReadinessState::default());
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl)).with_readiness(view);
+        let token = h.decide(&request()).approval_token.unwrap();
+        h.token_store().approve(&token);
+        let retry = LocalExecRequest {
+            approval_token: Some(token),
+            ..request()
+        };
+
+        flag.reject_run();
+
+        assert_eq!(h.decide(&retry).decision, LocalExecDecision::Deny);
     }
 
     #[test]

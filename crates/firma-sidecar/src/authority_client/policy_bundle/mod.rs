@@ -15,6 +15,7 @@ use tonic::transport::Channel;
 use crate::authority_client::enforcement_publisher::{self, EnforcementStateSender};
 use crate::authority_client::readiness::ReadinessFlag;
 use crate::authority_client::swappable_policy::{RuntimeSnapshot, SwappablePolicyEvaluation};
+use crate::authority_client::{RunRejection, rejects_run};
 use crate::authority_credentials::SidecarCredential;
 use crate::backoff::ExponentialBackoff;
 use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
@@ -96,6 +97,8 @@ pub(crate) struct PolicyBundleTask {
     pub(crate) credentials: Option<SidecarCredential>,
     pub(crate) composio_coverage_warnings: Vec<String>,
     pub(crate) composio_coverage_active: bool,
+    /// Ends the run when the Authority rejects it.
+    pub(crate) rejection: RunRejection,
 }
 
 impl PolicyBundleTask {
@@ -111,16 +114,17 @@ impl PolicyBundleTask {
                 result = self.run_once() => {
                     match result {
                         Ok(()) => {}
-                        Err(status) if self.run_rejected(&status) => {
+                        Err(status) if rejects_run(&status, self.credentials.as_ref()) => {
                             // The Authority no longer accepts this run, so a
-                            // reconnect cannot succeed: stop the Sidecar, which
-                            // tells `firma run` to stop the agent.
+                            // reconnect cannot succeed: deny agent traffic and
+                            // stop the Sidecar, which tells `firma run` to stop
+                            // the agent.
                             tracing::error!(
                                 stream = "policy_bundle",
                                 error = %status,
                                 "authority rejected this run; shutting the sidecar down"
                             );
-                            self.cancel.cancel();
+                            self.rejection.reject();
                             return;
                         }
                         Err(status) => {
@@ -144,13 +148,6 @@ impl PolicyBundleTask {
                 return;
             }
         }
-    }
-
-    /// Whether `status` means the Authority rejected this run's runtime
-    /// credential. A pre-shared key, or any other code, keeps reconnecting.
-    fn run_rejected(&self, status: &tonic::Status) -> bool {
-        status.code() == tonic::Code::Unauthenticated
-            && matches!(self.credentials, Some(SidecarCredential::Runtime(_)))
     }
 
     async fn run_once(&mut self) -> Result<(), tonic::Status> {

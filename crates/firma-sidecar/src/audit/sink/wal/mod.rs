@@ -17,6 +17,7 @@ use tonic::transport::{ClientTlsConfig, Endpoint};
 
 use super::submission::{Submission, SubmissionClient};
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
+use crate::authority_client::RunRejection;
 use crate::authority_credentials::SidecarCredential;
 use crate::config::AuditServiceUrl;
 use journal::{Journal, Scope};
@@ -34,6 +35,8 @@ pub struct WalAuditSink {
     credentials: Option<SidecarCredential>,
     /// How `endpoint` is dialed, over TLS once [`Self::with_tls`] set it.
     dial: Endpoint,
+    /// Ends the run when the Authority rejects it.
+    rejection: RunRejection,
 }
 
 impl WalAuditSink {
@@ -43,8 +46,10 @@ impl WalAuditSink {
         wal_max_bytes: NonZeroU64,
         request_timeout: NonZeroDuration,
         credentials: Option<SidecarCredential>,
+        rejection: RunRejection,
     ) -> Self {
         Self {
+            rejection,
             dial: Endpoint::from(endpoint.uri().clone()),
             endpoint,
             wal_path: wal_path.into(),
@@ -92,13 +97,13 @@ impl AuditSink for WalAuditSink {
                 }
                 event = rx.recv() => {
                     let Some(event) = event else {
-                        replay(journal, &mut client, &exit).await?;
+                        replay(journal, &mut client, &exit, &self.rejection).await?;
                         return Ok(());
                     };
                     journal = journal.append(event).await?;
                 }
                 _ = retry.tick() => {
-                    journal = replay(journal, &mut client, &exit).await?;
+                    journal = replay(journal, &mut client, &exit, &self.rejection).await?;
                 }
             }
         }
@@ -109,6 +114,7 @@ async fn replay(
     journal: Journal,
     client: &mut SubmissionClient,
     exit: &CancellationToken,
+    rejection: &RunRejection,
 ) -> Result<Journal, AuditSinkError> {
     let mut consumed = 0;
     for record in journal.records().take(REPLAY_LIMIT) {
@@ -138,6 +144,17 @@ async fn replay(
             }
             Submission::Retry(status) => {
                 tracing::warn!(code = %status.code(), "audit delivery unacknowledged; WAL retained");
+                break;
+            }
+            Submission::RunRejected(status) => {
+                // The record stays journaled for forensics. Rejection cancels
+                // `exit`, so the run loop then journals every buffered event
+                // before the sink returns.
+                tracing::error!(
+                    error = %status,
+                    "authority rejected this run; shutting the sidecar down"
+                );
+                rejection.reject();
                 break;
             }
         }
